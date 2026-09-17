@@ -122,14 +122,16 @@ pub fn git_create_worktree(
     let worktree_str = worktree_dir.to_string_lossy().to_string();
     let args = ["worktree", "add", "-b", &branch, &worktree_str, &base];
 
-    match git(&repo, &args) {
-        Ok(_) => Ok(worktree_str),
+    let created = match git(&repo, &args) {
+        Ok(_) => worktree_str,
         Err(first_err) => {
             // Stale worktree metadata is the common failure — prune and retry once.
             let _ = git(&repo, &["worktree", "prune"]);
-            git(&repo, &args).map(|_| worktree_str).map_err(|_| first_err)
+            git(&repo, &args).map(|_| worktree_str).map_err(|_| first_err)?
         }
-    }
+    };
+    crate::handoff::ensure_powerhouse_dir(Path::new(&created));
+    Ok(created)
 }
 
 #[tauri::command]

@@ -1,7 +1,9 @@
 mod git;
+mod handoff;
 mod pty;
 mod queue;
 
+use handoff::HandoffWatchers;
 use pty::PtyManager;
 use queue::QueueManager;
 use tauri::Manager;
@@ -20,6 +22,7 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .manage(PtyManager::default())
         .manage(QueueManager::default())
+        .manage(HandoffWatchers::default())
         .invoke_handler(tauri::generate_handler![
             js_log,
             pty::pty_spawn,
@@ -39,6 +42,9 @@ pub fn run() {
             queue::queue_state,
             queue::queue_step_log,
             queue::queue_dismiss,
+            handoff::handoff_ensure_commands,
+            handoff::handoff_watch_start,
+            handoff::handoff_watch_stop,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

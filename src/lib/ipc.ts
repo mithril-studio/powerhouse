@@ -83,3 +83,18 @@ export const queueStepLog = (repoId: string, entryId: string, step: number) =>
 
 export const queueDismiss = (repoId: string, entryId: string) =>
   invoke<void>("queue_dismiss", { repoId, entryId });
+
+export interface HandoffEvent {
+  branchId: string;
+  path: string;
+  relPath: string;
+}
+
+export const handoffEnsureCommands = () =>
+  invoke<void>("handoff_ensure_commands");
+
+export const handoffWatchStart = (branchId: string, worktreePath: string) =>
+  invoke<void>("handoff_watch_start", { branchId, worktreePath });
+
+export const handoffWatchStop = (branchId: string) =>
+  invoke<void>("handoff_watch_stop", { branchId });

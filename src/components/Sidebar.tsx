@@ -2,6 +2,13 @@ import { useAppStore } from "../store/appStore";
 import { pickAndAddRepo } from "../lib/actions";
 import { RepoItem } from "./RepoItem";
 
+const NAV_ITEMS = [
+  { label: "Home" },
+  { label: "Workflows" },
+  { label: "Memory" },
+  { label: "Telemetry" },
+] as const;
+
 export function Sidebar() {
   const repos = useAppStore((s) => s.repos);
 
@@ -9,6 +16,18 @@ export function Sidebar() {
     <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-background">
       {/* Traffic-light strip (titleBarStyle: Overlay) — draggable. */}
       <div data-tauri-drag-region className="h-11 shrink-0" />
+      <nav className="flex flex-col gap-0.5 px-2 pb-2">
+        {NAV_ITEMS.map((item) => (
+          <button
+            key={item.label}
+            type="button"
+            className="flex items-center rounded-md px-2 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            {item.label}
+          </button>
+        ))}
+      </nav>
+      <div className="mx-2 mb-1 border-t border-border" />
       <div className="flex items-center justify-between px-3 pb-1">
         <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           Projects
