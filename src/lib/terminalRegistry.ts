@@ -64,9 +64,23 @@ export async function spawnTerminal(opts: {
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
-  // Let app-level shortcuts (Cmd+D / Cmd+T) through instead of xterm eating them.
+  // Let app-level shortcuts (Cmd+D/T/W, Cmd+Shift+Backspace, Ctrl+`) through
+  // instead of xterm eating them (and, for Ctrl+`, sending a stray control
+  // sequence to the PTY).
   term.attachCustomKeyEventHandler((e) => {
-    if (e.metaKey && !e.ctrlKey && !e.altKey && ["d", "t"].includes(e.key.toLowerCase())) {
+    if (
+      e.metaKey &&
+      !e.ctrlKey &&
+      !e.altKey &&
+      !e.shiftKey &&
+      ["d", "t", "w"].includes(e.key.toLowerCase())
+    ) {
+      return false;
+    }
+    if (e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey && e.key === "Backspace") {
+      return false;
+    }
+    if (e.ctrlKey && !e.metaKey && !e.altKey && e.code === "Backquote") {
       return false;
     }
     return true;

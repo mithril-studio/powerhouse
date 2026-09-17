@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
-import { useAppStore, type Branch, type Chat } from "../store/appStore";
+import {
+  renderTemplate,
+  resolveAgent,
+  useAppStore,
+  type Branch,
+  type Chat,
+} from "../store/appStore";
 import {
   consumeAutoSpawn,
   disposeTerminal,
@@ -7,6 +13,7 @@ import {
   focusTerminal,
   spawnTerminal,
 } from "../lib/terminalRegistry";
+import { handoffWatchStart } from "../lib/ipc";
 
 interface Props {
   branch: Branch;
@@ -21,13 +28,19 @@ export function TerminalPane({ branch, chat, active }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const status = useAppStore((s) => s.chatStatus[chat.id] ?? "idle");
   const setChatStatus = useAppStore((s) => s.setChatStatus);
-  const agentCmd = useAppStore((s) => s.agentCmd);
+  const settings = useAppStore((s) => s.settings);
 
   const start = useCallback(() => {
     const container = containerRef.current;
     if (!container) return;
     disposeTerminal(chat.id); // clear a dead instance before respawning
+    const profile = resolveAgent(settings, chat.agentId);
+    const agentCmd = chat.initialPrompt
+      ? renderTemplate(profile, chat.initialPrompt)
+      : profile.command;
     setChatStatus(chat.id, "running");
+    // Idempotent on the backend; every running chat keeps the branch watched.
+    void handoffWatchStart(branch.id, branch.worktreePath).catch(() => {});
     void spawnTerminal({
       chatId: chat.id,
       cwd: branch.worktreePath,
@@ -35,7 +48,7 @@ export function TerminalPane({ branch, chat, active }: Props) {
       container,
       onExit: () => setChatStatus(chat.id, "exited"),
     });
-  }, [chat.id, branch.worktreePath, agentCmd, setChatStatus]);
+  }, [chat.id, chat.agentId, chat.initialPrompt, branch.id, branch.worktreePath, settings, setChatStatus]);
 
   // Chats created this session start immediately; restored ones wait for Start.
   useEffect(() => {

@@ -22,15 +22,15 @@ export function startPersistence() {
     if (
       s.repos === prev.repos &&
       s.selection === prev.selection &&
-      s.agentCmd === prev.agentCmd
+      s.settings === prev.settings
     ) {
       return;
     }
     window.clearTimeout(timer);
     timer = window.setTimeout(async () => {
-      const { repos, selection, agentCmd } = useAppStore.getState();
+      const { repos, selection, settings } = useAppStore.getState();
       const store = await getStore();
-      await store.set("tree", { repos, selection, agentCmd } satisfies PersistedTree);
+      await store.set("tree", { repos, selection, settings } satisfies PersistedTree);
       await store.save();
     }, 300);
   });

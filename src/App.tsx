@@ -2,11 +2,14 @@ import { useEffect } from "react";
 import { selectedBranch, selectedRepo, useAppStore } from "./store/appStore";
 import { hydrateFromDisk, startPersistence } from "./store/persist";
 import { ptyKillAll } from "./lib/ipc";
+import { initHandoff } from "./lib/handoff";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
 import { TerminalPane } from "./components/TerminalPane";
+import { BottomPanel } from "./components/BottomPanel";
 import { NewBranchModal } from "./components/NewBranchModal";
+import { NewChatPicker } from "./components/NewChatPicker";
 
 let booted = false;
 
@@ -25,6 +28,7 @@ export default function App() {
       await ptyKillAll().catch(() => {}); // dev-reload hygiene: no orphan sessions
       await hydrateFromDisk();
       startPersistence();
+      void initHandoff();
     })();
   }, []);
 
@@ -65,8 +69,10 @@ export default function App() {
             </div>
           )}
         </div>
+        <BottomPanel />
       </main>
       <NewBranchModal />
+      <NewChatPicker />
     </div>
   );
 }

@@ -3,6 +3,22 @@ import { create } from "zustand";
 export interface Chat {
   id: string;
   title: string;
+  /** Absent = use the default agent. */
+  agentId?: string;
+  /** When set, the agent is launched via its promptTemplate instead of bare command. */
+  initialPrompt?: string;
+}
+
+export interface AgentProfile {
+  id: string;
+  name: string;
+  command: string; // e.g. "claude"
+  promptTemplate: string; // e.g. 'claude "{prompt}"'
+}
+
+export interface Settings {
+  agents: AgentProfile[];
+  defaultAgentId: string;
 }
 
 export interface Branch {
@@ -32,15 +48,26 @@ export type ChatStatus = "idle" | "running" | "exited";
 export interface PersistedTree {
   repos: Repo[];
   selection: Selection;
-  agentCmd: string;
+  settings: Settings;
+}
+
+/** Old persisted shape (pre agent-profiles) — read only during migration. */
+interface LegacyTree {
+  agentCmd?: string;
 }
 
 interface AppState extends PersistedTree {
   hydrated: boolean;
   chatStatus: Record<string, ChatStatus>;
   branchModalRepoId: string | null;
+  chatPickerOpen: boolean;
+  bottomPanelOpen: boolean;
+  shellStatus: Record<string, ChatStatus>;
+  /** branchId → setTimeout id of the in-flight handoff (presence = pending). */
+  pendingHandoff: Record<string, number>;
 
-  hydrate: (tree: Partial<PersistedTree> | null) => void;
+  hydrate: (tree: (Partial<PersistedTree> & LegacyTree) | null) => void;
+  setDefaultAgent: (agentId: string) => void;
   addRepo: (repo: Omit<Repo, "id" | "branches">) => Repo;
   addBranch: (repoId: string, branch: Branch) => void;
   removeBranch: (repoId: string, branchId: string) => void;
@@ -51,7 +78,56 @@ interface AppState extends PersistedTree {
   setChatStatus: (chatId: string, status: ChatStatus) => void;
   openBranchModal: (repoId: string) => void;
   closeBranchModal: () => void;
+  openChatPicker: () => void;
+  closeChatPicker: () => void;
+  toggleBottomPanel: () => void;
+  setShellStatus: (branchId: string, status: ChatStatus) => void;
+  setPendingHandoff: (branchId: string, timerId: number) => void;
+  clearPendingHandoff: (branchId: string) => void;
 }
+
+const SEED_AGENTS: AgentProfile[] = [
+  { id: "claude", name: "Claude", command: "claude", promptTemplate: 'claude "{prompt}"' },
+  { id: "codex", name: "Codex", command: "codex", promptTemplate: 'codex "{prompt}"' },
+  { id: "pi", name: "Pi", command: "pi", promptTemplate: 'pi "{prompt}"' },
+];
+
+const seedSettings = (): Settings => ({
+  agents: SEED_AGENTS.map((a) => ({ ...a })),
+  defaultAgentId: "claude",
+});
+
+/** Migrates the old `agentCmd` string into agent profiles, or passes settings through. */
+function migrateSettings(tree: (Partial<PersistedTree> & LegacyTree) | null): Settings {
+  if (tree?.settings && tree.settings.agents?.length) {
+    const { agents, defaultAgentId } = tree.settings;
+    const validDefault = agents.some((a) => a.id === defaultAgentId);
+    return { agents, defaultAgentId: validDefault ? defaultAgentId : agents[0].id };
+  }
+  const agents = SEED_AGENTS.map((a) => ({ ...a }));
+  const legacy = tree?.agentCmd?.trim();
+  if (legacy) {
+    const match = agents.find((a) => a.command === legacy);
+    if (match) return { agents, defaultAgentId: match.id };
+    const custom: AgentProfile = {
+      id: crypto.randomUUID(),
+      name: legacy,
+      command: legacy,
+      promptTemplate: `${legacy} "{prompt}"`,
+    };
+    return { agents: [custom, ...agents], defaultAgentId: custom.id };
+  }
+  return { agents, defaultAgentId: "claude" };
+}
+
+/** Resolves the profile for a chat, falling back to the default agent. */
+export const resolveAgent = (settings: Settings, agentId?: string): AgentProfile =>
+  settings.agents.find((a) => a.id === agentId) ??
+  settings.agents.find((a) => a.id === settings.defaultAgentId) ??
+  settings.agents[0];
+
+export const renderTemplate = (profile: AgentProfile, prompt: string): string =>
+  profile.promptTemplate.replace(/\{prompt\}/g, prompt);
 
 const updateRepo = (repos: Repo[], repoId: string, fn: (r: Repo) => Repo) =>
   repos.map((r) => (r.id === repoId ? fn(r) : r));
@@ -70,18 +146,29 @@ const updateBranch = (
 export const useAppStore = create<AppState>((set, get) => ({
   repos: [],
   selection: { repoId: null, branchId: null },
-  agentCmd: "claude",
+  settings: seedSettings(),
   hydrated: false,
   chatStatus: {},
   branchModalRepoId: null,
+  chatPickerOpen: false,
+  bottomPanelOpen: false,
+  shellStatus: {},
+  pendingHandoff: {},
 
   hydrate: (tree) =>
     set({
       repos: tree?.repos ?? [],
       selection: tree?.selection ?? { repoId: null, branchId: null },
-      agentCmd: tree?.agentCmd || "claude",
+      settings: migrateSettings(tree),
       hydrated: true,
     }),
+
+  setDefaultAgent: (agentId) =>
+    set((s) =>
+      s.settings.agents.some((a) => a.id === agentId)
+        ? { settings: { ...s.settings, defaultAgentId: agentId } }
+        : s,
+    ),
 
   addRepo: (repo) => {
     const existing = get().repos.find((r) => r.path === repo.path);
@@ -155,6 +242,22 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   openBranchModal: (repoId) => set({ branchModalRepoId: repoId }),
   closeBranchModal: () => set({ branchModalRepoId: null }),
+  openChatPicker: () => set({ chatPickerOpen: true }),
+  closeChatPicker: () => set({ chatPickerOpen: false }),
+
+  toggleBottomPanel: () => set((s) => ({ bottomPanelOpen: !s.bottomPanelOpen })),
+  setShellStatus: (branchId, status) =>
+    set((s) => ({ shellStatus: { ...s.shellStatus, [branchId]: status } })),
+
+  setPendingHandoff: (branchId, timerId) =>
+    set((s) => ({ pendingHandoff: { ...s.pendingHandoff, [branchId]: timerId } })),
+  clearPendingHandoff: (branchId) =>
+    set((s) => {
+      if (!(branchId in s.pendingHandoff)) return s;
+      const next = { ...s.pendingHandoff };
+      delete next[branchId];
+      return { pendingHandoff: next };
+    }),
 }));
 
 export const selectedRepo = (s: AppState) =>

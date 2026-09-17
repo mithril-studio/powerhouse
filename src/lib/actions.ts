@@ -5,7 +5,12 @@ import {
   type Branch,
   type Chat,
 } from "../store/appStore";
-import { gitCreateWorktree, gitRemoveWorktree, gitValidateRepo } from "./ipc";
+import {
+  gitCreateWorktree,
+  gitRemoveWorktree,
+  gitValidateRepo,
+  handoffWatchStop,
+} from "./ipc";
 import { disposeTerminal, markAutoSpawn } from "./terminalRegistry";
 
 export async function pickAndAddRepo() {
@@ -23,7 +28,11 @@ export async function pickAndAddRepo() {
   }
 }
 
-export function createChat(repoId: string, branchId: string): Chat | null {
+export function createChat(
+  repoId: string,
+  branchId: string,
+  agentId?: string,
+): Chat | null {
   const s = useAppStore.getState();
   const branch = s.repos
     .find((r) => r.id === repoId)
@@ -33,10 +42,40 @@ export function createChat(repoId: string, branchId: string): Chat | null {
   const chat: Chat = {
     id: crypto.randomUUID(),
     title: `Chat ${Math.max(0, ...numbers) + 1}`,
+    agentId,
   };
   markAutoSpawn(chat.id);
   s.addChat(repoId, branchId, chat);
   s.select(repoId, branchId);
+  return chat;
+}
+
+/**
+ * Spawns a fresh chat that boots the source chat's agent pointed at the handoff
+ * doc. Never steals the view: selection is left untouched.
+ */
+export function createHandoffChat(
+  repoId: string,
+  branchId: string,
+  relPath: string,
+): Chat | null {
+  const s = useAppStore.getState();
+  const branch = s.repos
+    .find((r) => r.id === repoId)
+    ?.branches.find((b) => b.id === branchId);
+  if (!branch) return null;
+  const source = branch.chats.find((c) => c.id === branch.activeChatId);
+  const numbers = branch.chats.map((c) =>
+    Number(/^Handoff (\d+)$/.exec(c.title)?.[1] ?? 0),
+  );
+  const chat: Chat = {
+    id: crypto.randomUUID(),
+    title: `Handoff ${Math.max(0, ...numbers) + 1}`,
+    agentId: source?.agentId,
+    initialPrompt: `Read ${relPath} and continue the work described in it.`,
+  };
+  markAutoSpawn(chat.id);
+  s.addChat(repoId, branchId, chat); // sets this branch's activeChatId; no selection change
   return chat;
 }
 
@@ -74,7 +113,16 @@ export async function deleteBranch(repoId: string, branchId: string) {
   );
   if (!confirmed) return;
 
+  // Stop the handoff watcher and cancel any in-flight handoff for this branch.
+  void handoffWatchStop(branchId).catch(() => {});
+  const pendingTimer = s.pendingHandoff[branchId];
+  if (pendingTimer !== undefined) {
+    window.clearTimeout(pendingTimer);
+    s.clearPendingHandoff(branchId);
+  }
+
   for (const chat of branch.chats) disposeTerminal(chat.id);
+  disposeTerminal(`shell-${branchId}`);
   try {
     await gitRemoveWorktree(repo.path, branch.worktreePath);
   } catch (err) {

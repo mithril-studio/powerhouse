@@ -33,3 +33,18 @@ export const gitCreateWorktree = (repoPath: string, branch: string, base: string
 
 export const gitRemoveWorktree = (repoPath: string, worktreePath: string) =>
   invoke<void>("git_remove_worktree", { repoPath, worktreePath });
+
+export interface HandoffEvent {
+  branchId: string;
+  path: string;
+  relPath: string;
+}
+
+export const handoffEnsureCommands = () =>
+  invoke<void>("handoff_ensure_commands");
+
+export const handoffWatchStart = (branchId: string, worktreePath: string) =>
+  invoke<void>("handoff_watch_start", { branchId, worktreePath });
+
+export const handoffWatchStop = (branchId: string) =>
+  invoke<void>("handoff_watch_stop", { branchId });
