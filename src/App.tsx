@@ -44,6 +44,7 @@ export default function App() {
                 b.chats.map((chat) => (
                   <TerminalPane
                     key={chat.id}
+                    repoId={r.id}
                     branch={b}
                     chat={chat}
                     active={

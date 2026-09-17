@@ -12,7 +12,23 @@ export const ptySpawn = (
   cols: number,
   rows: number,
   agentCmd?: string,
-) => invoke<void>("pty_spawn", { sessionId, cwd, cols, rows, agentCmd: agentCmd ?? null });
+  resetTranscript = false,
+) =>
+  invoke<void>("pty_spawn", {
+    sessionId,
+    cwd,
+    cols,
+    rows,
+    agentCmd: agentCmd ?? null,
+    resetTranscript,
+  });
+
+/** Recorded output for a chat, for read-only replay after a restart. */
+export const ptyReadTranscript = (sessionId: string) =>
+  invoke<string>("pty_read_transcript", { sessionId });
+
+export const ptyDeleteTranscript = (sessionId: string) =>
+  invoke<void>("pty_delete_transcript", { sessionId });
 
 export const ptyWrite = (sessionId: string, data: string) =>
   invoke<void>("pty_write", { sessionId, data });

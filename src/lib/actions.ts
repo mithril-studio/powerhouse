@@ -10,6 +10,7 @@ import {
   gitRemoveWorktree,
   gitValidateRepo,
   handoffWatchStop,
+  ptyDeleteTranscript,
 } from "./ipc";
 import { disposeTerminal, markAutoSpawn } from "./terminalRegistry";
 
@@ -98,6 +99,7 @@ export async function createBranch(repoId: string, name: string) {
 
 export function deleteChat(repoId: string, branchId: string, chatId: string) {
   disposeTerminal(chatId);
+  void ptyDeleteTranscript(chatId).catch(() => {});
   useAppStore.getState().removeChat(repoId, branchId, chatId);
 }
 
@@ -121,8 +123,12 @@ export async function deleteBranch(repoId: string, branchId: string) {
     s.clearPendingHandoff(branchId);
   }
 
-  for (const chat of branch.chats) disposeTerminal(chat.id);
+  for (const chat of branch.chats) {
+    disposeTerminal(chat.id);
+    void ptyDeleteTranscript(chat.id).catch(() => {});
+  }
   disposeTerminal(`shell-${branchId}`);
+  void ptyDeleteTranscript(`shell-${branchId}`).catch(() => {});
   try {
     await gitRemoveWorktree(repo.path, branch.worktreePath);
   } catch (err) {
