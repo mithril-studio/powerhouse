@@ -31,6 +31,44 @@ function statusColor(status: string) {
 
 // --- file tree ------------------------------------------------------------
 
+function FolderIcon({ open }: { open: boolean }) {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      className="shrink-0 text-accent-brand"
+      aria-hidden
+    >
+      {open ? (
+        <path d="M2 3.5c0-.55.45-1 1-1h3.1c.27 0 .53.11.72.3l.98.98h5.2c.55 0 1 .45 1 1v.72H5.4c-.44 0-.83.29-.96.71L2.6 12.2A1 1 0 0 1 2 11.3V3.5zm1.9 3.5h10.3a.6.6 0 0 1 .57.78l-1.3 4.2a1 1 0 0 1-.96.72H2.9a.6.6 0 0 1-.57-.78l1.3-4.2a1 1 0 0 1 .96-.74z" />
+      ) : (
+        <path d="M2 4c0-.55.45-1 1-1h3.1c.27 0 .53.11.72.3l.98.98H13c.55 0 1 .45 1 1V12c0 .55-.45 1-1 1H3c-.55 0-1-.45-1-1V4z" />
+      )}
+    </svg>
+  );
+}
+
+function FileIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.1"
+      strokeLinejoin="round"
+      className="shrink-0 text-muted-foreground/70"
+      aria-hidden
+    >
+      <path d="M4 2.5h5l3 3V13a.5.5 0 0 1-.5.5h-7A.5.5 0 0 1 4 13V3a.5.5 0 0 1 .5-.5z" />
+      <path d="M8.8 2.6v3h3" />
+    </svg>
+  );
+}
+
 interface TreeNode {
   name: string;
   path: string;
@@ -90,9 +128,10 @@ function TreeRows({
               style={{ paddingLeft: `${depth * 12 + 8}px` }}
               className="flex h-7 cursor-default items-center gap-1.5 rounded-md pr-1.5 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
             >
-              <span className="w-3 shrink-0 text-center text-[10px]">
+              <span className="w-3 shrink-0 text-center text-[9px] text-muted-foreground">
                 {isDir ? (open ? "▾" : "▸") : ""}
               </span>
+              {isDir ? <FolderIcon open={open} /> : <FileIcon />}
               <span className="min-w-0 flex-1 truncate font-mono text-xs">{child.name}</span>
             </div>
             {isDir && open && (
