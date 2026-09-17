@@ -42,6 +42,7 @@ export function BranchItem({ repo, branch }: Props) {
           void deleteBranch(repo.id, branch.id);
         }}
         title="Delete branch"
+        aria-label={`Delete branch ${branch.name}`}
         className="hidden size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-input hover:text-destructive group-hover:flex"
       >
         ×

@@ -16,6 +16,7 @@ export function Sidebar() {
         <button
           onClick={() => void pickAndAddRepo()}
           title="Add project"
+          aria-label="Add project"
           className="flex size-5 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           +

@@ -38,6 +38,7 @@ export function TabBar({ repo, branch }: Props) {
                     deleteChat(repo.id, branch.id, chat.id);
                   }}
                   title="Close chat"
+                  aria-label={`Close ${chat.title}`}
                   className="flex size-5 items-center justify-center rounded-sm text-transparent hover:bg-input group-hover:text-muted-foreground hover:!text-foreground"
                 >
                   ×
@@ -48,6 +49,7 @@ export function TabBar({ repo, branch }: Props) {
           <button
             onClick={() => createChat(repo.id, branch.id)}
             title="New chat (⌘T)"
+            aria-label="New chat"
             className="flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             +

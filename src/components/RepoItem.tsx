@@ -26,6 +26,7 @@ export function RepoItem({ repo }: { repo: Repo }) {
             openBranchModal(repo.id);
           }}
           title="New branch (⌘D)"
+          aria-label={`New branch in ${repo.name}`}
           className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-input hover:text-foreground"
         >
           +
