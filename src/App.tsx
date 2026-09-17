@@ -1,12 +1,16 @@
 import { useEffect } from "react";
 import { selectedBranch, selectedRepo, useAppStore } from "./store/appStore";
 import { hydrateFromDisk, startPersistence } from "./store/persist";
+import { startQueueSync } from "./lib/queueSync";
 import { ptyKillAll } from "./lib/ipc";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
 import { TerminalPane } from "./components/TerminalPane";
 import { NewBranchModal } from "./components/NewBranchModal";
+import { WorkflowModal } from "./components/WorkflowModal";
+import { QueuePane } from "./components/QueuePane";
+import { DiffPane } from "./components/DiffPane";
 
 let booted = false;
 
@@ -15,6 +19,7 @@ export default function App() {
   const repos = useAppStore((s) => s.repos);
   const repo = useAppStore(selectedRepo);
   const branch = useAppStore(selectedBranch);
+  const queueView = useAppStore((s) => s.selection.view === "queue");
 
   useShortcuts();
 
@@ -25,8 +30,13 @@ export default function App() {
       await ptyKillAll().catch(() => {}); // dev-reload hygiene: no orphan sessions
       await hydrateFromDisk();
       startPersistence();
+      startQueueSync();
     })();
   }, []);
+
+  const showEmpty =
+    hydrated && !queueView && (!branch || branch.chats.length === 0) &&
+    branch?.activeView !== "diff";
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -43,15 +53,24 @@ export default function App() {
                     branch={b}
                     chat={chat}
                     active={
+                      !queueView &&
                       r.id === repo?.id &&
                       b.id === branch?.id &&
+                      b.activeView !== "diff" &&
                       chat.id === b.activeChatId
                     }
                   />
                 )),
               ),
             )}
-          {hydrated && (!branch || branch.chats.length === 0) && (
+
+          {hydrated && queueView && repo && <QueuePane repo={repo} />}
+
+          {hydrated && !queueView && repo && branch && branch.activeView === "diff" && (
+            <DiffPane key={branch.id} repo={repo} branch={branch} active />
+          )}
+
+          {showEmpty && (
             <div className="absolute inset-0 flex items-center justify-center">
               <p className="text-muted-foreground">
                 {repos.length === 0
@@ -67,6 +86,7 @@ export default function App() {
         </div>
       </main>
       <NewBranchModal />
+      <WorkflowModal />
     </div>
   );
 }

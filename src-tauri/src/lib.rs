@@ -1,7 +1,9 @@
 mod git;
 mod pty;
+mod queue;
 
 use pty::PtyManager;
+use queue::QueueManager;
 use tauri::Manager;
 
 /// Dev aid: surfaces webview console errors in the `tauri dev` terminal.
@@ -17,6 +19,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .manage(PtyManager::default())
+        .manage(QueueManager::default())
         .invoke_handler(tauri::generate_handler![
             js_log,
             pty::pty_spawn,
@@ -27,12 +30,20 @@ pub fn run() {
             git::git_validate_repo,
             git::git_create_worktree,
             git::git_remove_worktree,
+            git::git_changed_files,
+            git::git_file_diff,
+            queue::queue_enqueue,
+            queue::queue_cancel,
+            queue::queue_state,
+            queue::queue_step_log,
+            queue::queue_dismiss,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 app.state::<PtyManager>().kill_all();
+                app.state::<QueueManager>().kill_running();
             }
         });
 }

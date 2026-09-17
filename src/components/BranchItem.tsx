@@ -1,5 +1,5 @@
 import { useAppStore, type Branch, type Repo } from "../store/appStore";
-import { deleteBranch } from "../lib/actions";
+import { deleteBranch, enqueueBranch } from "../lib/actions";
 
 interface Props {
   repo: Repo;
@@ -10,7 +10,17 @@ export function BranchItem({ repo, branch }: Props) {
   const select = useAppStore((s) => s.select);
   const setActiveChat = useAppStore((s) => s.setActiveChat);
   const selected = useAppStore(
-    (s) => s.selection.repoId === repo.id && s.selection.branchId === branch.id,
+    (s) =>
+      s.selection.repoId === repo.id &&
+      s.selection.branchId === branch.id &&
+      s.selection.view !== "queue",
+  );
+  const queued = useAppStore((s) =>
+    (s.queues[repo.id] ?? []).some(
+      (e) =>
+        e.branch === branch.name &&
+        (e.state === "queued" || e.state === "validating" || e.state === "merging"),
+    ),
   );
 
   const onSelect = () => {
@@ -31,11 +41,29 @@ export function BranchItem({ repo, branch }: Props) {
     >
       <span
         className={`size-1.5 shrink-0 rounded-full ${
-          selected ? "bg-accent-brand" : "bg-muted-foreground/40"
+          branch.merged
+            ? "bg-success"
+            : queued
+              ? "animate-pulse bg-accent-brand"
+              : selected
+                ? "bg-accent-brand"
+                : "bg-muted-foreground/40"
         }`}
         aria-hidden
       />
       <span className="min-w-0 flex-1 truncate font-mono text-xs">{branch.name}</span>
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          void enqueueBranch(repo.id, branch.id);
+        }}
+        title="Enqueue for merge"
+        aria-label={`Enqueue ${branch.name}`}
+        disabled={queued}
+        className="hidden size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-input hover:text-foreground group-hover:flex disabled:opacity-40"
+      >
+        ⇧
+      </button>
       <button
         onClick={(e) => {
           e.stopPropagation();

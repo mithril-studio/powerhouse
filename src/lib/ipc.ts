@@ -1,9 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { QueueEntry, WorkflowStep } from "../store/appStore";
 
 export interface RepoInfo {
   root: string;
   name: string;
   default_branch: string;
+}
+
+export interface ChangedFile {
+  path: string;
+  status: string;
 }
 
 export const ptySpawn = (
@@ -33,3 +39,41 @@ export const gitCreateWorktree = (repoPath: string, branch: string, base: string
 
 export const gitRemoveWorktree = (repoPath: string, worktreePath: string) =>
   invoke<void>("git_remove_worktree", { repoPath, worktreePath });
+
+export const gitChangedFiles = (worktreePath: string, base: string) =>
+  invoke<ChangedFile[]>("git_changed_files", { worktreePath, base });
+
+export const gitFileDiff = (worktreePath: string, base: string, path: string) =>
+  invoke<string>("git_file_diff", { worktreePath, base, path });
+
+// --- merge queue ---
+type StepInput = Pick<WorkflowStep, "name" | "command" | "type">;
+
+export const queueEnqueue = (
+  repoId: string,
+  repoPath: string,
+  defaultBranch: string,
+  branch: string,
+  workflow: StepInput[],
+  push: boolean,
+) =>
+  invoke<QueueEntry>("queue_enqueue", {
+    repoId,
+    repoPath,
+    defaultBranch,
+    branch,
+    workflow,
+    push,
+  });
+
+export const queueCancel = (repoId: string, entryId: string) =>
+  invoke<void>("queue_cancel", { repoId, entryId });
+
+export const queueState = (repoId: string) =>
+  invoke<QueueEntry[]>("queue_state", { repoId });
+
+export const queueStepLog = (repoId: string, entryId: string, step: number) =>
+  invoke<string>("queue_step_log", { repoId, entryId, step });
+
+export const queueDismiss = (repoId: string, entryId: string) =>
+  invoke<void>("queue_dismiss", { repoId, entryId });
