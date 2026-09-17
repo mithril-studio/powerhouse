@@ -7,6 +7,12 @@ export interface Chat {
   agentId?: string;
   /** When set, the agent is launched via its promptTemplate instead of bare command. */
   initialPrompt?: string;
+  /**
+   * Present once the chat has launched a resumable agent session; value is the
+   * id passed to the agent's `--session-id` (initially `chat.id`). Its presence
+   * marks the chat as resumable.
+   */
+  agentSessionId?: string;
 }
 
 export interface AgentProfile {
@@ -14,6 +20,12 @@ export interface AgentProfile {
   name: string;
   command: string; // e.g. "claude"
   promptTemplate: string; // e.g. 'claude "{prompt}"'
+  /** Fresh start pinning a session id, e.g. "claude --session-id {sessionId}". */
+  startTemplate?: string;
+  /** Fresh start pinning a session id + initial prompt. */
+  startPromptTemplate?: string;
+  /** Resume an existing session, e.g. "claude --resume {sessionId}". */
+  resumeTemplate?: string;
 }
 
 export interface Settings {
@@ -74,6 +86,12 @@ interface AppState extends PersistedTree {
   addChat: (repoId: string, branchId: string, chat: Chat) => void;
   removeChat: (repoId: string, branchId: string, chatId: string) => void;
   setActiveChat: (repoId: string, branchId: string, chatId: string) => void;
+  setChatAgentSession: (
+    repoId: string,
+    branchId: string,
+    chatId: string,
+    sessionId: string,
+  ) => void;
   select: (repoId: string | null, branchId: string | null) => void;
   setChatStatus: (chatId: string, status: ChatStatus) => void;
   openBranchModal: (repoId: string) => void;
@@ -87,7 +105,15 @@ interface AppState extends PersistedTree {
 }
 
 const SEED_AGENTS: AgentProfile[] = [
-  { id: "claude", name: "Claude", command: "claude", promptTemplate: 'claude "{prompt}"' },
+  {
+    id: "claude",
+    name: "Claude",
+    command: "claude",
+    promptTemplate: 'claude "{prompt}"',
+    startTemplate: "claude --session-id {sessionId}",
+    startPromptTemplate: 'claude --session-id {sessionId} "{prompt}"',
+    resumeTemplate: "claude --resume {sessionId}",
+  },
   { id: "codex", name: "Codex", command: "codex", promptTemplate: 'codex "{prompt}"' },
   { id: "pi", name: "Pi", command: "pi", promptTemplate: 'pi "{prompt}"' },
 ];
@@ -97,10 +123,27 @@ const seedSettings = (): Settings => ({
   defaultAgentId: "claude",
 });
 
+/** Backfills resume templates onto known seed agents that predate them, leaving
+ *  custom agents and any user-edited fields untouched. */
+function backfillResumeFields(agents: AgentProfile[]): AgentProfile[] {
+  const seedById = Object.fromEntries(SEED_AGENTS.map((a) => [a.id, a]));
+  return agents.map((a) => {
+    const seed = seedById[a.id];
+    if (!seed) return a;
+    return {
+      ...a,
+      startTemplate: a.startTemplate ?? seed.startTemplate,
+      startPromptTemplate: a.startPromptTemplate ?? seed.startPromptTemplate,
+      resumeTemplate: a.resumeTemplate ?? seed.resumeTemplate,
+    };
+  });
+}
+
 /** Migrates the old `agentCmd` string into agent profiles, or passes settings through. */
 function migrateSettings(tree: (Partial<PersistedTree> & LegacyTree) | null): Settings {
   if (tree?.settings && tree.settings.agents?.length) {
-    const { agents, defaultAgentId } = tree.settings;
+    const { defaultAgentId } = tree.settings;
+    const agents = backfillResumeFields(tree.settings.agents);
     const validDefault = agents.some((a) => a.id === defaultAgentId);
     return { agents, defaultAgentId: validDefault ? defaultAgentId : agents[0].id };
   }
@@ -128,6 +171,28 @@ export const resolveAgent = (settings: Settings, agentId?: string): AgentProfile
 
 export const renderTemplate = (profile: AgentProfile, prompt: string): string =>
   profile.promptTemplate.replace(/\{prompt\}/g, prompt);
+
+/** True when the agent supports pinning a session id and resuming it. */
+export const isSessionCapable = (profile: AgentProfile): boolean =>
+  !!(profile.startTemplate && profile.resumeTemplate);
+
+/** Fresh start pinning a deterministic session id (optionally with a prompt).
+ *  Falls back to the plain command/promptTemplate for non-session agents. */
+export const renderStart = (
+  profile: AgentProfile,
+  sessionId: string,
+  prompt?: string,
+): string => {
+  const tpl = prompt ? profile.startPromptTemplate : profile.startTemplate;
+  if (!tpl) return prompt ? renderTemplate(profile, prompt) : profile.command;
+  return tpl.replace(/\{sessionId\}/g, sessionId).replace(/\{prompt\}/g, prompt ?? "");
+};
+
+/** Resumes an existing agent session by id, or null if unsupported. */
+export const renderResume = (profile: AgentProfile, sessionId: string): string | null =>
+  profile.resumeTemplate
+    ? profile.resumeTemplate.replace(/\{sessionId\}/g, sessionId)
+    : null;
 
 const updateRepo = (repos: Repo[], repoId: string, fn: (r: Repo) => Repo) =>
   repos.map((r) => (r.id === repoId ? fn(r) : r));
@@ -232,6 +297,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       repos: updateBranch(s.repos, repoId, branchId, (b) => ({
         ...b,
         activeChatId: chatId,
+      })),
+    })),
+
+  setChatAgentSession: (repoId, branchId, chatId, sessionId) =>
+    set((s) => ({
+      repos: updateBranch(s.repos, repoId, branchId, (b) => ({
+        ...b,
+        chats: b.chats.map((c) =>
+          c.id === chatId ? { ...c, agentSessionId: sessionId } : c,
+        ),
       })),
     })),
 

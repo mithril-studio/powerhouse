@@ -27,6 +27,8 @@ pub fn run() {
             pty::pty_resize,
             pty::pty_kill,
             pty::pty_kill_all,
+            pty::pty_read_transcript,
+            pty::pty_delete_transcript,
             git::git_validate_repo,
             git::git_create_worktree,
             git::git_remove_worktree,

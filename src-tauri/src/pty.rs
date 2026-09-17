@@ -1,10 +1,34 @@
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::collections::HashMap;
+use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
+
+/// Raw PTY output is recorded here so a chat can show its prior conversation
+/// after a restart. Keyed by chat/session id.
+fn transcript_path(id: &str) -> Option<PathBuf> {
+    Some(
+        dirs::home_dir()?
+            .join(".powerhouse")
+            .join("transcripts")
+            .join(format!("{id}.log")),
+    )
+}
+
+fn now_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
+/// Cap how many trailing bytes we replay: xterm scrollback is 10k lines, so
+/// replaying more than this is wasted work.
+const TRANSCRIPT_TAIL_CAP: usize = 1024 * 1024;
 
 pub struct PtySession {
     master: Box<dyn MasterPty + Send>,
@@ -39,6 +63,7 @@ pub fn pty_spawn(
     cols: u16,
     rows: u16,
     agent_cmd: Option<String>,
+    reset_transcript: bool,
 ) -> Result<(), String> {
     {
         let map = state.0.lock().unwrap();
@@ -81,10 +106,32 @@ pub fn pty_spawn(
     // Signals the agent launcher once the shell has produced its first output.
     let (first_out_tx, first_out_rx) = mpsc::channel::<()>();
 
+    // Record raw output to disk so the chat can be replayed after a restart.
+    // Resume/fresh sessions truncate so the agent's redraw isn't stacked on
+    // stale bytes; otherwise we append across spawns.
+    let transcript = transcript_path(&session_id).and_then(|path| {
+        if let Some(dir) = path.parent() {
+            let _ = fs::create_dir_all(dir);
+        }
+        let mut opts = OpenOptions::new();
+        opts.create(true).write(true);
+        if reset_transcript {
+            opts.truncate(true);
+        } else {
+            opts.append(true);
+        }
+        opts.open(&path).ok()
+    });
+
     {
         let app = app.clone();
         let id = session_id.clone();
+        let mut transcript = transcript;
         std::thread::spawn(move || {
+            if let Some(f) = transcript.as_mut() {
+                let sep = format!("\r\n\x1b[2m── session {} ──\x1b[0m\r\n", now_ms());
+                let _ = f.write_all(sep.as_bytes());
+            }
             let mut buf = [0u8; 8192];
             let mut first = true;
             loop {
@@ -96,7 +143,11 @@ pub fn pty_spawn(
                             let _ = first_out_tx.send(());
                         }
                         let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
+                        // Emit first (never block the live stream), then record.
                         let _ = app.emit(&format!("pty-out-{id}"), chunk);
+                        if let Some(f) = transcript.as_mut() {
+                            let _ = f.write_all(&buf[..n]);
+                        }
                     }
                 }
             }
@@ -173,5 +224,41 @@ pub fn pty_kill(state: State<PtyManager>, session_id: String) -> Result<(), Stri
 #[tauri::command]
 pub fn pty_kill_all(state: State<PtyManager>) -> Result<(), String> {
     state.kill_all();
+    Ok(())
+}
+
+/// Reads a chat's recorded output for read-only replay. Missing file → empty.
+/// Only the trailing `TRANSCRIPT_TAIL_CAP` bytes are returned (aligned to the
+/// next newline so we don't slice mid escape-sequence).
+#[tauri::command]
+pub fn pty_read_transcript(session_id: String) -> Result<String, String> {
+    let path = match transcript_path(&session_id) {
+        Some(p) => p,
+        None => return Ok(String::new()),
+    };
+    if !path.exists() {
+        return Ok(String::new());
+    }
+    let bytes = fs::read(&path).map_err(|e| e.to_string())?;
+    let slice: &[u8] = if bytes.len() > TRANSCRIPT_TAIL_CAP {
+        let start = bytes.len() - TRANSCRIPT_TAIL_CAP;
+        let adjusted = bytes[start..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .map(|i| start + i + 1)
+            .unwrap_or(start);
+        &bytes[adjusted..]
+    } else {
+        &bytes[..]
+    };
+    Ok(String::from_utf8_lossy(slice).into_owned())
+}
+
+/// Best-effort removal of a chat's recorded output (on chat/branch delete).
+#[tauri::command]
+pub fn pty_delete_transcript(session_id: String) -> Result<(), String> {
+    if let Some(path) = transcript_path(&session_id) {
+        let _ = fs::remove_file(path);
+    }
     Ok(())
 }
