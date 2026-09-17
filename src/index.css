@@ -1,0 +1,81 @@
+/* Design tokens — grayscale-first, one accent (azure). Dark-only app. */
+@import "tailwindcss";
+@import "@xterm/xterm/css/xterm.css";
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent-brand: var(--accent-brand);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+}
+
+:root {
+  --radius: 0.5rem;
+
+  --background: #0d0e11;
+  --foreground: oklch(0.9 0.004 260);
+  --card: oklch(0.21 0.006 260);
+  --muted: oklch(0.25 0.006 260);
+  --muted-foreground: oklch(0.62 0.01 260);
+  --primary: oklch(0.9 0.004 260);
+  --primary-foreground: oklch(0.18 0.005 260);
+  --accent-brand: oklch(0.62 0.19 250);
+  --destructive: oklch(0.7 0.191 22.216);
+  --border: oklch(1 0 0 / 8%);
+  --input: oklch(1 0 0 / 12%);
+  --ring: oklch(0.62 0.19 250);
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+    sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    min-width: 0;
+  }
+  html {
+    @apply font-sans;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-size: 13px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+    cursor: default;
+    overscroll-behavior: none;
+  }
+  button {
+    cursor: default;
+  }
+}
+
+/* xterm fills its container; hide its scrollbar chrome on macOS. */
+.xterm {
+  height: 100%;
+  padding: 8px 4px 8px 12px;
+}
+.xterm .xterm-viewport {
+  background-color: transparent !important;
+  scrollbar-width: thin;
+  scrollbar-color: oklch(1 0 0 / 15%) transparent;
+}

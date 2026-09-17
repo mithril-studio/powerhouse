@@ -1,51 +1,72 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+import { useEffect } from "react";
+import { selectedBranch, selectedRepo, useAppStore } from "./store/appStore";
+import { hydrateFromDisk, startPersistence } from "./store/persist";
+import { ptyKillAll } from "./lib/ipc";
+import { useShortcuts } from "./hooks/useShortcuts";
+import { Sidebar } from "./components/Sidebar";
+import { TabBar } from "./components/TabBar";
+import { TerminalPane } from "./components/TerminalPane";
+import { NewBranchModal } from "./components/NewBranchModal";
 
-function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+let booted = false;
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+export default function App() {
+  const hydrated = useAppStore((s) => s.hydrated);
+  const repos = useAppStore((s) => s.repos);
+  const repo = useAppStore(selectedRepo);
+  const branch = useAppStore(selectedBranch);
+
+  useShortcuts();
+
+  useEffect(() => {
+    if (booted) return; // StrictMode double-invoke guard
+    booted = true;
+    void (async () => {
+      await ptyKillAll().catch(() => {}); // dev-reload hygiene: no orphan sessions
+      await hydrateFromDisk();
+      startPersistence();
+    })();
+  }, []);
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+    <div className="flex h-screen overflow-hidden">
+      <Sidebar />
+      <main className="flex min-w-0 flex-1 flex-col">
+        <TabBar repo={repo} branch={branch} />
+        <div className="relative flex-1 overflow-hidden">
+          {hydrated &&
+            repos.flatMap((r) =>
+              r.branches.flatMap((b) =>
+                b.chats.map((chat) => (
+                  <TerminalPane
+                    key={chat.id}
+                    branch={b}
+                    chat={chat}
+                    active={
+                      r.id === repo?.id &&
+                      b.id === branch?.id &&
+                      chat.id === b.activeChatId
+                    }
+                  />
+                )),
+              ),
+            )}
+          {hydrated && (!branch || branch.chats.length === 0) && (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <p className="text-muted-foreground">
+                {repos.length === 0
+                  ? "Add a project to get started"
+                  : !repo
+                    ? "Select a project"
+                    : !branch
+                      ? "Create a branch — ⌘D"
+                      : "Open a chat — ⌘T"}
+              </p>
+            </div>
+          )}
+        </div>
+      </main>
+      <NewBranchModal />
+    </div>
   );
 }
-
-export default App;
