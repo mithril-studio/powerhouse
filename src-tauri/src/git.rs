@@ -209,6 +209,36 @@ pub fn git_changed_files(worktree_path: String, base: String) -> Result<Vec<Chan
     Ok(files)
 }
 
+/// Every file in the worktree: tracked (`ls-files`) + untracked (respecting
+/// .gitignore), sorted and de-duplicated.
+#[tauri::command]
+pub fn git_list_files(worktree_path: String) -> Result<Vec<String>, String> {
+    let wt = PathBuf::from(&worktree_path);
+    let tracked = git(&wt, &["ls-files"])?;
+    let untracked = git(&wt, &["ls-files", "--others", "--exclude-standard"]).unwrap_or_default();
+
+    let mut files: Vec<String> = tracked
+        .lines()
+        .chain(untracked.lines())
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    files.sort();
+    files.dedup();
+    Ok(files)
+}
+
+/// Working-tree contents of a single file. Binary files return a placeholder.
+#[tauri::command]
+pub fn git_file_content(worktree_path: String, path: String) -> Result<String, String> {
+    let full = PathBuf::from(&worktree_path).join(&path);
+    let bytes = std::fs::read(&full).map_err(|e| e.to_string())?;
+    if bytes.contains(&0) {
+        return Ok("(binary file)".to_string());
+    }
+    Ok(String::from_utf8_lossy(&bytes).to_string())
+}
+
 /// Unified diff for a single path: the merge base with `base` → working tree,
 /// so committed and uncommitted changes are shown together.
 #[tauri::command]

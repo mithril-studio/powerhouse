@@ -10,10 +10,7 @@ export function BranchItem({ repo, branch }: Props) {
   const select = useAppStore((s) => s.select);
   const setActiveChat = useAppStore((s) => s.setActiveChat);
   const selected = useAppStore(
-    (s) =>
-      s.selection.repoId === repo.id &&
-      s.selection.branchId === branch.id &&
-      s.selection.view !== "queue",
+    (s) => s.selection.repoId === repo.id && s.selection.branchId === branch.id,
   );
   const queued = useAppStore((s) =>
     (s.queues[repo.id] ?? []).some(

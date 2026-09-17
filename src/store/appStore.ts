@@ -5,9 +5,6 @@ export interface Chat {
   title: string;
 }
 
-/** Per-branch main content view. */
-export type BranchView = "chat" | "diff";
-
 export interface Branch {
   id: string;
   name: string;
@@ -16,8 +13,10 @@ export interface Branch {
   activeChatId: string | null;
   /** Set true once this branch lands on main via the queue (green dot). */
   merged?: boolean;
-  activeView?: BranchView;
 }
+
+/** Tabs of the toggleable right inspector sidebar. */
+export type RightTab = "files" | "changes" | "diff" | "merge";
 
 /** A configurable check step. `type` is reserved for future "agent" steps. */
 export interface WorkflowStep {
@@ -74,7 +73,6 @@ export interface Repo {
 export interface Selection {
   repoId: string | null;
   branchId: string | null;
-  view?: "queue";
 }
 
 /** Runtime-only; terminals/PTYs are never persisted. */
@@ -92,6 +90,8 @@ interface AppState extends PersistedTree {
   chatStatus: Record<string, ChatStatus>;
   branchModalRepoId: string | null;
   workflowModalRepoId: string | null;
+  rightSidebarOpen: boolean;
+  rightTab: RightTab;
 
   hydrate: (tree: Partial<PersistedTree> | null) => void;
   addRepo: (repo: Omit<Repo, "id" | "branches" | "workflow" | "pushOnMerge">) => Repo;
@@ -108,10 +108,11 @@ interface AppState extends PersistedTree {
   setQueueEntries: (repoId: string, live: QueueEntry[]) => void;
   dismissQueueEntry: (repoId: string, entryId: string) => void;
   setWorkflow: (repoId: string, workflow: WorkflowStep[], pushOnMerge: boolean) => void;
-  selectQueue: (repoId: string) => void;
   openWorkflowModal: (repoId: string) => void;
   closeWorkflowModal: () => void;
-  setBranchView: (repoId: string, branchId: string, view: BranchView) => void;
+  toggleRightSidebar: () => void;
+  setRightTab: (tab: RightTab) => void;
+  openRightTab: (tab: RightTab) => void;
 }
 
 const updateRepo = (repos: Repo[], repoId: string, fn: (r: Repo) => Repo) =>
@@ -137,6 +138,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   chatStatus: {},
   branchModalRepoId: null,
   workflowModalRepoId: null,
+  rightSidebarOpen: false,
+  rightTab: "changes",
 
   hydrate: (tree) =>
     set({
@@ -281,19 +284,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       repos: updateRepo(s.repos, repoId, (r) => ({ ...r, workflow, pushOnMerge })),
     })),
 
-  selectQueue: (repoId) =>
-    set({ selection: { repoId, branchId: null, view: "queue" } }),
-
   openWorkflowModal: (repoId) => set({ workflowModalRepoId: repoId }),
   closeWorkflowModal: () => set({ workflowModalRepoId: null }),
 
-  setBranchView: (repoId, branchId, view) =>
-    set((s) => ({
-      repos: updateBranch(s.repos, repoId, branchId, (b) => ({
-        ...b,
-        activeView: view,
-      })),
-    })),
+  toggleRightSidebar: () => set((s) => ({ rightSidebarOpen: !s.rightSidebarOpen })),
+  setRightTab: (tab) => set({ rightTab: tab }),
+  openRightTab: (tab) => set({ rightSidebarOpen: true, rightTab: tab }),
 }));
 
 export const selectedRepo = (s: AppState) =>

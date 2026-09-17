@@ -107,7 +107,7 @@ export async function enqueueBranch(repoId: string, branchId: string) {
       repo.workflow.map((w) => ({ name: w.name, command: w.command, type: w.type })),
       repo.pushOnMerge,
     );
-    s.selectQueue(repoId);
+    s.openRightTab("merge");
   } catch (err) {
     await message(String(err), { title: "Could not enqueue", kind: "error" });
   }

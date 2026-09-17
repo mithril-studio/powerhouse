@@ -32,6 +32,8 @@ pub fn run() {
             git::git_remove_worktree,
             git::git_changed_files,
             git::git_file_diff,
+            git::git_list_files,
+            git::git_file_content,
             queue::queue_enqueue,
             queue::queue_cancel,
             queue::queue_state,

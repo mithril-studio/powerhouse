@@ -46,6 +46,12 @@ export const gitChangedFiles = (worktreePath: string, base: string) =>
 export const gitFileDiff = (worktreePath: string, base: string, path: string) =>
   invoke<string>("git_file_diff", { worktreePath, base, path });
 
+export const gitListFiles = (worktreePath: string) =>
+  invoke<string[]>("git_list_files", { worktreePath });
+
+export const gitFileContent = (worktreePath: string, path: string) =>
+  invoke<string>("git_file_content", { worktreePath, path });
+
 // --- merge queue ---
 type StepInput = Pick<WorkflowStep, "name" | "command" | "type">;
 

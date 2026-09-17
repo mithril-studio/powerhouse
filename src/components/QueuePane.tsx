@@ -1,5 +1,5 @@
-import { useAppStore, type QueueEntry, type Repo } from "../store/appStore";
-import { dismissEntry } from "../lib/actions";
+import { useAppStore, type Branch, type QueueEntry, type Repo } from "../store/appStore";
+import { dismissEntry, enqueueBranch } from "../lib/actions";
 import { QueueCard } from "./QueueCard";
 
 const isLive = (e: QueueEntry) =>
@@ -40,7 +40,7 @@ function HistoryRow({ repoId, entry }: { repoId: string; entry: QueueEntry }) {
   );
 }
 
-export function QueuePane({ repo }: { repo: Repo }) {
+export function QueuePane({ repo, branch }: { repo: Repo; branch?: Branch | null }) {
   const entries = useAppStore((s) => s.queues[repo.id] ?? []);
   const openWorkflowModal = useAppStore((s) => s.openWorkflowModal);
 
@@ -51,21 +51,32 @@ export function QueuePane({ repo }: { repo: Repo }) {
     .filter((e) => !isLive(e))
     .sort((a, b) => b.created_at - a.created_at);
 
+  const branchLive =
+    !!branch && active.some((e) => e.branch === branch.name);
+
   let queuedSeen = 0;
 
   return (
-    <div className="absolute inset-0 overflow-y-auto">
-      <div className="mx-auto max-w-2xl p-4">
+    <div className="h-full overflow-y-auto">
+      <div className="p-3">
         <div className="mb-4 flex items-center gap-2">
-          <h1 className="font-medium">Merge queue</h1>
-          <span className="text-xs text-muted-foreground">{repo.name}</span>
-          <span className="flex-1" />
+          <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{repo.name}</span>
           <button
             onClick={() => openWorkflowModal(repo.id)}
-            className="h-7 rounded-lg px-2.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="h-7 shrink-0 rounded-lg px-2.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             Edit workflow
           </button>
+          {branch && (
+            <button
+              onClick={() => void enqueueBranch(repo.id, branch.id)}
+              disabled={branchLive}
+              title={branchLive ? "Already in the queue" : `Enqueue ${branch.name}`}
+              className="h-7 shrink-0 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-all active:translate-y-px focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+            >
+              {branchLive ? "Queued" : "Merge"}
+            </button>
+          )}
         </div>
 
         {active.length > 0 && (

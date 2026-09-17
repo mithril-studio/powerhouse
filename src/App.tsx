@@ -9,8 +9,7 @@ import { TabBar } from "./components/TabBar";
 import { TerminalPane } from "./components/TerminalPane";
 import { NewBranchModal } from "./components/NewBranchModal";
 import { WorkflowModal } from "./components/WorkflowModal";
-import { QueuePane } from "./components/QueuePane";
-import { DiffPane } from "./components/DiffPane";
+import { RightSidebar } from "./components/RightSidebar";
 
 let booted = false;
 
@@ -19,7 +18,7 @@ export default function App() {
   const repos = useAppStore((s) => s.repos);
   const repo = useAppStore(selectedRepo);
   const branch = useAppStore(selectedBranch);
-  const queueView = useAppStore((s) => s.selection.view === "queue");
+  const rightSidebarOpen = useAppStore((s) => s.rightSidebarOpen);
 
   useShortcuts();
 
@@ -33,10 +32,6 @@ export default function App() {
       startQueueSync();
     })();
   }, []);
-
-  const showEmpty =
-    hydrated && !queueView && (!branch || branch.chats.length === 0) &&
-    branch?.activeView !== "diff";
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -53,24 +48,15 @@ export default function App() {
                     branch={b}
                     chat={chat}
                     active={
-                      !queueView &&
                       r.id === repo?.id &&
                       b.id === branch?.id &&
-                      b.activeView !== "diff" &&
                       chat.id === b.activeChatId
                     }
                   />
                 )),
               ),
             )}
-
-          {hydrated && queueView && repo && <QueuePane repo={repo} />}
-
-          {hydrated && !queueView && repo && branch && branch.activeView === "diff" && (
-            <DiffPane key={branch.id} repo={repo} branch={branch} active />
-          )}
-
-          {showEmpty && (
+          {hydrated && (!branch || branch.chats.length === 0) && (
             <div className="absolute inset-0 flex items-center justify-center">
               <p className="text-muted-foreground">
                 {repos.length === 0
@@ -85,6 +71,7 @@ export default function App() {
           )}
         </div>
       </main>
+      {hydrated && rightSidebarOpen && <RightSidebar repo={repo} branch={branch} />}
       <NewBranchModal />
       <WorkflowModal />
     </div>
