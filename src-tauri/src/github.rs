@@ -100,6 +100,24 @@ fn read_token() -> Option<String> {
     entry().ok()?.get_password().ok()
 }
 
+/// Reads the stored token for git-over-HTTPS operations (queue push/fetch).
+/// `None` when disconnected — callers fall back to ambient credentials.
+pub(crate) fn token() -> Option<String> {
+    read_token()
+}
+
+/// `Authorization` header value authenticating git-over-HTTPS with the OAuth
+/// token (Basic auth, `x-access-token` username — the scheme `gh` and GitHub
+/// Actions use). Pair with `-c http.extraheader=...` so it never lands in
+/// repo config.
+pub(crate) fn basic_auth_header(token: &str) -> String {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    format!(
+        "Basic {}",
+        STANDARD.encode(format!("x-access-token:{token}"))
+    )
+}
+
 fn delete_token() -> Result<(), String> {
     match entry()?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
