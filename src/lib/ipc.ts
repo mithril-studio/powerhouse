@@ -114,3 +114,35 @@ export const handoffWatchStart = (branchId: string, worktreePath: string) =>
 
 export const handoffWatchStop = (branchId: string) =>
   invoke<void>("handoff_watch_stop", { branchId });
+
+// --- GitHub OAuth (device flow) ---
+export interface DeviceStart {
+  user_code: string;
+  verification_uri: string;
+  device_code: string;
+  interval: number;
+  expires_in: number;
+}
+
+export interface GithubAccount {
+  login: string;
+  avatar_url: string;
+}
+
+/** One poll tick's outcome. The token never crosses this boundary — it stays
+ *  in the Rust keychain; only the display profile comes back on success. */
+export type PollResult =
+  | { status: "pending" }
+  | { status: "slow_down"; interval: number }
+  | ({ status: "connected" } & GithubAccount);
+
+export const githubDeviceStart = () =>
+  invoke<DeviceStart>("github_device_start");
+
+export const githubPoll = (deviceCode: string) =>
+  invoke<PollResult>("github_poll", { deviceCode });
+
+export const githubAccount = () =>
+  invoke<GithubAccount | null>("github_account");
+
+export const githubDisconnect = () => invoke<void>("github_disconnect");
