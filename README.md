@@ -1,7 +1,7 @@
 # Powerhouse
 
 A Conductor-style Mac app: manage repos and parallel git-worktree branches from
-a sidebar, and talk to Claude, Codex, OpenCode, and Pi through one shared chat UI.
+a sidebar, and talk to Claude, Codex, and Pi through one shared chat UI.
 
 Powerhouse is an [Agent Client Protocol](https://agentclientprotocol.com/) client.
 Each agent keeps its own runtime, authentication, tools, and model behavior; ACP
@@ -24,7 +24,6 @@ The built-in profiles launch these ACP servers:
 | --- | --- |
 | Claude | `npx -y @agentclientprotocol/claude-agent-acp` |
 | Codex | `npx -y @agentclientprotocol/codex-acp` |
-| OpenCode | `opencode acp` |
 | Pi | `npx -y pi-acp` |
 
 Authenticate with the agent's own CLI as usual. If an ACP adapter is unavailable
@@ -36,8 +35,8 @@ or a workflow needs direct CLI access, use the **Terminal** button in the chat.
   with `git rev-parse`).
 - **Repo "+" or ⌘D** creates a branch as a git worktree under
   `~/.powerhouse/worktrees/<repo>/<branch>`, opens it, and starts a chat.
-- **⌘T** opens another chat on the current branch. Claude, Codex, OpenCode, and
-  Pi default to ACP; legacy/custom profiles default to a PTY.
+- **⌘T** opens another chat on the current branch. Claude, Codex, and Pi default
+  to ACP; legacy/custom profiles default to a PTY.
 - The ACP pane renders messages, reasoning, plans, tool calls, diffs, permission
   requests, modes, and agent-provided model/config options. Unsupported controls
   simply do not appear.

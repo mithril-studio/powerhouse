@@ -7,7 +7,7 @@ import {
 } from "./appStore";
 
 describe("agent transport migration", () => {
-  it("backfills ACP settings for known agents and adds new seed agents", () => {
+  it("backfills ACP settings and removes the retired OpenCode seed profile", () => {
     const claude: AgentProfile = {
       id: "claude",
       name: "Claude",
@@ -15,16 +15,23 @@ describe("agent transport migration", () => {
       promptTemplate: 'claude-custom "{prompt}"',
     };
 
+    const opencode: AgentProfile = {
+      id: "opencode",
+      name: "OpenCode",
+      command: "opencode",
+      promptTemplate: 'opencode "{prompt}"',
+    };
+
     const settings = migrateSettings({
-      settings: { agents: [claude], defaultAgentId: "claude" },
+      settings: { agents: [claude, opencode], defaultAgentId: "opencode" },
     });
 
     expect(settings.agents.find((agent) => agent.id === "claude")).toEqual(
       expect.objectContaining({ command: "claude-custom", transport: "acp" }),
     );
-    expect(settings.agents.find((agent) => agent.id === "opencode")).toEqual(
-      expect.objectContaining({ transport: "acp", command: "opencode" }),
-    );
+    expect(settings.agents.find((agent) => agent.id === "opencode")).toBeUndefined();
+    expect(settings.defaultAgentId).toBe("claude");
+    expect(settings.agents.map((agent) => agent.id)).toEqual(["claude", "codex", "pi"]);
   });
 
   it("keeps custom agents on the terminal transport", () => {

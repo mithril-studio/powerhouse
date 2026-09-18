@@ -211,14 +211,6 @@ const SEED_AGENTS: AgentProfile[] = [
     acpCommand: "npx -y @agentclientprotocol/codex-acp",
   },
   {
-    id: "opencode",
-    name: "OpenCode",
-    command: "opencode",
-    promptTemplate: 'opencode "{prompt}"',
-    transport: "acp",
-    acpCommand: "opencode acp",
-  },
-  {
     id: "pi",
     name: "Pi",
     command: "pi",
@@ -237,7 +229,7 @@ const seedSettings = (): Settings => ({
  *  custom agents and any user-edited fields untouched. */
 function backfillAgentProfiles(agents: AgentProfile[]): AgentProfile[] {
   const seedById = Object.fromEntries(SEED_AGENTS.map((a) => [a.id, a]));
-  const backfilled = agents.map((a) => {
+  const backfilled = agents.filter((a) => a.id !== "opencode").map((a) => {
     const seed = seedById[a.id];
     if (!seed) return a;
     return {
