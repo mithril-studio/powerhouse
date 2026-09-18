@@ -71,31 +71,32 @@ export function TabBar({ repo, branch }: Props) {
           >
             +
           </button>
-          <div className="ml-auto flex items-center gap-1">
-            <button
-              onClick={() => void startHandoff(repo.id, branch.id)}
-              disabled={!pending && !activeRunning}
-              title={
-                pending
-                  ? "Cancel handoff"
-                  : "Hand off this chat to a fresh agent session"
-              }
-              className={`flex h-7 items-center gap-1.5 rounded-md px-2 text-xs disabled:opacity-40 ${
-                pending
-                  ? "bg-muted text-foreground"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
-              }`}
-            >
-              {pending && (
-                <span className="size-2 animate-pulse rounded-full bg-accent-brand" />
-              )}
-              {pending ? "Handing off…" : "Handoff"}
-            </button>
-          </div>
         </>
       )}
 
       <span className="flex-1" />
+
+      {repo && branch && (
+        <button
+          onClick={() => void startHandoff(repo.id, branch.id)}
+          disabled={!pending && !activeRunning}
+          title={
+            pending
+              ? "Cancel handoff"
+              : "Hand off this chat to a fresh agent session"
+          }
+          className={`flex h-7 items-center gap-1.5 rounded-md px-2 text-xs disabled:opacity-40 ${
+            pending
+              ? "bg-muted text-foreground"
+              : "text-muted-foreground hover:bg-muted hover:text-foreground"
+          }`}
+        >
+          {pending && (
+            <span className="size-2 animate-pulse rounded-full bg-accent-brand" />
+          )}
+          {pending ? "Handing off…" : "Handoff"}
+        </button>
+      )}
 
       {repo && (
         <button
@@ -103,11 +104,7 @@ export function TabBar({ repo, branch }: Props) {
           title="Toggle right sidebar"
           aria-label="Toggle right sidebar"
           aria-pressed={rightSidebarOpen}
-          className={`flex size-7 items-center justify-center rounded-md ${
-            rightSidebarOpen
-              ? "bg-muted text-foreground"
-              : "text-muted-foreground hover:bg-muted hover:text-foreground"
-          }`}
+          className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           {/* right-panel glyph */}
           <svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden>
