@@ -68,7 +68,7 @@ export function AcpComposer({
         />
       </div>
       <p className="mt-1 px-1 text-[10px] text-muted-foreground/60">
-        enter send · shift+enter newline · esc interrupt · ⌘⇧P commands
+        enter send · shift+enter newline · shift+tab mode · esc interrupt · ⌘⇧P commands
       </p>
     </form>
   );

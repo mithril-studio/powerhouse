@@ -25,6 +25,7 @@ export function AcpFooter({
   modes,
   configOptions,
   commandCount,
+  nativeCliOpen,
 }: {
   agentName: string;
   branchName: string;
@@ -32,6 +33,7 @@ export function AcpFooter({
   modes: SessionModeState | null;
   configOptions: SessionConfigOption[];
   commandCount: number;
+  nativeCliOpen: boolean;
 }) {
   const mode = modes?.availableModes.find(
     (item) => item.id === modes.currentModeId,
@@ -52,6 +54,9 @@ export function AcpFooter({
       {[mode, ...settings].filter(Boolean).map((value) => (
         <span key={value}>{value}</span>
       ))}
+      <span className={nativeCliOpen ? "text-accent-brand" : ""}>
+        {nativeCliOpen ? "ACP + CLI" : "ACP"}
+      </span>
       <span className="text-foreground/80">{agentName}</span>
       <span>⌘⇧P</span>
     </footer>

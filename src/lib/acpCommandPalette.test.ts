@@ -4,88 +4,106 @@ import type {
   SessionConfigOption,
   SessionModeState,
 } from "@agentclientprotocol/sdk";
-import { buildAcpPaletteItems, filterAcpPaletteItems } from "./acpCommandPalette";
+import type { AgentControlState } from "./agentControls";
+import {
+  buildPalette,
+  filterPalette,
+  flattenView,
+  type PaletteItem,
+  type PaletteView,
+} from "./acpCommandPalette";
 
-describe("ACP command palette", () => {
-  it("combines agent commands, modes, config values, and Powerhouse actions", () => {
-    const commands: AvailableCommand[] = [
-      {
-        name: "skill:review",
-        description: "Run the review skill",
-        input: { hint: "optional focus" },
-      },
-    ];
-    const modes: SessionModeState = {
-      currentModeId: "code",
-      availableModes: [
-        { id: "code", name: "Code" },
-        { id: "plan", name: "Plan" },
+const state = (partial: Partial<AgentControlState>): AgentControlState => ({
+  modes: null,
+  configOptions: [],
+  commands: [],
+  ...partial,
+});
+
+const find = (view: PaletteView, id: string): PaletteItem | undefined =>
+  flattenView(view).find((item) => item.id === id);
+
+describe("hierarchical command palette", () => {
+  const commands: AvailableCommand[] = [
+    { name: "skill:review", description: "Run the review skill", input: { hint: "focus" } },
+  ];
+  const modes: SessionModeState = {
+    currentModeId: "code",
+    availableModes: [
+      { id: "code", name: "Code" },
+      { id: "plan", name: "Plan" },
+    ],
+  };
+  const configOptions: SessionConfigOption[] = [
+    {
+      id: "model",
+      name: "Model",
+      category: "model",
+      type: "select",
+      currentValue: "codex",
+      options: [
+        { value: "codex", name: "Codex" },
+        { value: "mini", name: "Codex Mini" },
       ],
-    };
-    const configOptions: SessionConfigOption[] = [
-      {
-        id: "model",
-        name: "Model",
-        category: "model",
-        type: "select",
-        currentValue: "codex",
-        options: [{ value: "codex", name: "Codex" }],
-      },
-      {
-        id: "verbose",
-        name: "Verbose tools",
-        type: "boolean",
-        currentValue: false,
-      },
-    ];
+    },
+  ];
 
-    const items = buildAcpPaletteItems({ commands, modes, configOptions });
+  it("builds grouped root entries with submenus for session controls", () => {
+    const view = buildPalette(state({ commands, modes, configOptions }));
+    expect(view.groups.map((group) => group.heading)).toEqual([
+      "Session",
+      "Agent commands",
+      "Powerhouse",
+    ]);
 
-    expect(items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "command:skill:review",
-          group: "Agent commands",
-          label: "/skill:review",
-          action: { type: "insert_prompt", prompt: "/skill:review " },
-        }),
-        expect.objectContaining({
-          id: "mode:plan",
-          label: "Plan",
-          selected: false,
-          action: { type: "mode", modeId: "plan" },
-        }),
-        expect.objectContaining({
-          id: "config:model:codex",
-          label: "Model · Codex",
-          selected: true,
-        }),
-        expect.objectContaining({
-          id: "config:verbose",
-          label: "Verbose tools · Off",
-          action: {
-            type: "config",
-            configId: "verbose",
-            value: true,
-          },
-        }),
-        expect.objectContaining({ id: "powerhouse:terminal", label: "Open terminal" }),
-      ]),
-    );
-  });
+    const mode = find(view, "session:mode");
+    expect(mode?.label).toBe("Switch mode…");
+    expect(mode?.hint).toBe("Code");
+    expect(mode?.action.type).toBe("submenu");
 
-  it("filters by labels, descriptions, and groups", () => {
-    const items = buildAcpPaletteItems({
-      commands: [{ name: "skill:review", description: "Check code quality" }],
-      modes: null,
-      configOptions: [],
+    const model = find(view, "session:model");
+    expect(model?.hint).toBe("Codex");
+
+    // Commands come straight from available_commands_update — no per-agent lists.
+    const command = find(view, "command:skill:review");
+    expect(command?.label).toBe("/skill:review");
+    expect(command?.action).toEqual({
+      type: "insert_prompt",
+      prompt: "/skill:review ",
     });
 
-    expect(filterAcpPaletteItems(items, "code quality").map((item) => item.id)).toEqual([
-      "command:skill:review",
-    ]);
-    expect(filterAcpPaletteItems(items, "powerhouse").map((item) => item.id)).toEqual([
-      "powerhouse:terminal",
-    ]);
+    expect(find(view, "powerhouse:native-cli")?.action).toEqual({ type: "native_cli" });
+    expect(find(view, "powerhouse:restart")?.action).toEqual({ type: "restart" });
+  });
+
+  it("drills into a focused submenu that marks the active value", () => {
+    const view = buildPalette(state({ modes, configOptions }));
+    const model = find(view, "session:model");
+    expect(model?.action.type).toBe("submenu");
+    if (model?.action.type !== "submenu") return;
+    const submenu = model.action.view;
+    expect(submenu.title).toBe("Model");
+    const items = flattenView(submenu);
+    expect(items.map((item) => item.label)).toEqual(["Codex", "Codex Mini"]);
+    expect(items[0].selected).toBe(true);
+    expect(items[1].action).toEqual({
+      type: "apply",
+      op: { kind: "config", configId: "model", value: "mini" },
+    });
+  });
+
+  it("omits session and command groups the agent does not advertise", () => {
+    const view = buildPalette(state({}));
+    expect(view.groups.map((group) => group.heading)).toEqual(["Powerhouse"]);
+  });
+
+  it("filters items across labels, descriptions, hints, and groups", () => {
+    const view = buildPalette(state({ commands, modes, configOptions }));
+    expect(
+      flattenView(filterPalette(view, "review")).map((item) => item.id),
+    ).toEqual(["command:skill:review"]);
+    expect(
+      flattenView(filterPalette(view, "powerhouse")).map((item) => item.id),
+    ).toEqual(["powerhouse:native-cli", "powerhouse:restart"]);
   });
 });

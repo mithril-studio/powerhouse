@@ -135,8 +135,11 @@ export async function deleteBranch(repoId: string, branchId: string) {
     void disposeAcp(chat.id);
     void ptyDeleteTranscript(chat.id).catch(() => {});
   }
+  // Bottom-panel surfaces (ids mirror BottomPanel's shellId/agentCliId).
   disposeTerminal(`shell-${branchId}`);
   void ptyDeleteTranscript(`shell-${branchId}`).catch(() => {});
+  disposeTerminal(`agentcli-${branchId}`);
+  void ptyDeleteTranscript(`agentcli-${branchId}`).catch(() => {});
   try {
     await gitRemoveWorktree(repo.path, branch.worktreePath);
   } catch (err) {

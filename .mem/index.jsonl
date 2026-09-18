@@ -1,3 +1,5 @@
 {"id":"mem_a3c7","domain":"acp","type":"failure","title":"Keep streamed TextDecoder state scoped to one ACP connection","files":["src/lib/acpRegistry.ts"]}
 {"id":"mem_d8e1","domain":"acp","type":"failure","title":"Treat session/load notifications as an authoritative transcript replay","files":["src/lib/acpRegistry.ts","src/lib/acpTranscript.ts","src/components/AcpChatPane.tsx"]}
 {"id":"mem_b42f","domain":"acp","type":"convention","title":"Populate agent commands and skills from ACP session updates","files":["src/lib/acpRegistry.ts","src/lib/acpCommandPalette.ts","src/components/AcpChatPane.tsx"]}
+{"id": "mem_c1a9", "domain": "acp", "type": "convention", "title": "Route agent capabilities through AgentControls, never branch on agent id in the UI", "files": ["src/lib/agentControls.ts", "src/lib/agentControls.test.ts", "src/hooks/useAcpSession.ts", "src/components/AcpChatPane.tsx"]}
+{"id": "mem_e7b3", "domain": "acp", "type": "convention", "title": "Native CLI is a non-destructive companion in the bottom panel, not an ACP replacement", "files": ["src/components/BottomPanel.tsx", "src/components/AcpChatPane.tsx", "src/store/appStore.ts", "src/lib/actions.ts"]}

@@ -1,23 +1,44 @@
-import type {
-  AvailableCommand,
-  SessionConfigOption,
-  SessionConfigSelectGroup,
-  SessionModeState,
-} from "@agentclientprotocol/sdk";
+// Hierarchical command palette. The root shows a few grouped entries; picking a
+// "Session" entry drills into a focused submenu instead of dumping every model
+// and mode value at once. Everything is plain, serializable data so it can be
+// unit-tested without a live agent; the component turns leaf actions into calls.
+import type { AvailableCommand } from "@agentclientprotocol/sdk";
+import {
+  resolveModels,
+  resolveModes,
+  resolveReasoning,
+  type AgentControlState,
+  type ApplyOp,
+  type Selector,
+  type Unsupported,
+} from "./agentControls";
 
-export type AcpPaletteAction =
+export type PaletteAction =
+  | { type: "submenu"; view: PaletteView }
+  | { type: "apply"; op: ApplyOp }
   | { type: "insert_prompt"; prompt: string }
-  | { type: "mode"; modeId: string }
-  | { type: "config"; configId: string; value: string | boolean }
-  | { type: "terminal" };
+  | { type: "native_cli" }
+  | { type: "restart" };
 
-export interface AcpPaletteItem {
+export interface PaletteItem {
   id: string;
-  group: "Agent commands" | "Modes" | "Configuration" | "Powerhouse";
   label: string;
   description?: string;
+  /** Right-aligned current value (submenus) or affordance. */
+  hint?: string;
   selected?: boolean;
-  action: AcpPaletteAction;
+  action: PaletteAction;
+}
+
+export interface PaletteGroup {
+  heading: string;
+  items: PaletteItem[];
+}
+
+export interface PaletteView {
+  /** Undefined at the root; set for a submenu title. */
+  title?: string;
+  groups: PaletteGroup[];
 }
 
 function commandPrompt(command: AvailableCommand): string {
@@ -25,88 +46,93 @@ function commandPrompt(command: AvailableCommand): string {
   return command.input ? `${name} ` : name;
 }
 
-function isGroup(value: object): value is SessionConfigSelectGroup {
-  return "group" in value;
-}
-
-function configItems(option: SessionConfigOption): AcpPaletteItem[] {
-  if (option.type === "boolean") {
-    return [
+/** Turns a resolved selector into a "Change X…" root entry that opens a submenu. */
+function selectorEntry(
+  selector: Selector | Unsupported,
+  id: string,
+  verb: string,
+): PaletteItem | null {
+  if (!selector.supported) return null;
+  const view: PaletteView = {
+    title: selector.title,
+    groups: [
       {
-        id: `config:${option.id}`,
-        group: "Configuration",
-        label: `${option.name} · ${option.currentValue ? "On" : "Off"}`,
-        description: option.description ?? "Toggle this agent setting",
-        action: {
-          type: "config",
-          configId: option.id,
-          value: !option.currentValue,
-        },
+        heading: selector.title,
+        items: selector.options.map((option) => ({
+          id: option.id,
+          label: option.label,
+          description: option.description,
+          selected: option.active,
+          action: { type: "apply", op: option.apply },
+        })),
       },
-    ];
-  }
-
-  return option.options.flatMap((entry) => {
-    const values = isGroup(entry) ? entry.options : [entry];
-    return values.map((value) => ({
-      id: `config:${option.id}:${value.value}`,
-      group: "Configuration" as const,
-      label: `${option.name} · ${value.name}`,
-      description: value.description ?? option.description ?? undefined,
-      selected: option.currentValue === value.value,
-      action: {
-        type: "config" as const,
-        configId: option.id,
-        value: value.value,
-      },
-    }));
-  });
+    ],
+  };
+  return {
+    id,
+    label: `${verb}…`,
+    hint: selector.current?.label,
+    action: { type: "submenu", view },
+  };
 }
 
-export function buildAcpPaletteItems({
-  commands,
-  modes,
-  configOptions,
-}: {
-  commands: AvailableCommand[];
-  modes: SessionModeState | null;
-  configOptions: SessionConfigOption[];
-}): AcpPaletteItem[] {
-  return [
-    ...commands.map((command) => ({
+export function buildPalette(state: AgentControlState): PaletteView {
+  const session = [
+    selectorEntry(resolveModes(state), "session:mode", "Switch mode"),
+    selectorEntry(resolveModels(state), "session:model", "Change model"),
+    selectorEntry(resolveReasoning(state), "session:reasoning", "Change reasoning"),
+  ].filter((item): item is PaletteItem => item !== null);
+
+  const commands: PaletteItem[] = state.commands.map((command) => {
+    const name = command.name.startsWith("/") ? command.name : `/${command.name}`;
+    return {
       id: `command:${command.name}`,
-      group: "Agent commands" as const,
-      label: command.name.startsWith("/") ? command.name : `/${command.name}`,
+      label: name,
       description: command.description,
-      action: { type: "insert_prompt" as const, prompt: commandPrompt(command) },
-    })),
-    ...(modes?.availableModes.map((mode) => ({
-      id: `mode:${mode.id}`,
-      group: "Modes" as const,
-      label: mode.name,
-      description: mode.description ?? undefined,
-      selected: modes.currentModeId === mode.id,
-      action: { type: "mode" as const, modeId: mode.id },
-    })) ?? []),
-    ...configOptions.flatMap(configItems),
+      action: { type: "insert_prompt", prompt: commandPrompt(command) },
+    };
+  });
+
+  const powerhouse: PaletteItem[] = [
     {
-      id: "powerhouse:terminal",
-      group: "Powerhouse",
-      label: "Open terminal",
-      description: "Switch this chat to the agent's native CLI",
-      action: { type: "terminal" },
+      id: "powerhouse:native-cli",
+      label: "Open native CLI",
+      description: "Launch this agent's CLI in the bottom panel — ACP stays alive",
+      action: { type: "native_cli" },
+    },
+    {
+      id: "powerhouse:restart",
+      label: "Restart ACP session",
+      description: "Reconnect the agent from scratch",
+      action: { type: "restart" },
     },
   ];
+
+  const groups: PaletteGroup[] = [];
+  if (session.length > 0) groups.push({ heading: "Session", items: session });
+  if (commands.length > 0) groups.push({ heading: "Agent commands", items: commands });
+  groups.push({ heading: "Powerhouse", items: powerhouse });
+  return { groups };
 }
 
-export function filterAcpPaletteItems(
-  items: AcpPaletteItem[],
-  query: string,
-): AcpPaletteItem[] {
+/** Filters items within a single view across label, description, hint, and group. */
+export function filterPalette(view: PaletteView, query: string): PaletteView {
   const terms = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
-  if (terms.length === 0) return items;
-  return items.filter((item) => {
-    const haystack = `${item.group} ${item.label} ${item.description ?? ""}`.toLowerCase();
-    return terms.every((term) => haystack.includes(term));
-  });
+  if (terms.length === 0) return view;
+  const groups = view.groups
+    .map((group) => ({
+      heading: group.heading,
+      items: group.items.filter((item) => {
+        const haystack =
+          `${group.heading} ${item.label} ${item.description ?? ""} ${item.hint ?? ""}`.toLowerCase();
+        return terms.every((term) => haystack.includes(term));
+      }),
+    }))
+    .filter((group) => group.items.length > 0);
+  return { title: view.title, groups };
+}
+
+/** Flattens a view's items in display order (used for keyboard navigation). */
+export function flattenView(view: PaletteView): PaletteItem[] {
+  return view.groups.flatMap((group) => group.items);
 }

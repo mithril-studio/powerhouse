@@ -3,6 +3,19 @@ import type { AcpTranscriptItem } from "../lib/acpTranscript";
 
 export type AgentTransport = "acp" | "pty";
 
+/** Which surface the persistent bottom panel is showing. */
+export type BottomTab = "shell" | "agent";
+
+/**
+ * How completely a native-CLI handoff shares state with the ACP session:
+ * - `unsupported`: no native CLI handoff is offered.
+ * - `workspace-only`: the CLI opens in the same worktree but is a separate
+ *   conversation — never claim shared context.
+ * - `resumable`: the same native session can be resumed across surfaces
+ *   (only after real round-trip resume is verified for that runtime).
+ */
+export type HandoffMode = "unsupported" | "workspace-only" | "resumable";
+
 export interface Chat {
   id: string;
   title: string;
@@ -37,6 +50,8 @@ export interface AgentProfile {
   transport?: AgentTransport;
   /** Stdio ACP server command used when transport is `acp`. */
   acpCommand?: string;
+  /** How the native CLI (opened alongside ACP) relates to the ACP session. */
+  handoff?: HandoffMode;
 }
 
 export interface Settings {
@@ -138,6 +153,7 @@ interface AppState extends PersistedTree {
   rightTab: RightTab;
   chatPickerOpen: boolean;
   bottomPanelOpen: boolean;
+  bottomTab: BottomTab;
   shellStatus: Record<string, ChatStatus>;
   /** branchId → setTimeout id of the in-flight handoff (presence = pending). */
   pendingHandoff: Record<string, number>;
@@ -185,6 +201,8 @@ interface AppState extends PersistedTree {
   openChatPicker: () => void;
   closeChatPicker: () => void;
   toggleBottomPanel: () => void;
+  setBottomTab: (tab: BottomTab) => void;
+  openBottomPanel: (tab: BottomTab) => void;
   setShellStatus: (branchId: string, status: ChatStatus) => void;
   setPendingHandoff: (branchId: string, timerId: number) => void;
   clearPendingHandoff: (branchId: string) => void;
@@ -201,6 +219,9 @@ const SEED_AGENTS: AgentProfile[] = [
     resumeTemplate: "claude --resume {sessionId}",
     transport: "acp",
     acpCommand: "npx -y @agentclientprotocol/claude-agent-acp",
+    // Round-trip resume between ACP and the CLI is unverified; only share the
+    // worktree until it is.
+    handoff: "workspace-only",
   },
   {
     id: "codex",
@@ -209,6 +230,7 @@ const SEED_AGENTS: AgentProfile[] = [
     promptTemplate: 'codex "{prompt}"',
     transport: "acp",
     acpCommand: "npx -y @agentclientprotocol/codex-acp",
+    handoff: "workspace-only",
   },
   {
     id: "pi",
@@ -217,6 +239,7 @@ const SEED_AGENTS: AgentProfile[] = [
     promptTemplate: 'pi "{prompt}"',
     transport: "acp",
     acpCommand: "npx -y pi-acp",
+    handoff: "workspace-only",
   },
 ];
 
@@ -239,6 +262,7 @@ function backfillAgentProfiles(agents: AgentProfile[]): AgentProfile[] {
       resumeTemplate: a.resumeTemplate ?? seed.resumeTemplate,
       transport: a.transport ?? seed.transport,
       acpCommand: a.acpCommand ?? seed.acpCommand,
+      handoff: a.handoff ?? seed.handoff,
     };
   });
   const existing = new Set(backfilled.map((agent) => agent.id));
@@ -286,6 +310,11 @@ export const resolveChatTransport = (
   settings: Settings,
   chat: Pick<Chat, "agentId" | "transport">,
 ): AgentTransport => chat.transport ?? resolveAgent(settings, chat.agentId).transport ?? "pty";
+
+/** Native-CLI handoff capability for an agent, defaulting conservatively. */
+export const resolveHandoff = (profile: AgentProfile): HandoffMode =>
+  profile.handoff ??
+  (profile.transport === "acp" && profile.command ? "workspace-only" : "unsupported");
 
 export const renderTemplate = (profile: AgentProfile, prompt: string): string =>
   profile.promptTemplate.replace(/\{prompt\}/g, prompt);
@@ -339,6 +368,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   rightTab: "changes",
   chatPickerOpen: false,
   bottomPanelOpen: false,
+  bottomTab: "shell",
   shellStatus: {},
   pendingHandoff: {},
 
@@ -533,6 +563,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   closeChatPicker: () => set({ chatPickerOpen: false }),
 
   toggleBottomPanel: () => set((s) => ({ bottomPanelOpen: !s.bottomPanelOpen })),
+  setBottomTab: (tab) => set({ bottomTab: tab }),
+  openBottomPanel: (tab) => set({ bottomPanelOpen: true, bottomTab: tab }),
   setShellStatus: (branchId, status) =>
     set((s) => ({ shellStatus: { ...s.shellStatus, [branchId]: status } })),
 
