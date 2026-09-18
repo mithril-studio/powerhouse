@@ -1,8 +1,10 @@
+mod acp;
 mod git;
 mod handoff;
 mod pty;
 mod queue;
 
+use acp::AcpManager;
 use handoff::HandoffWatchers;
 use pty::PtyManager;
 use queue::QueueManager;
@@ -22,11 +24,16 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .manage(AcpManager::default())
         .manage(PtyManager::default())
         .manage(QueueManager::default())
         .manage(HandoffWatchers::default())
         .invoke_handler(tauri::generate_handler![
             js_log,
+            acp::acp_spawn,
+            acp::acp_write,
+            acp::acp_kill,
+            acp::acp_kill_all,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,
@@ -54,6 +61,7 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                app.state::<AcpManager>().kill_all();
                 app.state::<PtyManager>().kill_all();
                 app.state::<QueueManager>().kill_running();
             }
