@@ -1,4 +1,7 @@
 import { create } from "zustand";
+import type { AcpTranscriptItem } from "../lib/acpTranscript";
+
+export type AgentTransport = "acp" | "pty";
 
 export interface Chat {
   id: string;
@@ -13,6 +16,10 @@ export interface Chat {
    * marks the chat as resumable.
    */
   agentSessionId?: string;
+  /** Per-chat escape hatch; otherwise the selected agent's transport is used. */
+  transport?: AgentTransport;
+  /** Structured ACP history. PTY chats continue to use raw transcript files. */
+  acpTranscript?: AcpTranscriptItem[];
 }
 
 export interface AgentProfile {
@@ -26,6 +33,10 @@ export interface AgentProfile {
   startPromptTemplate?: string;
   /** Resume an existing session, e.g. "claude --resume {sessionId}". */
   resumeTemplate?: string;
+  /** Defaults to PTY for custom/legacy profiles. */
+  transport?: AgentTransport;
+  /** Stdio ACP server command used when transport is `acp`. */
+  acpCommand?: string;
 }
 
 export interface Settings {
@@ -145,6 +156,18 @@ interface AppState extends PersistedTree {
     chatId: string,
     sessionId: string,
   ) => void;
+  setChatTransport: (
+    repoId: string,
+    branchId: string,
+    chatId: string,
+    transport: AgentTransport,
+  ) => void;
+  updateChatAcpTranscript: (
+    repoId: string,
+    branchId: string,
+    chatId: string,
+    update: (transcript: AcpTranscriptItem[]) => AcpTranscriptItem[],
+  ) => void;
   select: (repoId: string | null, branchId: string | null) => void;
   setChatStatus: (chatId: string, status: ChatStatus) => void;
   openBranchModal: (repoId: string) => void;
@@ -176,9 +199,33 @@ const SEED_AGENTS: AgentProfile[] = [
     startTemplate: "claude --session-id {sessionId}",
     startPromptTemplate: 'claude --session-id {sessionId} "{prompt}"',
     resumeTemplate: "claude --resume {sessionId}",
+    transport: "acp",
+    acpCommand: "npx -y @agentclientprotocol/claude-agent-acp",
   },
-  { id: "codex", name: "Codex", command: "codex", promptTemplate: 'codex "{prompt}"' },
-  { id: "pi", name: "Pi", command: "pi", promptTemplate: 'pi "{prompt}"' },
+  {
+    id: "codex",
+    name: "Codex",
+    command: "codex",
+    promptTemplate: 'codex "{prompt}"',
+    transport: "acp",
+    acpCommand: "npx -y @agentclientprotocol/codex-acp",
+  },
+  {
+    id: "opencode",
+    name: "OpenCode",
+    command: "opencode",
+    promptTemplate: 'opencode "{prompt}"',
+    transport: "acp",
+    acpCommand: "opencode acp",
+  },
+  {
+    id: "pi",
+    name: "Pi",
+    command: "pi",
+    promptTemplate: 'pi "{prompt}"',
+    transport: "acp",
+    acpCommand: "npx -y pi-acp",
+  },
 ];
 
 const seedSettings = (): Settings => ({
@@ -188,9 +235,9 @@ const seedSettings = (): Settings => ({
 
 /** Backfills resume templates onto known seed agents that predate them, leaving
  *  custom agents and any user-edited fields untouched. */
-function backfillResumeFields(agents: AgentProfile[]): AgentProfile[] {
+function backfillAgentProfiles(agents: AgentProfile[]): AgentProfile[] {
   const seedById = Object.fromEntries(SEED_AGENTS.map((a) => [a.id, a]));
-  return agents.map((a) => {
+  const backfilled = agents.map((a) => {
     const seed = seedById[a.id];
     if (!seed) return a;
     return {
@@ -198,15 +245,26 @@ function backfillResumeFields(agents: AgentProfile[]): AgentProfile[] {
       startTemplate: a.startTemplate ?? seed.startTemplate,
       startPromptTemplate: a.startPromptTemplate ?? seed.startPromptTemplate,
       resumeTemplate: a.resumeTemplate ?? seed.resumeTemplate,
+      transport: a.transport ?? seed.transport,
+      acpCommand: a.acpCommand ?? seed.acpCommand,
     };
   });
+  const existing = new Set(backfilled.map((agent) => agent.id));
+  return [
+    ...backfilled,
+    ...SEED_AGENTS.filter((agent) => !existing.has(agent.id)).map((agent) => ({
+      ...agent,
+    })),
+  ];
 }
 
 /** Migrates the old `agentCmd` string into agent profiles, or passes settings through. */
-function migrateSettings(tree: (Partial<PersistedTree> & LegacyTree) | null): Settings {
+export function migrateSettings(
+  tree: (Partial<PersistedTree> & LegacyTree) | null,
+): Settings {
   if (tree?.settings && tree.settings.agents?.length) {
     const { defaultAgentId } = tree.settings;
-    const agents = backfillResumeFields(tree.settings.agents);
+    const agents = backfillAgentProfiles(tree.settings.agents);
     const validDefault = agents.some((a) => a.id === defaultAgentId);
     return { agents, defaultAgentId: validDefault ? defaultAgentId : agents[0].id };
   }
@@ -231,6 +289,11 @@ export const resolveAgent = (settings: Settings, agentId?: string): AgentProfile
   settings.agents.find((a) => a.id === agentId) ??
   settings.agents.find((a) => a.id === settings.defaultAgentId) ??
   settings.agents[0];
+
+export const resolveChatTransport = (
+  settings: Settings,
+  chat: Pick<Chat, "agentId" | "transport">,
+): AgentTransport => chat.transport ?? resolveAgent(settings, chat.agentId).transport ?? "pty";
 
 export const renderTemplate = (profile: AgentProfile, prompt: string): string =>
   profile.promptTemplate.replace(/\{prompt\}/g, prompt);
@@ -397,6 +460,26 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...b,
         chats: b.chats.map((c) =>
           c.id === chatId ? { ...c, agentSessionId: sessionId } : c,
+        ),
+      })),
+    })),
+
+  setChatTransport: (repoId, branchId, chatId, transport) =>
+    set((s) => ({
+      repos: updateBranch(s.repos, repoId, branchId, (b) => ({
+        ...b,
+        chats: b.chats.map((c) => (c.id === chatId ? { ...c, transport } : c)),
+      })),
+    })),
+
+  updateChatAcpTranscript: (repoId, branchId, chatId, update) =>
+    set((s) => ({
+      repos: updateBranch(s.repos, repoId, branchId, (b) => ({
+        ...b,
+        chats: b.chats.map((c) =>
+          c.id === chatId
+            ? { ...c, acpTranscript: update(c.acpTranscript ?? []) }
+            : c,
         ),
       })),
     })),
