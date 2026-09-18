@@ -5,7 +5,7 @@ import { check } from "@tauri-apps/plugin-updater";
 import { selectedBranch, selectedRepo, useAppStore } from "./store/appStore";
 import { hydrateFromDisk, startPersistence } from "./store/persist";
 import { startQueueSync } from "./lib/queueSync";
-import { acpKillAll, ptyKillAll } from "./lib/ipc";
+import { acpKillAll, githubAccount, ptyKillAll } from "./lib/ipc";
 import { initHandoff } from "./lib/handoff";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { Sidebar } from "./components/Sidebar";
@@ -16,6 +16,7 @@ import { NewBranchModal } from "./components/NewBranchModal";
 import { WorkflowModal } from "./components/WorkflowModal";
 import { RightSidebar } from "./components/RightSidebar";
 import { NewChatPicker } from "./components/NewChatPicker";
+import { SettingsPage } from "./components/SettingsPage";
 
 let booted = false;
 
@@ -39,14 +40,35 @@ async function checkForUpdates() {
   }
 }
 
+/** The keychain is the source of truth for GitHub auth: validate any stored
+ *  token on boot and settle the persisted connection to match. */
+async function reconcileGithub() {
+  try {
+    const account = await githubAccount();
+    useAppStore.getState().setGithubConnection(
+      account
+        ? { status: "connected", login: account.login, avatarUrl: account.avatar_url }
+        : { status: "disconnected" },
+    );
+  } catch {
+    /* leave the persisted connection as-is if the check fails */
+  }
+}
+
 export default function App() {
   const hydrated = useAppStore((s) => s.hydrated);
   const repos = useAppStore((s) => s.repos);
   const repo = useAppStore(selectedRepo);
   const branch = useAppStore(selectedBranch);
   const rightSidebarOpen = useAppStore((s) => s.rightSidebarOpen);
+  const theme = useAppStore((s) => s.settings.theme);
 
   useShortcuts();
+
+  // Apply the color theme to <html> (light overrides live under `:root.light`).
+  useEffect(() => {
+    document.documentElement.classList.toggle("light", theme === "light");
+  }, [theme]);
 
   useEffect(() => {
     if (booted) return; // StrictMode double-invoke guard
@@ -61,6 +83,7 @@ export default function App() {
       startPersistence();
       startQueueSync();
       void initHandoff();
+      void reconcileGithub();
       void checkForUpdates();
     })();
   }, []);
@@ -109,6 +132,7 @@ export default function App() {
       <NewBranchModal />
       <WorkflowModal />
       <NewChatPicker />
+      <SettingsPage />
     </div>
   );
 }

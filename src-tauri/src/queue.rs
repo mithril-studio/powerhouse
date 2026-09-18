@@ -490,6 +490,33 @@ fn spawn_worker(app: AppHandle, repo_id: String) {
     });
 }
 
+/// Runs a git subcommand against `origin`, injecting a transient GitHub-token
+/// `Authorization` header for HTTPS remotes so private-repo fetch/push work
+/// without ambient credentials. No-op for SSH remotes or when disconnected
+/// (falls back to whatever git is already configured with). Always
+/// non-interactive — never blocks the worker on a credential prompt.
+fn git_origin(repo: &Path, origin_https: bool, args: &[&str]) -> Result<(), String> {
+    let auth = if origin_https {
+        crate::github::token().map(|t| {
+            format!("http.extraheader=AUTHORIZATION: {}", crate::github::basic_auth_header(&t))
+        })
+    } else {
+        None
+    };
+    let mut cmd = Command::new(crate::git::GIT);
+    cmd.current_dir(repo).env("GIT_TERMINAL_PROMPT", "0");
+    if let Some(cfg) = &auth {
+        cmd.arg("-c").arg(cfg);
+    }
+    cmd.args(args);
+    let out = cmd.output().map_err(|e| format!("failed to run git: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
 fn run_pipeline(app: &AppHandle, repo_id: &str, job: &Job) -> Outcome {
     let repo = Path::new(&job.repo_path);
     let cancelled = || job.cancel.load(Ordering::Relaxed);
@@ -498,8 +525,13 @@ fn run_pipeline(app: &AppHandle, repo_id: &str, job: &Job) -> Outcome {
     let has_origin = git(repo, &["remote"])
         .map(|s| s.lines().any(|l| l.trim() == "origin"))
         .unwrap_or(false);
+    // HTTPS origins can carry the OAuth token; SSH origins use keys as-is.
+    let origin_https = has_origin
+        && git(repo, &["remote", "get-url", "origin"])
+            .map(|u| u.starts_with("https://"))
+            .unwrap_or(false);
     let target = if has_origin {
-        if let Err(e) = git(repo, &["fetch", "origin", &job.default_branch]) {
+        if let Err(e) = git_origin(repo, origin_https, &["fetch", "origin", &job.default_branch]) {
             return Outcome::Failed(format!("git fetch origin failed:\n{e}"));
         }
         format!("origin/{}", job.default_branch)
@@ -605,7 +637,7 @@ fn run_pipeline(app: &AppHandle, repo_id: &str, job: &Job) -> Outcome {
     }
 
     if job.push && has_origin {
-        if let Err(e) = git(repo, &["push", "origin", &job.default_branch]) {
+        if let Err(e) = git_origin(repo, origin_https, &["push", "origin", &job.default_branch]) {
             cleanup_worktree(repo, &wt);
             return Outcome::Failed(format!("push to origin rejected (did origin move?):\n{e}"));
         }

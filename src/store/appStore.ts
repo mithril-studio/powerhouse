@@ -52,11 +52,32 @@ export interface AgentProfile {
   acpCommand?: string;
   /** How the native CLI (opened alongside ACP) relates to the ACP session. */
   handoff?: HandoffMode;
+  /** Shell command that runs the agent's CLI auth flow, e.g. "codex login". */
+  loginCommand?: string;
+}
+
+export type Theme = "dark" | "light";
+
+export type GithubStatus = "disconnected" | "connecting" | "connected";
+
+/** GitHub OAuth state. The access token is NEVER kept here (it lives in the OS
+ *  keychain, Rust-side); only the non-sensitive display profile is persisted. */
+export interface GithubConnection {
+  status: GithubStatus;
+  login?: string;
+  avatarUrl?: string;
+}
+
+/** Third-party service connections. */
+export interface Connections {
+  github: GithubConnection;
 }
 
 export interface Settings {
   agents: AgentProfile[];
   defaultAgentId: string;
+  theme: Theme;
+  connections: Connections;
 }
 
 export interface Branch {
@@ -158,8 +179,14 @@ interface AppState extends PersistedTree {
   /** branchId → setTimeout id of the in-flight handoff (presence = pending). */
   pendingHandoff: Record<string, number>;
 
+  settingsOpen: boolean;
+
   hydrate: (tree: (Partial<PersistedTree> & LegacyTree) | null) => void;
   setDefaultAgent: (agentId: string) => void;
+  setTheme: (theme: Theme) => void;
+  setGithubConnection: (github: GithubConnection) => void;
+  openSettings: () => void;
+  closeSettings: () => void;
   addRepo: (repo: Omit<Repo, "id" | "branches" | "workflow" | "pushOnMerge">) => Repo;
   addBranch: (repoId: string, branch: Branch) => void;
   removeBranch: (repoId: string, branchId: string) => void;
@@ -211,7 +238,7 @@ interface AppState extends PersistedTree {
 const SEED_AGENTS: AgentProfile[] = [
   {
     id: "claude",
-    name: "Claude",
+    name: "Claude Code",
     command: "claude",
     promptTemplate: 'claude "{prompt}"',
     startTemplate: "claude --session-id {sessionId}",
@@ -222,6 +249,8 @@ const SEED_AGENTS: AgentProfile[] = [
     // Round-trip resume between ACP and the CLI is unverified; only share the
     // worktree until it is.
     handoff: "workspace-only",
+    // Bare `claude` runs the auth flow when unauthenticated; use /login inside otherwise.
+    loginCommand: "claude",
   },
   {
     id: "codex",
@@ -231,6 +260,7 @@ const SEED_AGENTS: AgentProfile[] = [
     transport: "acp",
     acpCommand: "npx -y @agentclientprotocol/codex-acp",
     handoff: "workspace-only",
+    loginCommand: "codex login",
   },
   {
     id: "pi",
@@ -246,6 +276,8 @@ const SEED_AGENTS: AgentProfile[] = [
 const seedSettings = (): Settings => ({
   agents: SEED_AGENTS.map((a) => ({ ...a })),
   defaultAgentId: "claude",
+  theme: "dark",
+  connections: { github: { status: "disconnected" } },
 });
 
 /** Backfills resume templates onto known seed agents that predate them, leaving
@@ -263,6 +295,7 @@ function backfillAgentProfiles(agents: AgentProfile[]): AgentProfile[] {
       transport: a.transport ?? seed.transport,
       acpCommand: a.acpCommand ?? seed.acpCommand,
       handoff: a.handoff ?? seed.handoff,
+      loginCommand: a.loginCommand ?? seed.loginCommand,
     };
   });
   const existing = new Set(backfilled.map((agent) => agent.id));
@@ -274,30 +307,53 @@ function backfillAgentProfiles(agents: AgentProfile[]): AgentProfile[] {
   ];
 }
 
+/** Normalizes the persisted GitHub connection. The pre-OAuth stub stored a bare
+ *  boolean; migrate it (and any stale "connecting") to "disconnected" — the
+ *  keychain is the source of truth and is reconciled at boot. */
+function migrateGithub(raw: unknown): GithubConnection {
+  if (raw && typeof raw === "object") {
+    const g = raw as Partial<GithubConnection>;
+    if (g.status === "connected") {
+      return { status: "connected", login: g.login, avatarUrl: g.avatarUrl };
+    }
+  }
+  return { status: "disconnected" };
+}
+
 /** Migrates the old `agentCmd` string into agent profiles, or passes settings through. */
 export function migrateSettings(
   tree: (Partial<PersistedTree> & LegacyTree) | null,
 ): Settings {
+  const theme: Theme = tree?.settings?.theme === "light" ? "light" : "dark";
+  const connections: Connections = {
+    github: migrateGithub(tree?.settings?.connections?.github),
+  };
+
   if (tree?.settings && tree.settings.agents?.length) {
     const { defaultAgentId } = tree.settings;
     const agents = backfillAgentProfiles(tree.settings.agents);
     const validDefault = agents.some((a) => a.id === defaultAgentId);
-    return { agents, defaultAgentId: validDefault ? defaultAgentId : agents[0].id };
+    return {
+      agents,
+      defaultAgentId: validDefault ? defaultAgentId : agents[0].id,
+      theme,
+      connections,
+    };
   }
   const agents = SEED_AGENTS.map((a) => ({ ...a }));
   const legacy = tree?.agentCmd?.trim();
   if (legacy) {
     const match = agents.find((a) => a.command === legacy);
-    if (match) return { agents, defaultAgentId: match.id };
+    if (match) return { agents, defaultAgentId: match.id, theme, connections };
     const custom: AgentProfile = {
       id: crypto.randomUUID(),
       name: legacy,
       command: legacy,
       promptTemplate: `${legacy} "{prompt}"`,
     };
-    return { agents: [custom, ...agents], defaultAgentId: custom.id };
+    return { agents: [custom, ...agents], defaultAgentId: custom.id, theme, connections };
   }
-  return { agents, defaultAgentId: "claude" };
+  return { agents, defaultAgentId: "claude", theme, connections };
 }
 
 /** Resolves the profile for a chat, falling back to the default agent. */
@@ -371,6 +427,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   bottomTab: "shell",
   shellStatus: {},
   pendingHandoff: {},
+  settingsOpen: false,
 
   hydrate: (tree) =>
     set({
@@ -404,6 +461,19 @@ export const useAppStore = create<AppState>((set, get) => ({
         ? { settings: { ...s.settings, defaultAgentId: agentId } }
         : s,
     ),
+
+  setTheme: (theme) => set((s) => ({ settings: { ...s.settings, theme } })),
+
+  setGithubConnection: (github) =>
+    set((s) => ({
+      settings: {
+        ...s.settings,
+        connections: { ...s.settings.connections, github },
+      },
+    })),
+
+  openSettings: () => set({ settingsOpen: true }),
+  closeSettings: () => set({ settingsOpen: false }),
 
   addRepo: (repo) => {
     const existing = get().repos.find((r) => r.path === repo.path);

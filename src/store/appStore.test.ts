@@ -23,7 +23,12 @@ describe("agent transport migration", () => {
     };
 
     const settings = migrateSettings({
-      settings: { agents: [claude, opencode], defaultAgentId: "opencode" },
+      settings: {
+        agents: [claude, opencode],
+        defaultAgentId: "opencode",
+        theme: "dark",
+        connections: { github: { status: "disconnected" } },
+      },
     });
 
     expect(settings.agents.find((agent) => agent.id === "claude")).toEqual(
@@ -45,6 +50,8 @@ describe("agent transport migration", () => {
           promptTemplate: 'my-agent "{prompt}"',
         },
       ],
+      theme: "dark",
+      connections: { github: { status: "disconnected" } },
     };
 
     expect(resolveChatTransport(settings, {})).toBe("pty");

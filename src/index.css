@@ -52,6 +52,23 @@
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
 }
 
+/* Light appearance — token overrides applied when <html> carries `.light`. */
+:root.light {
+  --background: #f7f8fa;
+  --foreground: oklch(0.28 0.006 260);
+  --card: oklch(1 0 0);
+  --muted: oklch(0.95 0.004 260);
+  --muted-foreground: oklch(0.5 0.01 260);
+  --primary: oklch(0.28 0.006 260);
+  --primary-foreground: oklch(0.98 0.002 260);
+  --accent-brand: oklch(0.55 0.2 250);
+  --destructive: oklch(0.58 0.22 22.216);
+  --success: oklch(0.6 0.14 145);
+  --border: oklch(0 0 0 / 10%);
+  --input: oklch(0 0 0 / 14%);
+  --ring: oklch(0.55 0.2 250);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
