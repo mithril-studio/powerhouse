@@ -1,4 +1,5 @@
 mod git;
+mod github;
 mod handoff;
 mod pty;
 mod queue;
@@ -49,6 +50,10 @@ pub fn run() {
             handoff::handoff_ensure_commands,
             handoff::handoff_watch_start,
             handoff::handoff_watch_stop,
+            github::github_device_start,
+            github::github_poll,
+            github::github_account,
+            github::github_disconnect,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
