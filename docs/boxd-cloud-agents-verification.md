@@ -28,6 +28,43 @@ both were never disabled. No model call or repository upload occurred. The
 failure is at the provisioning/boot layer, before any Powerhouse code ran; the
 underlying platform cause is not known.
 
+Follow-up diagnosis: an existing VM (`factory-ui`) successfully executed
+`uname -sm` through the same CLI/session. Both CLI 0.2.9 and checksum-verified
+0.2.17 reproduce the new base's wake timeout. The SDK reports no successful boot
+for the base, image `computer:0.1.50`; the working VM uses `computer:0.1.21`.
+Both have 2 vCPU and 8 GiB memory. The public console-log API returns
+`UNIMPLEMENTED: stream_logs not yet implemented`. Isolation and image generation
+are remaining differences, not established causes.
+
+Diagnostic intent: use the still-unused second resource slot for
+`powerhouse-cloud-spike`, a fresh isolated machine with the same vendor image
+`europe-docker.pkg.dev/azin-console-prod/boxd/computer:0.1.21` as the working
+VM, rather than a fork of the base that never booted. Keep 2 vCPU/8 GiB and
+300/900-second idle settings. This compares image boot behavior without copying
+any unrelated VM's disk, code, credentials, or processes. Keep the original base
+stopped during the comparison; retain both resources afterward.
+
+Diagnostic receipt: `powerhouse-cloud-spike`, ID
+`bf40caab-eee0-4183-88aa-ddfb9a098647`, created at 23:53 UTC using SDK 0.2.10.
+It also remained `pending`; CLI 0.2.17 returned a wake timeout. It was stopped
+after the comparison, with the same 300/900-second idle settings. Both test VMs
+are now stopped. This was a fresh image test, **not a successful fork**.
+
+The inventory also reports an existing non-isolated VM on `computer:0.1.50`
+with a successful historical boot, so the evidence does not establish an image
+regression. Both test machines were fresh and isolated; no existing machine's
+isolation was weakened for comparison. The exact server-side boot failure is
+still unavailable through the public API. Do not describe this as a general
+boxd outage or claim that isolated execution is proven unsupported.
+
+Positive controls: `factory-ui` (`152.236.3.40`) and `legal-ai-app`
+(`152.236.3.23`, the same public IP reported for both test VMs) each returned
+`Linux x86_64` with exit code 0 through authenticated `exec`. Only `uname -sm`
+ran in those existing environments. This rules out a blanket account/network
+failure; it does not by itself distinguish fresh-provisioning failure from an
+isolation-specific defect. No new non-isolated control was created because the
+two-resource ceiling is now reached.
+
 ## Local baseline
 
 Source: `db2b7c51b4cb9f64816e15675f2453fdb86a977f` on `main`.
