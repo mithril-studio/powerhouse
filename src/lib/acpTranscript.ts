@@ -1,0 +1,144 @@
+import type {
+  PlanEntry,
+  SessionUpdate,
+  ToolCallContent,
+  ToolCallLocation,
+  ToolCallStatus,
+  ToolKind,
+} from "@agentclientprotocol/sdk";
+
+export type AcpMessageRole = "user" | "assistant" | "thought" | "system";
+
+export type AcpTranscriptItem =
+  | {
+      id: string;
+      type: "message";
+      role: AcpMessageRole;
+      text: string;
+      messageId?: string;
+      tone?: "normal" | "error";
+    }
+  | {
+      id: string;
+      type: "tool";
+      toolCallId: string;
+      title: string;
+      kind?: ToolKind | null;
+      status?: ToolCallStatus | null;
+      content?: ToolCallContent[] | null;
+      locations?: ToolCallLocation[] | null;
+      rawInput?: unknown;
+      rawOutput?: unknown;
+    }
+  | {
+      id: "plan";
+      type: "plan";
+      entries: PlanEntry[];
+    };
+
+const newId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
+
+export function appendUserMessage(
+  transcript: AcpTranscriptItem[],
+  text: string,
+): AcpTranscriptItem[] {
+  return [...transcript, { id: newId("user"), type: "message", role: "user", text }];
+}
+
+export function appendSystemMessage(
+  transcript: AcpTranscriptItem[],
+  text: string,
+  tone: "normal" | "error" = "normal",
+): AcpTranscriptItem[] {
+  return [
+    ...transcript,
+    { id: newId("system"), type: "message", role: "system", text, tone },
+  ];
+}
+
+function appendTextChunk(
+  transcript: AcpTranscriptItem[],
+  role: "assistant" | "thought",
+  text: string,
+  messageId?: string | null,
+): AcpTranscriptItem[] {
+  if (!text) return transcript;
+  const index = messageId
+    ? transcript.findIndex(
+        (item) => item.type === "message" && item.messageId === messageId,
+      )
+    : transcript.length - 1;
+  const current = transcript[index];
+  if (current?.type === "message" && current.role === role) {
+    return transcript.map((item, itemIndex) =>
+      itemIndex === index ? { ...current, text: current.text + text } : item,
+    );
+  }
+  return [
+    ...transcript,
+    {
+      id: messageId ?? newId(role),
+      type: "message",
+      role,
+      text,
+      ...(messageId ? { messageId } : {}),
+    },
+  ];
+}
+
+export function applyAcpUpdate(
+  transcript: AcpTranscriptItem[],
+  update: SessionUpdate,
+): AcpTranscriptItem[] {
+  switch (update.sessionUpdate) {
+    case "agent_message_chunk":
+      return update.content.type === "text"
+        ? appendTextChunk(transcript, "assistant", update.content.text, update.messageId)
+        : transcript;
+    case "agent_thought_chunk":
+      return update.content.type === "text"
+        ? appendTextChunk(transcript, "thought", update.content.text, update.messageId)
+        : transcript;
+    case "user_message_chunk":
+      // Powerhouse records submitted prompts immediately. Ignoring echoed user
+      // chunks avoids duplicates while still allowing session updates to stream.
+      return transcript;
+    case "tool_call":
+      return [
+        ...transcript,
+        {
+          id: `tool-${update.toolCallId}`,
+          type: "tool",
+          toolCallId: update.toolCallId,
+          title: update.title,
+          kind: update.kind,
+          status: update.status,
+          content: update.content,
+          locations: update.locations,
+          rawInput: update.rawInput,
+          rawOutput: update.rawOutput,
+        },
+      ];
+    case "tool_call_update":
+      return transcript.map((item) =>
+        item.type === "tool" && item.toolCallId === update.toolCallId
+          ? {
+              ...item,
+              ...(update.title != null ? { title: update.title } : {}),
+              ...(update.kind != null ? { kind: update.kind } : {}),
+              ...(update.status != null ? { status: update.status } : {}),
+              ...(update.content != null ? { content: update.content } : {}),
+              ...(update.locations != null ? { locations: update.locations } : {}),
+              ...(update.rawInput !== undefined ? { rawInput: update.rawInput } : {}),
+              ...(update.rawOutput !== undefined ? { rawOutput: update.rawOutput } : {}),
+            }
+          : item,
+      );
+    case "plan": {
+      const withoutPlan = transcript.filter((item) => item.type !== "plan");
+      return [...withoutPlan, { id: "plan", type: "plan", entries: update.entries }];
+    }
+    default:
+      return transcript;
+  }
+}

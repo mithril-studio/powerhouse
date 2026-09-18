@@ -12,6 +12,16 @@ export interface ChangedFile {
   status: string;
 }
 
+export const acpSpawn = (chatId: string, cwd: string, command: string) =>
+  invoke<void>("acp_spawn", { chatId, cwd, command });
+
+export const acpWrite = (chatId: string, data: string) =>
+  invoke<void>("acp_write", { chatId, data });
+
+export const acpKill = (chatId: string) => invoke<void>("acp_kill", { chatId });
+
+export const acpKillAll = () => invoke<void>("acp_kill_all");
+
 export const ptySpawn = (
   sessionId: string,
   cwd: string,
