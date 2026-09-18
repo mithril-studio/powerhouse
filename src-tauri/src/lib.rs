@@ -1,9 +1,11 @@
 mod git;
 mod handoff;
 mod pty;
+mod queue;
 
 use handoff::HandoffWatchers;
 use pty::PtyManager;
+use queue::QueueManager;
 use tauri::Manager;
 
 /// Dev aid: surfaces webview console errors in the `tauri dev` terminal.
@@ -19,6 +21,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .manage(PtyManager::default())
+        .manage(QueueManager::default())
         .manage(HandoffWatchers::default())
         .invoke_handler(tauri::generate_handler![
             js_log,
@@ -32,6 +35,15 @@ pub fn run() {
             git::git_validate_repo,
             git::git_create_worktree,
             git::git_remove_worktree,
+            git::git_changed_files,
+            git::git_file_diff,
+            git::git_list_files,
+            git::git_file_content,
+            queue::queue_enqueue,
+            queue::queue_cancel,
+            queue::queue_state,
+            queue::queue_step_log,
+            queue::queue_dismiss,
             handoff::handoff_ensure_commands,
             handoff::handoff_watch_start,
             handoff::handoff_watch_stop,
@@ -41,6 +53,7 @@ pub fn run() {
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 app.state::<PtyManager>().kill_all();
+                app.state::<QueueManager>().kill_running();
             }
         });
 }

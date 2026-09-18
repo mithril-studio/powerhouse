@@ -13,6 +13,7 @@
   --color-primary-foreground: var(--primary-foreground);
   --color-accent-brand: var(--accent-brand);
   --color-destructive: var(--destructive);
+  --color-success: var(--success);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -38,6 +39,8 @@
   --primary-foreground: oklch(0.18 0.005 260);
   --accent-brand: oklch(0.62 0.19 250);
   --destructive: oklch(0.7 0.191 22.216);
+  /* Terminal green (#57ab5a) — queue success states + diff added lines. */
+  --success: oklch(0.67 0.13 145);
   --border: oklch(1 0 0 / 8%);
   --input: oklch(1 0 0 / 12%);
   --ring: oklch(0.62 0.19 250);

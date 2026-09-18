@@ -9,6 +9,8 @@ interface Props {
 
 export function TabBar({ repo, branch }: Props) {
   const setActiveChat = useAppStore((s) => s.setActiveChat);
+  const rightSidebarOpen = useAppStore((s) => s.rightSidebarOpen);
+  const toggleRightSidebar = useAppStore((s) => s.toggleRightSidebar);
   const openChatPicker = useAppStore((s) => s.openChatPicker);
   const settings = useAppStore((s) => s.settings);
   const pending = useAppStore((s) =>
@@ -91,6 +93,28 @@ export function TabBar({ repo, branch }: Props) {
             </button>
           </div>
         </>
+      )}
+
+      <span className="flex-1" />
+
+      {repo && (
+        <button
+          onClick={toggleRightSidebar}
+          title="Toggle right sidebar"
+          aria-label="Toggle right sidebar"
+          aria-pressed={rightSidebarOpen}
+          className={`flex size-7 items-center justify-center rounded-md ${
+            rightSidebarOpen
+              ? "bg-muted text-foreground"
+              : "text-muted-foreground hover:bg-muted hover:text-foreground"
+          }`}
+        >
+          {/* right-panel glyph */}
+          <svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden>
+            <rect x="1.5" y="2.5" width="12" height="10" rx="1.5" stroke="currentColor" />
+            <line x1="9.5" y1="2.5" x2="9.5" y2="12.5" stroke="currentColor" />
+          </svg>
+        </button>
       )}
     </div>
   );

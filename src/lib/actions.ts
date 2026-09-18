@@ -4,11 +4,15 @@ import {
   useAppStore,
   type Branch,
   type Chat,
+  type QueueEntry,
 } from "../store/appStore";
 import {
   gitCreateWorktree,
   gitRemoveWorktree,
   gitValidateRepo,
+  queueCancel,
+  queueDismiss,
+  queueEnqueue,
   handoffWatchStop,
   ptyDeleteTranscript,
 } from "./ipc";
@@ -136,4 +140,58 @@ export async function deleteBranch(repoId: string, branchId: string) {
     return;
   }
   useAppStore.getState().removeBranch(repoId, branchId);
+}
+
+/** Snapshot the repo's workflow config and enqueue the branch for validation. */
+export async function enqueueBranch(repoId: string, branchId: string) {
+  const s = useAppStore.getState();
+  const repo = s.repos.find((r) => r.id === repoId);
+  const branch = repo?.branches.find((b) => b.id === branchId);
+  if (!repo || !branch) return;
+  try {
+    await queueEnqueue(
+      repo.id,
+      repo.path,
+      repo.defaultBranch,
+      branch.name,
+      repo.workflow.map((w) => ({ name: w.name, command: w.command, type: w.type })),
+      repo.pushOnMerge,
+    );
+    s.openRightTab("merge");
+  } catch (err) {
+    await message(String(err), { title: "Could not enqueue", kind: "error" });
+  }
+}
+
+export async function cancelQueueEntry(repoId: string, entry: QueueEntry) {
+  if (entry.state === "validating" || entry.state === "merging") {
+    const ok = await ask(
+      `Cancel validation of “${entry.branch}”? The running check will be killed.`,
+      { title: "Cancel entry", kind: "warning", okLabel: "Cancel entry" },
+    );
+    if (!ok) return;
+  }
+  await queueCancel(repoId, entry.id).catch(() => {});
+}
+
+/** Dismiss a finished entry and re-enqueue its branch (guards deleted branches). */
+export async function retryQueueEntry(repoId: string, entry: QueueEntry) {
+  const s = useAppStore.getState();
+  const repo = s.repos.find((r) => r.id === repoId);
+  const branch = repo?.branches.find((b) => b.name === entry.branch);
+  if (!repo || !branch) {
+    await message(
+      `Branch “${entry.branch}” no longer exists.`,
+      { title: "Cannot re-enqueue", kind: "error" },
+    );
+    return;
+  }
+  await queueDismiss(repoId, entry.id).catch(() => {});
+  s.dismissQueueEntry(repoId, entry.id);
+  await enqueueBranch(repoId, branch.id);
+}
+
+export async function dismissEntry(repoId: string, entryId: string) {
+  await queueDismiss(repoId, entryId).catch(() => {});
+  useAppStore.getState().dismissQueueEntry(repoId, entryId);
 }
