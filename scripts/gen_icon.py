@@ -1,54 +1,32 @@
-"""Generate Powerhouse app icons: black filled mark with white glow, no dots/arcs."""
+"""Generate Powerhouse app icons: pure black tile with a centered white glow."""
 
 from PIL import Image, ImageDraw, ImageFilter
-import math
 import os
 
 ICON_DIR = os.path.join(os.path.dirname(__file__), "..", "src-tauri", "icons")
 
 def make_icon(size: int) -> Image.Image:
     s = size
+    r = round(s * 0.219)           # ~22% corner radius (macOS style)
 
-    # ── background ───────────────────────────────────────────────────────────
+    # ── pure-black background ────────────────────────────────────────────────
     img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
-    bg_draw = ImageDraw.Draw(img)
-    r = round(s * 0.219)            # ~22% corner radius (macOS style)
-    bg_color = (10, 11, 16, 255)    # #0a0b10 – very dark navy-black
-    bg_draw.rounded_rectangle([0, 0, s - 1, s - 1], radius=r, fill=bg_color)
+    ImageDraw.Draw(img).rounded_rectangle([0, 0, s - 1, s - 1], radius=r, fill=(0, 0, 0, 255))
 
-    # ── logo mark: two overlapping solid circles (no holes) ──────────────────
-    # Proportions derived from the Tauri logo silhouette, centered on the tile.
-    # Circle 1 – upper-left offset
-    cr = round(s * 0.235)           # circle radius ≈ 23.5% of tile
-    # centres placed so the pair sits centred, overlapping by ~40% of radius
-    offset = round(s * 0.115)       # distance each centre shifts from tile centre
-    cx1 = round(s * 0.5) - offset
-    cy1 = round(s * 0.5) - offset
-    # Circle 2 – lower-right offset
-    cx2 = round(s * 0.5) + offset
-    cy2 = round(s * 0.5) + offset
-
-    # ── glow layer: white blurred silhouette behind the mark ─────────────────
+    # ── centered glow: white oval blurred into a soft halo ───────────────────
+    # Draw a small white ellipse at the centre, then blur it heavily so it
+    # fades naturally from bright centre to black edges.
     glow = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     gd = ImageDraw.Draw(glow)
-    gc = (210, 215, 255, 220)       # cool-white glow tint
-    gd.ellipse([cx1 - cr, cy1 - cr, cx1 + cr, cy1 + cr], fill=gc)
-    gd.ellipse([cx2 - cr, cy2 - cr, cx2 + cr, cy2 + cr], fill=gc)
-    blur_r = max(2, round(s * 0.075))
+    inset = round(s * 0.28)        # how far the glow seed shrinks from the edge
+    gd.ellipse([inset, inset, s - inset, s - inset], fill=(220, 225, 255, 200))
+    blur_r = max(4, round(s * 0.18))
     glow = glow.filter(ImageFilter.GaussianBlur(radius=blur_r))
 
-    # ── mark layer: pure-black filled circles on transparent ─────────────────
-    mark = Image.new("RGBA", (s, s), (0, 0, 0, 0))
-    md = ImageDraw.Draw(mark)
-    mc = (0, 0, 0, 255)
-    md.ellipse([cx1 - cr, cy1 - cr, cx1 + cr, cy1 + cr], fill=mc)
-    md.ellipse([cx2 - cr, cy2 - cr, cx2 + cr, cy2 + cr], fill=mc)
-
-    # ── composite ────────────────────────────────────────────────────────────
+    # ── composite glow onto black tile ───────────────────────────────────────
     result = Image.alpha_composite(img, glow)
-    result = Image.alpha_composite(result, mark)
 
-    # Clip to rounded rectangle so the transparent corners are clean.
+    # Clip to rounded rectangle.
     mask = Image.new("L", (s, s), 0)
     ImageDraw.Draw(mask).rounded_rectangle([0, 0, s - 1, s - 1], radius=r, fill=255)
     result.putalpha(mask)
