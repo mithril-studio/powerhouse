@@ -1,4 +1,7 @@
 import { useEffect } from "react";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check } from "@tauri-apps/plugin-updater";
 import { selectedBranch, selectedRepo, useAppStore } from "./store/appStore";
 import { hydrateFromDisk, startPersistence } from "./store/persist";
 import { startQueueSync } from "./lib/queueSync";
@@ -15,6 +18,26 @@ import { RightSidebar } from "./components/RightSidebar";
 import { NewChatPicker } from "./components/NewChatPicker";
 
 let booted = false;
+
+async function checkForUpdates() {
+  try {
+    const update = await check();
+    if (!update) return;
+
+    const install = await ask(`Version ${update.version} is ready to install.`, {
+      title: "Update Powerhouse",
+      kind: "info",
+      okLabel: "Install and relaunch",
+      cancelLabel: "Later",
+    });
+    if (!install) return;
+
+    await update.downloadAndInstall();
+    await relaunch();
+  } catch (error) {
+    console.warn("Unable to check for updates:", error);
+  }
+}
 
 export default function App() {
   const hydrated = useAppStore((s) => s.hydrated);
@@ -34,6 +57,7 @@ export default function App() {
       startPersistence();
       startQueueSync();
       void initHandoff();
+      void checkForUpdates();
     })();
   }, []);
 
