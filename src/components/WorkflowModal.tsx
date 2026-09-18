@@ -58,7 +58,7 @@ export function WorkflowModal() {
     >
       <div
         onMouseDown={(e) => e.stopPropagation()}
-        className="flex max-h-[70vh] w-[32rem] flex-col rounded-xl bg-card p-4 ring-1 ring-foreground/10"
+        className="pi-card flex max-h-[70vh] w-[32rem] flex-col p-4"
       >
         <p className="mb-1 font-medium">Merge workflow</p>
         <p className="mb-3 text-xs text-muted-foreground">
@@ -143,7 +143,7 @@ export function WorkflowModal() {
           </button>
           <button
             onClick={save}
-            className="h-8 rounded-lg bg-primary px-4 font-medium text-primary-foreground transition-all active:translate-y-px focus-visible:ring-3 focus-visible:ring-ring/50"
+            className="pi-btn pi-btn-primary h-8 px-4 font-medium focus-visible:ring-3 focus-visible:ring-ring/50"
           >
             Save
           </button>

@@ -27,9 +27,9 @@ interface Props {
 }
 
 const primaryBtn =
-  "h-8 rounded-lg bg-primary px-4 font-medium text-primary-foreground transition-all active:translate-y-px focus-visible:ring-3 focus-visible:ring-ring/50";
+  "pi-btn pi-btn-primary h-8 px-4 font-medium focus-visible:ring-3 focus-visible:ring-ring/50";
 const secondaryBtn =
-  "h-8 rounded-lg border border-border px-4 font-medium text-muted-foreground transition-all hover:text-foreground active:translate-y-px focus-visible:ring-3 focus-visible:ring-ring/50";
+  "pi-btn h-8 px-4 font-medium focus-visible:ring-3 focus-visible:ring-ring/50";
 
 // Stays mounted for every chat; inactive panes are display:none so the xterm
 // buffer (and a running htop) survives tab and branch switches.

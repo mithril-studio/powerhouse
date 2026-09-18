@@ -72,7 +72,7 @@ export function QueuePane({ repo, branch }: { repo: Repo; branch?: Branch | null
               onClick={() => void enqueueBranch(repo.id, branch.id)}
               disabled={branchLive}
               title={branchLive ? "Already in the queue" : `Enqueue ${branch.name}`}
-              className="h-7 shrink-0 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-all active:translate-y-px focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+              className="pi-btn pi-btn-primary h-7 shrink-0 px-3 text-xs font-medium focus-visible:ring-3 focus-visible:ring-ring/50"
             >
               {branchLive ? "Queued" : "Merge"}
             </button>

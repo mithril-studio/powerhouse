@@ -28,22 +28,24 @@
 }
 
 :root {
-  --radius: 0.5rem;
+  /* Flat corners — Pi's terminal look is square, delineated by hairlines. */
+  --radius: 0rem;
 
-  --background: #0d0e11;
-  --foreground: oklch(0.9 0.004 260);
-  --card: oklch(0.21 0.006 260);
-  --muted: oklch(0.25 0.006 260);
-  --muted-foreground: oklch(0.62 0.01 260);
-  --primary: oklch(0.9 0.004 260);
-  --primary-foreground: oklch(0.18 0.005 260);
-  --accent-brand: oklch(0.62 0.19 250);
-  --destructive: oklch(0.7 0.191 22.216);
-  /* Terminal green (#57ab5a) — queue success states + diff added lines. */
-  --success: oklch(0.67 0.13 145);
-  --border: oklch(1 0 0 / 8%);
-  --input: oklch(1 0 0 / 12%);
-  --ring: oklch(0.62 0.19 250);
+  /* Pi palette, promoted app-wide so the shell matches the chat. */
+  --background: #18181e;
+  --foreground: #d4d4d4;
+  --card: #1e1e24;
+  --muted: #33333f;
+  --muted-foreground: #8a8a94;
+  --primary: #d4d4d4;
+  --primary-foreground: #18181e;
+  --accent-brand: #8abeb7;
+  --destructive: #cc6666;
+  /* Soft terminal green — queue success states + diff added lines. */
+  --success: #b5bd68;
+  --border: #33333d;
+  --input: #4a4a54;
+  --ring: #8abeb7;
 
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
     sans-serif;
@@ -56,7 +58,8 @@
     min-width: 0;
   }
   html {
-    @apply font-sans;
+    /* Monospace app-wide for the Pi terminal aesthetic. */
+    @apply font-mono;
   }
   body {
     @apply bg-background text-foreground;
@@ -150,5 +153,44 @@
 @media (prefers-reduced-motion: reduce) {
   .acp-pi .pi-editor[data-busy="true"]::after {
     animation: none;
+  }
+}
+
+/* Shared Pi chrome: flat, hairline-bordered surfaces and buttons — no filled
+ * blocks or big rounded corners. Sizing (height/padding) stays on the element. */
+@layer components {
+  .pi-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+  }
+  .pi-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+    color: var(--muted-foreground);
+    transition:
+      background-color 0.1s ease,
+      color 0.1s ease,
+      border-color 0.1s ease;
+  }
+  .pi-btn:hover {
+    background: var(--muted);
+    color: var(--foreground);
+  }
+  .pi-btn:disabled {
+    opacity: 0.45;
+  }
+  .pi-btn:disabled:hover {
+    background: transparent;
+    color: var(--muted-foreground);
+  }
+  /* Primary action: a teal-edged button instead of a solid light block. */
+  .pi-btn-primary {
+    border-color: color-mix(in oklab, var(--accent-brand) 70%, transparent);
+    color: var(--foreground);
+  }
+  .pi-btn-primary:hover {
+    background: var(--muted);
   }
 }

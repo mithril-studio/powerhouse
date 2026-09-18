@@ -122,7 +122,7 @@ export function QueueCard({
   const canRetry = entry.state === "failed" || entry.state === "interrupted";
 
   return (
-    <div className="rounded-xl bg-card p-3 ring-1 ring-foreground/10">
+    <div className="pi-card p-3">
       <div className="flex items-center gap-2">
         <span className={`size-2 shrink-0 rounded-full ${stateDot(entry.state)}`} aria-hidden />
         <span className="min-w-0 flex-1 truncate font-mono text-xs">{entry.branch}</span>
@@ -182,7 +182,7 @@ export function QueueCard({
       {canRetry && (
         <button
           onClick={() => void retryQueueEntry(repoId, entry)}
-          className="mt-2 h-7 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-all active:translate-y-px focus-visible:ring-3 focus-visible:ring-ring/50"
+          className="pi-btn pi-btn-primary mt-2 h-7 px-3 text-xs font-medium focus-visible:ring-3 focus-visible:ring-ring/50"
         >
           Re-enqueue
         </button>

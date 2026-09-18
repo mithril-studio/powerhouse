@@ -67,7 +67,7 @@ export function NewChatPicker() {
         onKeyDown={onKeyDown}
         tabIndex={-1}
         ref={(el) => el?.focus()}
-        className="w-80 rounded-xl bg-card p-2 outline-none ring-1 ring-foreground/10"
+        className="pi-card w-80 p-2 outline-none"
       >
         <p className="px-2 pb-1 pt-1 text-xs text-muted-foreground">New chat with…</p>
         {agents.map((agent, i) => {
