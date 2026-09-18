@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  AvailableCommand,
   RequestPermissionRequest,
   RequestPermissionResponse,
   SessionConfigOption,
@@ -31,12 +32,17 @@ import {
   AcpPermissionCard,
   type PendingPermission,
 } from "./acp/AcpPermissionCard";
-import { AcpSessionControls } from "./acp/AcpSessionControls";
 import { AcpComposer } from "./acp/AcpComposer";
 import {
   AcpConnectionPanel,
   type AcpConnectionState,
 } from "./acp/AcpConnectionPanel";
+import { AcpCommandPalette } from "./acp/AcpCommandPalette";
+import { AcpFooter } from "./acp/AcpFooter";
+import {
+  buildAcpPaletteItems,
+  type AcpPaletteItem,
+} from "../lib/acpCommandPalette";
 
 interface Props {
   repoId: string;
@@ -44,9 +50,6 @@ interface Props {
   chat: Chat;
   active: boolean;
 }
-
-const buttonClass =
-  "h-8 rounded-md border border-border px-3 text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-40";
 
 export function AcpChatPane({ repoId, branch, chat, active }: Props) {
   const settings = useAppStore((state) => state.settings);
@@ -64,7 +67,10 @@ export function AcpChatPane({ repoId, branch, chat, active }: Props) {
   const [permission, setPermission] = useState<PendingPermission | null>(null);
   const [modes, setModes] = useState<SessionModeState | null>(null);
   const [configOptions, setConfigOptions] = useState<SessionConfigOption[]>([]);
+  const [commands, setCommands] = useState<AvailableCommand[]>([]);
   const [agentLabel, setAgentLabel] = useState(profile.name);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [draft, setDraft] = useState("");
   const closingRef = useRef(false);
   const replayingRef = useRef(false);
 
@@ -108,6 +114,8 @@ export function AcpChatPane({ repoId, branch, chat, active }: Props) {
       setBusy(false);
       setError(null);
       setDiagnostics("");
+      setCommands([]);
+      setPaletteOpen(false);
       if (!resume) mutateTranscript(() => []);
 
       try {
@@ -135,6 +143,7 @@ export function AcpChatPane({ repoId, branch, chat, active }: Props) {
                 current ? { ...current, currentModeId: modeId } : current,
               ),
             onConfigOptionsChange: setConfigOptions,
+            onAvailableCommandsChange: setCommands,
             onSessionReplayChange: (replaying) => {
               replayingRef.current = replaying;
               if (replaying) mutateTranscript(() => []);
@@ -205,6 +214,33 @@ export function AcpChatPane({ repoId, branch, chat, active }: Props) {
     }
   }, [active, chat.id, chat.agentSessionId, connection, start]);
 
+  useEffect(() => {
+    if (!active || connection !== "ready") return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.metaKey &&
+        event.shiftKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        event.key.toLowerCase() === "p"
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        setPaletteOpen((open) => !open);
+      } else if (event.key === "Escape") {
+        if (paletteOpen) {
+          event.preventDefault();
+          setPaletteOpen(false);
+        } else if (busy) {
+          event.preventDefault();
+          void cancelAcpPrompt(chat.id);
+        }
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [active, busy, chat.id, connection, paletteOpen]);
+
   const switchToTerminal = async () => {
     closingRef.current = true;
     await disposeAcp(chat.id);
@@ -221,42 +257,65 @@ export function AcpChatPane({ repoId, branch, chat, active }: Props) {
   };
 
   const connected = connection === "ready";
+  const thinkingValue = configOptions.find(
+    (option) => option.category === "thought_level" && option.type === "select",
+  )?.currentValue;
+  const thinkingLevel =
+    typeof thinkingValue === "string" ? thinkingValue : undefined;
+  const paletteItems = useMemo(
+    () => buildAcpPaletteItems({ commands, modes, configOptions }),
+    [commands, modes, configOptions],
+  );
+
+  const choosePaletteItem = (item: AcpPaletteItem) => {
+    setPaletteOpen(false);
+    const { action } = item;
+    if (action.type === "insert_prompt") {
+      setDraft(action.prompt);
+    } else if (action.type === "mode") {
+      void setAcpMode(chat.id, action.modeId)
+        .then(() =>
+          setModes((current) =>
+            current ? { ...current, currentModeId: action.modeId } : current,
+          ),
+        )
+        .catch((cause) =>
+          mutateTranscript((items) =>
+            appendSystemMessage(
+              items,
+              `Mode change failed: ${String(cause)}`,
+              "error",
+            ),
+          ),
+        );
+    } else if (action.type === "config") {
+      void setAcpConfigOption(chat.id, action.configId, action.value)
+        .then(setConfigOptions)
+        .catch((cause) =>
+          mutateTranscript((items) =>
+            appendSystemMessage(
+              items,
+              `Config change failed: ${String(cause)}`,
+              "error",
+            ),
+          ),
+        );
+    } else {
+      void switchToTerminal();
+    }
+  };
 
   return (
-    <section className={`absolute inset-0 flex flex-col ${active ? "" : "hidden"}`}>
-      <header className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3">
-        <span
-          className={`size-1.5 rounded-full ${connected ? "bg-success" : "bg-muted-foreground/50"}`}
-          aria-hidden
-        />
-        <span className="truncate text-xs text-muted-foreground">{agentLabel}</span>
-        <span className="font-mono text-[10px] uppercase text-muted-foreground/60">ACP</span>
-        <span className="flex-1" />
-        <AcpSessionControls
-          modes={modes}
-          configOptions={configOptions}
-          disabled={!connected || busy}
-          onModeChange={(modeId) => {
-            void setAcpMode(chat.id, modeId)
-              .then(() =>
-                setModes((current) =>
-                  current ? { ...current, currentModeId: modeId } : current,
-                ),
-              )
-              .catch((cause) => setError(String(cause)));
-          }}
-          onConfigChange={(configId, value) => {
-            void setAcpConfigOption(chat.id, configId, value)
-              .then(setConfigOptions)
-              .catch((cause) => setError(String(cause)));
-          }}
-        />
-        <button onClick={() => void switchToTerminal()} className={buttonClass}>
-          Terminal
-        </button>
-      </header>
-
-      <AcpTranscript items={transcript} busy={busy} />
+    <section
+      className={`acp-pi absolute inset-0 flex flex-col bg-background font-mono ${active ? "" : "hidden"}`}
+    >
+      <AcpTranscript
+        items={transcript}
+        busy={busy}
+        agentName={agentLabel}
+        branchName={branch.name}
+        commandCount={commands.length}
+      />
 
       {permission && (
         <AcpPermissionCard permission={permission} onResolve={resolvePermission} />
@@ -272,13 +331,35 @@ export function AcpChatPane({ repoId, branch, chat, active }: Props) {
           onResume={() => void start(true)}
           onStartFresh={() => void start(false)}
         />
+      ) : paletteOpen ? (
+        <AcpCommandPalette
+          items={paletteItems}
+          onChoose={choosePaletteItem}
+          onClose={() => setPaletteOpen(false)}
+        />
       ) : (
         <AcpComposer
           active={active}
           busy={busy}
           agentName={profile.name}
-          onSubmit={(prompt) => void submitPrompt(prompt)}
-          onCancel={() => void cancelAcpPrompt(chat.id)}
+          draft={draft}
+          onDraftChange={setDraft}
+          onSubmit={(prompt) => {
+            setDraft("");
+            void submitPrompt(prompt);
+          }}
+          onOpenCommands={() => setPaletteOpen(true)}
+          thinkingLevel={thinkingLevel}
+        />
+      )}
+      {connected && (
+        <AcpFooter
+          agentName={agentLabel}
+          branchName={branch.name}
+          busy={busy}
+          modes={modes}
+          configOptions={configOptions}
+          commandCount={commands.length}
         />
       )}
     </section>

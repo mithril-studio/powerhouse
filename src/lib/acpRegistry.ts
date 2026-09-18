@@ -1,6 +1,7 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AgentCapabilities,
+  AvailableCommand,
   ClientConnection,
   Implementation,
   PromptResponse,
@@ -27,6 +28,7 @@ export interface AcpCallbacks {
   onPermission: (request: RequestPermissionRequest) => Promise<RequestPermissionResponse>;
   onModeChange?: (modeId: string) => void;
   onConfigOptionsChange?: (options: SessionConfigOption[]) => void;
+  onAvailableCommandsChange?: (commands: AvailableCommand[]) => void;
   onSessionReplayChange?: (replaying: boolean) => void;
   onBusyChange?: (busy: boolean) => void;
   onStderr?: (chunk: string) => void;
@@ -114,6 +116,9 @@ export async function startAcp(opts: {
       }
       if (params.update.sessionUpdate === "config_option_update") {
         callbacks.onConfigOptionsChange?.(params.update.configOptions);
+      }
+      if (params.update.sessionUpdate === "available_commands_update") {
+        callbacks.onAvailableCommandsChange?.(params.update.availableCommands);
       }
     });
   const connection = app.connect(ndJsonStream(output, input));

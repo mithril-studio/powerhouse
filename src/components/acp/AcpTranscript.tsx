@@ -3,8 +3,8 @@ import type { ToolCallContent } from "@agentclientprotocol/sdk";
 import type { AcpTranscriptItem } from "../../lib/acpTranscript";
 
 const statusGlyph: Record<string, string> = {
-  pending: "○",
-  in_progress: "◌",
+  pending: "·",
+  in_progress: "●",
   completed: "✓",
   failed: "×",
 };
@@ -22,7 +22,7 @@ function readableValue(value: unknown): string {
 function ToolContent({ item }: { item: ToolCallContent }) {
   if (item.type === "content") {
     return item.content.type === "text" ? (
-      <pre className="whitespace-pre-wrap break-words font-mono text-xs text-muted-foreground">
+      <pre className="whitespace-pre-wrap break-words text-xs text-muted-foreground">
         {item.content.text}
       </pre>
     ) : (
@@ -32,8 +32,8 @@ function ToolContent({ item }: { item: ToolCallContent }) {
   if (item.type === "diff") {
     return (
       <div className="space-y-2">
-        <p className="font-mono text-xs text-muted-foreground">{item.path}</p>
-        <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md bg-background p-2 font-mono text-xs">
+        <p className="text-xs text-muted-foreground">{item.path}</p>
+        <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words border-l border-border bg-card py-1 pl-3 text-xs">
           {item.newText}
         </pre>
       </div>
@@ -52,14 +52,20 @@ function ToolItem({ item }: { item: Extract<AcpTranscriptItem, { type: "tool" }>
   const header = (
     <>
       <span
-        className={item.status === "failed" ? "text-destructive" : "text-muted-foreground"}
+        className={
+          item.status === "failed"
+            ? "text-destructive"
+            : item.status === "in_progress"
+              ? "text-accent-brand"
+              : "text-muted-foreground"
+        }
         aria-hidden
       >
-        {statusGlyph[item.status ?? "pending"] ?? "○"}
+        {statusGlyph[item.status ?? "pending"] ?? "·"}
       </span>
       <span className="truncate text-xs text-foreground/90">{item.title}</span>
       {item.kind && (
-        <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground/70">
+        <span className="ml-auto shrink-0 text-[10px] text-muted-foreground/70">
           {item.kind}
         </span>
       )}
@@ -67,16 +73,16 @@ function ToolItem({ item }: { item: Extract<AcpTranscriptItem, { type: "tool" }>
   );
 
   if (!details) {
-    return <div className="flex items-center gap-2 border-l border-border py-1 pl-3">{header}</div>;
+    return <div className="flex items-center gap-2 py-0.5">{header}</div>;
   }
   return (
-    <details className="group border-l border-border py-1 pl-3">
-      <summary className="flex cursor-default list-none items-center gap-2 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
+    <details className="group py-0.5">
+      <summary className="flex cursor-default list-none items-center gap-2 outline-none focus-visible:bg-muted">
         {header}
       </summary>
-      <div className="mt-2 space-y-2 border-l border-border pl-3">
+      <div className="ml-1 mt-1 space-y-2 border-l border-border py-1 pl-4">
         {item.locations?.map((location) => (
-          <p key={`${location.path}:${location.line ?? ""}`} className="font-mono text-xs text-muted-foreground">
+          <p key={`${location.path}:${location.line ?? ""}`} className="text-xs text-muted-foreground">
             {location.path}{location.line ? `:${location.line}` : ""}
           </p>
         ))}
@@ -84,12 +90,12 @@ function ToolItem({ item }: { item: Extract<AcpTranscriptItem, { type: "tool" }>
           <ToolContent key={index} item={content} />
         ))}
         {item.rawInput !== undefined && (
-          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-muted-foreground">
+          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs text-muted-foreground">
             {readableValue(item.rawInput)}
           </pre>
         )}
         {item.rawOutput !== undefined && (
-          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-muted-foreground">
+          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs text-muted-foreground">
             {readableValue(item.rawOutput)}
           </pre>
         )}
@@ -103,8 +109,8 @@ function TranscriptItem({ item }: { item: AcpTranscriptItem }) {
   if (item.type === "plan") {
     return (
       <section className="border-l border-accent-brand/40 pl-3" aria-label="Agent plan">
-        <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-          Plan
+        <p className="mb-1 text-xs text-accent-brand">
+          ◇ plan
         </p>
         <ol className="space-y-1">
           {item.entries.map((entry, index) => (
@@ -124,8 +130,8 @@ function TranscriptItem({ item }: { item: AcpTranscriptItem }) {
   if (item.role === "thought") {
     return (
       <details className="text-xs text-muted-foreground">
-        <summary className="cursor-default outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
-          Reasoning
+        <summary className="cursor-default outline-none focus-visible:bg-muted">
+          ◇ thinking
         </summary>
         <p className="mt-2 whitespace-pre-wrap border-l border-border pl-3">{item.text}</p>
       </details>
@@ -133,16 +139,17 @@ function TranscriptItem({ item }: { item: AcpTranscriptItem }) {
   }
   if (item.role === "user") {
     return (
-      <div className="ml-auto max-w-[80%] rounded-lg bg-muted px-3 py-2">
+      <article className="flex gap-2 bg-muted/60 px-2 py-2">
+        <span className="shrink-0 text-accent-brand" aria-hidden>&gt;</span>
         <p className="select-text whitespace-pre-wrap break-words">{item.text}</p>
-      </div>
+      </article>
     );
   }
   if (item.role === "system") {
     return (
       <p
         role={item.tone === "error" ? "alert" : "status"}
-        className={`border-l pl-3 text-xs ${
+        className={`border-l py-0.5 pl-3 text-xs ${
           item.tone === "error"
             ? "border-destructive text-destructive"
             : "border-border text-muted-foreground"
@@ -153,8 +160,8 @@ function TranscriptItem({ item }: { item: AcpTranscriptItem }) {
     );
   }
   return (
-    <article className="max-w-3xl">
-      <p className="select-text whitespace-pre-wrap break-words leading-6">{item.text}</p>
+    <article>
+      <p className="select-text whitespace-pre-wrap break-words leading-5">{item.text}</p>
     </article>
   );
 }
@@ -162,9 +169,15 @@ function TranscriptItem({ item }: { item: AcpTranscriptItem }) {
 export function AcpTranscript({
   items,
   busy,
+  agentName,
+  branchName,
+  commandCount,
 }: {
   items: AcpTranscriptItem[];
   busy: boolean;
+  agentName: string;
+  branchName: string;
+  commandCount: number;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
@@ -183,21 +196,28 @@ export function AcpTranscript({
         const element = event.currentTarget;
         followRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
       }}
-      className="min-h-0 flex-1 overflow-y-auto px-5 py-5"
+      className="min-h-0 flex-1 overflow-y-auto px-3 py-2"
     >
-      <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
+      <div className="flex w-full flex-col gap-3 text-[13px]">
         {items.length === 0 && (
-          <div className="py-16 text-center" role="status">
-            <p className="text-sm text-muted-foreground">Describe what you want to build or change.</p>
+          <div className="py-8" role="status">
+            <p className="text-sm text-accent-brand">Powerhouse / {agentName}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{branchName}</p>
+            <p className="mt-4 text-xs text-muted-foreground">
+              ⌘⇧P commands{commandCount > 0 ? ` · ${commandCount} from agent` : ""}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Type <span className="text-foreground">/</span> for agent commands and skills.
+            </p>
           </div>
         )}
         {items.map((item) => (
           <TranscriptItem key={item.id} item={item} />
         ))}
         {busy && (
-          <p className="flex items-center gap-2 text-xs text-muted-foreground" role="status">
-            <span className="size-1.5 animate-pulse rounded-full bg-accent-brand" />
-            Working…
+          <p className="flex items-center gap-2 text-xs text-accent-brand" role="status">
+            <span className="animate-pulse">●</span>
+            working…
           </p>
         )}
       </div>

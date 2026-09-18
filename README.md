@@ -27,7 +27,7 @@ The built-in profiles launch these ACP servers:
 | Pi | `npx -y pi-acp` |
 
 Authenticate with the agent's own CLI as usual. If an ACP adapter is unavailable
-or a workflow needs direct CLI access, use the **Terminal** button in the chat.
+or a workflow needs direct CLI access, press **⌘⇧P** and choose **Open terminal**.
 
 ## How it works
 
@@ -37,12 +37,13 @@ or a workflow needs direct CLI access, use the **Terminal** button in the chat.
   `~/.powerhouse/worktrees/<repo>/<branch>`, opens it, and starts a chat.
 - **⌘T** opens another chat on the current branch. Claude, Codex, and Pi default
   to ACP; legacy/custom profiles default to a PTY.
-- The ACP pane renders messages, reasoning, plans, tool calls, diffs, permission
-  requests, modes, and agent-provided model/config options. Unsupported controls
-  simply do not appear.
+- The ACP pane renders messages, reasoning, plans, tool calls, diffs, and permission
+  requests in one Pi-inspired terminal UI. Press **⌘⇧P** (or type `/`) to choose
+  agent-provided commands and skills, modes, model/config options, or the terminal
+  fallback. Unsupported controls simply do not appear.
 - Structured ACP transcripts and session IDs persist. Restored chats can resume
   when the backend supports it.
-- **Terminal** switches only that chat to its agent's real CLI. Tab switches keep
+- **Open terminal** switches only that chat to its agent's real CLI. Tab switches keep
   every xterm mounted, so long-running TUIs survive switching away and back.
 - The tree (repos → branches → chats) persists via `tauri-plugin-store`;
   subprocesses are runtime-only. After a restart, chats wait for **Resume** or
