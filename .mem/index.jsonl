@@ -1,0 +1,2 @@
+{"id":"mem_a3c7","domain":"acp","type":"failure","title":"Keep streamed TextDecoder state scoped to one ACP connection","files":["src/lib/acpRegistry.ts"]}
+{"id":"mem_d8e1","domain":"acp","type":"failure","title":"Treat session/load notifications as an authoritative transcript replay","files":["src/lib/acpRegistry.ts","src/lib/acpTranscript.ts","src/components/AcpChatPane.tsx"]}
