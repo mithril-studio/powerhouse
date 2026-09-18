@@ -58,7 +58,7 @@ export function appendSystemMessage(
 
 function appendTextChunk(
   transcript: AcpTranscriptItem[],
-  role: "assistant" | "thought",
+  role: "user" | "assistant" | "thought",
   text: string,
   messageId?: string | null,
 ): AcpTranscriptItem[] {
@@ -89,6 +89,7 @@ function appendTextChunk(
 export function applyAcpUpdate(
   transcript: AcpTranscriptItem[],
   update: SessionUpdate,
+  options: { acceptUserMessageChunks?: boolean } = {},
 ): AcpTranscriptItem[] {
   switch (update.sessionUpdate) {
     case "agent_message_chunk":
@@ -101,8 +102,11 @@ export function applyAcpUpdate(
         : transcript;
     case "user_message_chunk":
       // Powerhouse records submitted prompts immediately. Ignoring echoed user
-      // chunks avoids duplicates while still allowing session updates to stream.
-      return transcript;
+      // chunks avoids duplicates. During session/load, the agent is the source
+      // of truth and replays the complete transcript, including user messages.
+      return options.acceptUserMessageChunks && update.content.type === "text"
+        ? appendTextChunk(transcript, "user", update.content.text, update.messageId)
+        : transcript;
     case "tool_call":
       return [
         ...transcript,

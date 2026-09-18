@@ -6,8 +6,10 @@ import type {
   PromptResponse,
   RequestPermissionRequest,
   RequestPermissionResponse,
+  SessionConfigOption,
   SessionModeState,
   SessionUpdate,
+  SetSessionConfigOptionResponse,
 } from "@agentclientprotocol/sdk";
 import { acpKill, acpSpawn, acpWrite } from "./ipc";
 
@@ -17,26 +19,31 @@ export interface AcpStartResult {
   capabilities: AgentCapabilities;
   agentInfo?: Implementation | null;
   modes?: SessionModeState | null;
+  configOptions?: SessionConfigOption[] | null;
 }
 
 export interface AcpCallbacks {
   onUpdate: (update: SessionUpdate) => void;
   onPermission: (request: RequestPermissionRequest) => Promise<RequestPermissionResponse>;
   onModeChange?: (modeId: string) => void;
+  onConfigOptionsChange?: (options: SessionConfigOption[]) => void;
+  onSessionReplayChange?: (replaying: boolean) => void;
+  onBusyChange?: (busy: boolean) => void;
   onStderr?: (chunk: string) => void;
   onExit: (code: number | null) => void;
 }
 
 interface Entry {
   connection: ClientConnection;
+  callbacks: AcpCallbacks;
   sessionId?: string;
   unlisten: UnlistenFn[];
   closeInput: () => void;
+  busy: boolean;
 }
 
 const registry = new Map<string, Entry>();
 const encoder = new TextEncoder();
-const decoder = new TextDecoder();
 
 export const hasAcpSession = (chatId: string) => registry.has(chatId);
 
@@ -62,6 +69,7 @@ export async function startAcp(opts: {
 }): Promise<AcpStartResult> {
   const { chatId, cwd, command, resumeSessionId, callbacks } = opts;
   await disposeAcp(chatId);
+  const decoder = new TextDecoder();
   const { PROTOCOL_VERSION, client, methods, ndJsonStream } = await import(
     "@agentclientprotocol/sdk"
   );
@@ -104,12 +112,17 @@ export async function startAcp(opts: {
       if (params.update.sessionUpdate === "current_mode_update") {
         callbacks.onModeChange?.(params.update.currentModeId);
       }
+      if (params.update.sessionUpdate === "config_option_update") {
+        callbacks.onConfigOptionsChange?.(params.update.configOptions);
+      }
     });
   const connection = app.connect(ndJsonStream(output, input));
   const entry: Entry = {
     connection,
+    callbacks,
     unlisten: [unlistenOut, unlistenStderr, unlistenExit],
     closeInput,
+    busy: false,
   };
   registry.set(chatId, entry);
 
@@ -117,7 +130,7 @@ export async function startAcp(opts: {
     await acpSpawn(chatId, cwd, command);
     const initialized = await connection.agent.request(methods.agent.initialize, {
       protocolVersion: PROTOCOL_VERSION,
-      clientCapabilities: {},
+      clientCapabilities: { session: { configOptions: { boolean: {} } } },
       clientInfo: { name: "Powerhouse", version: "0.1.0" },
     });
     if (initialized.protocolVersion !== PROTOCOL_VERSION) {
@@ -129,25 +142,39 @@ export async function startAcp(opts: {
     const capabilities = initialized.agentCapabilities ?? {};
     let sessionId: string;
     let modes: SessionModeState | null | undefined;
+    let configOptions: SessionConfigOption[] | null | undefined;
     let resumed = false;
 
-    if (resumeSessionId && capabilities.sessionCapabilities?.resume != null) {
+    const canResume = capabilities.sessionCapabilities?.resume != null;
+    const canLoad = capabilities.loadSession === true;
+    if (resumeSessionId && (canResume || canLoad)) {
       try {
-        const response = await connection.agent.request(methods.agent.session.resume, {
-          sessionId: resumeSessionId,
-          cwd,
-          mcpServers: [],
-        });
+        if (!canResume) callbacks.onSessionReplayChange?.(true);
+        const response = canResume
+          ? await connection.agent.request(methods.agent.session.resume, {
+              sessionId: resumeSessionId,
+              cwd,
+              mcpServers: [],
+            })
+          : await connection.agent.request(methods.agent.session.load, {
+              sessionId: resumeSessionId,
+              cwd,
+              mcpServers: [],
+            });
+        if (!canResume) callbacks.onSessionReplayChange?.(false);
         sessionId = resumeSessionId;
         modes = response.modes;
+        configOptions = response.configOptions;
         resumed = true;
       } catch {
+        callbacks.onSessionReplayChange?.(false);
         const response = await connection.agent.request(methods.agent.session.new, {
           cwd,
           mcpServers: [],
         });
         sessionId = response.sessionId;
         modes = response.modes;
+        configOptions = response.configOptions;
       }
     } else {
       const response = await connection.agent.request(methods.agent.session.new, {
@@ -156,6 +183,7 @@ export async function startAcp(opts: {
       });
       sessionId = response.sessionId;
       modes = response.modes;
+      configOptions = response.configOptions;
     }
 
     entry.sessionId = sessionId;
@@ -165,6 +193,7 @@ export async function startAcp(opts: {
       capabilities,
       agentInfo: initialized.agentInfo,
       modes,
+      configOptions,
     };
   } catch (error) {
     await disposeAcp(chatId);
@@ -178,12 +207,20 @@ function getEntry(chatId: string): Entry {
   return entry;
 }
 
-export function sendAcpPrompt(chatId: string, text: string): Promise<PromptResponse> {
+export async function sendAcpPrompt(chatId: string, text: string): Promise<PromptResponse> {
   const entry = getEntry(chatId);
-  return entry.connection.agent.request("session/prompt", {
-    sessionId: entry.sessionId!,
-    prompt: [{ type: "text", text }],
-  });
+  if (entry.busy) throw new Error("ACP agent is already working");
+  entry.busy = true;
+  entry.callbacks.onBusyChange?.(true);
+  try {
+    return await entry.connection.agent.request("session/prompt", {
+      sessionId: entry.sessionId!,
+      prompt: [{ type: "text", text }],
+    });
+  } finally {
+    entry.busy = false;
+    entry.callbacks.onBusyChange?.(false);
+  }
 }
 
 export function cancelAcpPrompt(chatId: string): Promise<void> {
@@ -199,4 +236,21 @@ export function setAcpMode(chatId: string, modeId: string): Promise<unknown> {
     sessionId: entry.sessionId!,
     modeId,
   });
+}
+
+export async function setAcpConfigOption(
+  chatId: string,
+  configId: string,
+  value: string | boolean,
+): Promise<SessionConfigOption[]> {
+  const entry = getEntry(chatId);
+  const option =
+    typeof value === "boolean"
+      ? { sessionId: entry.sessionId!, configId, type: "boolean" as const, value }
+      : { sessionId: entry.sessionId!, configId, value };
+  const response = (await entry.connection.agent.request(
+    "session/set_config_option",
+    option,
+  )) as SetSessionConfigOptionResponse;
+  return response.configOptions;
 }

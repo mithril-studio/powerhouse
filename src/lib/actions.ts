@@ -17,6 +17,7 @@ import {
   ptyDeleteTranscript,
 } from "./ipc";
 import { disposeTerminal, markAutoSpawn } from "./terminalRegistry";
+import { disposeAcp } from "./acpRegistry";
 
 export async function pickAndAddRepo() {
   const dir = await open({ directory: true, multiple: false, title: "Add project" });
@@ -77,6 +78,7 @@ export function createHandoffChat(
     id: crypto.randomUUID(),
     title: `Handoff ${Math.max(0, ...numbers) + 1}`,
     agentId: source?.agentId,
+    transport: source?.transport,
     initialPrompt: `Read ${relPath} and continue the work described in it.`,
   };
   markAutoSpawn(chat.id);
@@ -103,6 +105,7 @@ export async function createBranch(repoId: string, name: string) {
 
 export function deleteChat(repoId: string, branchId: string, chatId: string) {
   disposeTerminal(chatId);
+  void disposeAcp(chatId);
   void ptyDeleteTranscript(chatId).catch(() => {});
   useAppStore.getState().removeChat(repoId, branchId, chatId);
 }
@@ -129,6 +132,7 @@ export async function deleteBranch(repoId: string, branchId: string) {
 
   for (const chat of branch.chats) {
     disposeTerminal(chat.id);
+    void disposeAcp(chat.id);
     void ptyDeleteTranscript(chat.id).catch(() => {});
   }
   disposeTerminal(`shell-${branchId}`);

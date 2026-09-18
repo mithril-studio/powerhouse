@@ -1,7 +1,9 @@
 import { listen } from "@tauri-apps/api/event";
 import { message } from "@tauri-apps/plugin-dialog";
-import { useAppStore } from "../store/appStore";
+import { resolveChatTransport, useAppStore } from "../store/appStore";
 import { createHandoffChat } from "./actions";
+import { sendAcpPrompt } from "./acpRegistry";
+import { appendSystemMessage, appendUserMessage } from "./acpTranscript";
 import {
   handoffEnsureCommands,
   ptyWrite,
@@ -38,8 +40,9 @@ export async function startHandoff(repoId: string, branchId: string) {
   const branch = s.repos
     .find((r) => r.id === repoId)
     ?.branches.find((b) => b.id === branchId);
-  const chatId = branch?.activeChatId;
-  if (!chatId) return;
+  const chat = branch?.chats.find((candidate) => candidate.id === branch.activeChatId);
+  if (!branch || !chat) return;
+  const chatId = chat.id;
 
   if ((s.chatStatus[chatId] ?? "idle") !== "running") {
     await message("The active chat has no running agent to hand off from.", {
@@ -57,6 +60,20 @@ export async function startHandoff(repoId: string, branchId: string) {
     );
   }, HANDOFF_TIMEOUT_MS);
   s.setPendingHandoff(branchId, timer);
+
+  if (resolveChatTransport(s.settings, chat) === "acp") {
+    s.updateChatAcpTranscript(repoId, branchId, chatId, (items) =>
+      appendUserMessage(items, HANDOFF_INSTRUCTION),
+    );
+    void sendAcpPrompt(chatId, HANDOFF_INSTRUCTION).catch(async (error) => {
+      cancelHandoff(branchId);
+      useAppStore.getState().updateChatAcpTranscript(repoId, branchId, chatId, (items) =>
+        appendSystemMessage(items, `Handoff failed: ${String(error)}`, "error"),
+      );
+      await message(String(error), { title: "Handoff failed", kind: "error" });
+    });
+    return;
+  }
 
   // Separate writes around TUI paste-heuristics: a rapid burst that includes the
   // trailing \r is treated as a paste and never submits.

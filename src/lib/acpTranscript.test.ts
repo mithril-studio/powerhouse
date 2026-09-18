@@ -72,4 +72,16 @@ describe("applyAcpUpdate", () => {
 
     expect(applyAcpUpdate([], update)).toEqual([]);
   });
+
+  it("accepts user chunks while an agent replays a loaded session", () => {
+    const update: SessionUpdate = {
+      sessionUpdate: "user_message_chunk",
+      messageId: "user-message-1",
+      content: { type: "text", text: "Restore this prompt" },
+    };
+
+    expect(applyAcpUpdate([], update, { acceptUserMessageChunks: true })).toEqual([
+      expect.objectContaining({ role: "user", text: "Restore this prompt" }),
+    ]);
+  });
 });

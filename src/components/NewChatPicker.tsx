@@ -86,7 +86,7 @@ export function NewChatPicker() {
               </span>
               <span className="min-w-0 flex-1 truncate text-sm">{agent.name}</span>
               <span className="truncate font-mono text-xs text-muted-foreground/70">
-                {agent.command}
+                {agent.transport === "acp" ? "ACP" : agent.command}
               </span>
               <button
                 onClick={(e) => {

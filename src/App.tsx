@@ -5,12 +5,12 @@ import { check } from "@tauri-apps/plugin-updater";
 import { selectedBranch, selectedRepo, useAppStore } from "./store/appStore";
 import { hydrateFromDisk, startPersistence } from "./store/persist";
 import { startQueueSync } from "./lib/queueSync";
-import { ptyKillAll } from "./lib/ipc";
+import { acpKillAll, ptyKillAll } from "./lib/ipc";
 import { initHandoff } from "./lib/handoff";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
-import { TerminalPane } from "./components/TerminalPane";
+import { ChatPane } from "./components/ChatPane";
 import { BottomPanel } from "./components/BottomPanel";
 import { NewBranchModal } from "./components/NewBranchModal";
 import { WorkflowModal } from "./components/WorkflowModal";
@@ -52,7 +52,11 @@ export default function App() {
     if (booted) return; // StrictMode double-invoke guard
     booted = true;
     void (async () => {
-      await ptyKillAll().catch(() => {}); // dev-reload hygiene: no orphan sessions
+      // Dev-reload hygiene: neither transport should leave orphan sessions.
+      await Promise.all([
+        ptyKillAll().catch(() => {}),
+        acpKillAll().catch(() => {}),
+      ]);
       await hydrateFromDisk();
       startPersistence();
       startQueueSync();
@@ -71,7 +75,7 @@ export default function App() {
             repos.flatMap((r) =>
               r.branches.flatMap((b) =>
                 b.chats.map((chat) => (
-                  <TerminalPane
+                  <ChatPane
                     key={chat.id}
                     repoId={r.id}
                     branch={b}
