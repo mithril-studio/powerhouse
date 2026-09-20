@@ -2,12 +2,63 @@
 
 ## Status
 
-2026-09-20: slice 0 is **unblocked**. Both VMs that failed to boot on 2026-09-18
-started normally on 2026-09-19/20, a fresh isolated machine created on
-2026-09-20 booted in seconds, and the Linux/systemd fixture passed every
-scenario on the dedicated base. The 2026-09-18 boot failure is diagnosed
-below; it was platform-side and never involved Powerhouse code. Runner
-implementation (slices 1–2) is in progress on `feature/boxd-cloud-runs`.
+2026-09-20: slices 0–3 and 5 are implemented and verified with the fake agent
+against real boxd machines; slice 4 (headless Claude) and the laptop-off
+acceptance test are **implemented but not cloud-verified** because no
+credential has been provisioned into the runner (approval-gated, see the
+runbook). Everything lives on `feature/boxd-cloud-runs`. The 2026-09-18 boot
+failure is diagnosed below; it was platform-side and never involved Powerhouse
+code. Operational guidance: `docs/boxd-cloud-agents-runbook.md`.
+
+### Slice evidence (2026-09-20)
+
+| Slice | Evidence |
+| --- | --- |
+| 1 Contracts & durable identity | `cloud/protocol` (5 tests: digest stability, validation, state ranks, envelope) and `cloud/runner` store (7 tests: idempotent submit, digest conflict, single claim, terminal-wins-once, cursor paging, payload bounds, cancel-once). Desktop store tests: stale snapshots never regress, event dedupe/contiguous cursor, atomic file round-trip. Frontend test: a pre-cloud `powerhouse.json` hydrates with repos, chats, workflow and merge history intact and no cloud fields added. |
+| 2 Runner with fake agent | `cloud/runner/tests/vm-integration.sh` on `powerhouse-cloud-base` (Linux, root, real systemd + cgroup v2, local `git daemon` as remote): **57/57 checks** across 17 scenarios — completion+publication, duplicate and concurrent submits (one claim), no checks configured, failing check (published, failed at validating, skip), check that mutates the tree (pre-check tree published, flagged), agent exit 23 with partial work kept, blocked (max turns), prose-only "success" rejected, unchanged result (sha == source, published), cancel of a CPU-only hang (children gone, second cancel harmless), 60 s deadline, executor SIGKILL → interrupted with one claim, boot reconcile of an orphan row, 30 k-line output bounded with `output.truncated`, malformed manifests/ids/digest/foreign branch rejected, agent escape attempt denied and runner state unreadable (uid 997). |
+| 3 boxd provisioning & transport | Desktop backend e2e (`cargo test cloud_e2e -- --ignored`) with the real CLI: forked the base into `ph-d3408a6f` (`851a1946-ee26-41fc-9dd3-c0574c3d72d3`), disabled idle timers, probed, uploaded the manifest, received a digest-matching receipt after 73 s; a **fresh store instance** then recovered run `d3408a6f-9a81-42ff-bbf1-eaa2a84b9da7` by id, followed it to `completed` (result `06dda8ac…`, branch `powerhouse/cloud/<id>` present on the remote, check passed, one `run.claimed`), and restored 300/900 s idle policy on the fork (verified with `boxd machine get`). Fake-transport unit tests cover dirty/unpushed rejection before any cloud call, persistence before each side effect, missing-credential refusal with VM retained, lost fork ack → reuse, sync regression guard and single idle restore, transport errors keeping cache, forget refusing active runs. |
+| 4 Claude, validation, publication | Adapter, prompt, stream-json classification (`error_max_turns`/budget → blocked, exit 0 without result → failed, denials → concerns), trusted-git snapshot/commit/publish with HTTPS token via env-only `http.extraHeader`, idempotent publish (existing identical ref = success, different ref = refuse) are implemented and unit-tested. **No real Claude call was made**; credentials are not provisioned. |
+| 5 Cloud-run view & import | Cloud tab, run cards, form with source verification and base probe, Cancel/Fetch changes/Forget, startup reconciliation (`startCloudSync`), 5 s polling of live runs only, offline banner with last-confirmed time. `cloud_import` fetches the run branch, refuses a revision mismatch, and creates a new worktree via the existing git flow. Not exercised end-to-end in the running app during this session (backend verified via e2e test; UI via type-check, build, and presentation tests). |
+| 6 Failure matrix & handoff | See the matrix below and the runbook. |
+
+### Verification matrix status
+
+| Scenario | Status |
+| --- | --- |
+| Old `powerhouse.json` without cloud fields | ✅ automated (vitest) |
+| Duplicate submit incl. concurrent | ✅ Linux suite (#2, #3) |
+| Lost create/submit acknowledgement | ✅ fake-transport tests (fork reuse; inspect-by-id after failed submit); e2e recovered by id from a fresh store |
+| Quit app after durable acceptance | ✅ e2e: new store instance, run finished and published without the submitting process |
+| Disconnect while streaming | ✅ event paging with contiguous cursor + dedupe (unit); e2e cursor 11 → 23 across syncs |
+| Laptop sleeps during CPU-only checks | ◐ idle timers disabled/verified on the fork and restored after; a real multi-hour sleep test was not run |
+| Runner crash / VM reboot | ✅ SIGKILL → interrupted (#13); boot reconcile of orphan (#14); real VM reboot not exercised |
+| Cancel incl. subprocesses | ✅ #11 |
+| Cancel races completion | ✅ store test (terminal wins once); runner `finish()` guard |
+| Agent asks for unavailable input | ✅ `block` script → blocked (#8); real Claude denial path not exercised |
+| Deadline expires | ✅ #12 (60 s) |
+| Validation fails / not configured | ✅ #5, #4 |
+| Push fails / ack lost | ✅ unit (refuse foreign branch, ls-remote verify); no-credential path refuses before submission |
+| Dirty/unpublished source | ✅ unit (rejected before any cloud call) |
+| Malformed events / oversized logs / unsafe paths | ✅ #15, #16, store payload bound |
+| Agent reads runner state | ✅ every run's isolation probe; #17 escape attempt |
+| Local import with unrelated edits | ◐ implemented (new worktree only); not exercised against a real remote in this session |
+| Close cloud view / startup PTY cleanup | ✅ by construction: cloud module is not referenced by `pty_kill_all`, exit handler, or terminal disposal; e2e process exit did not affect the run |
+
+### Decisive real-world acceptance test
+
+**Not run.** It requires a real Claude task, which requires provisioning
+credentials into the base runner (approval pending). With the fake agent, the
+equivalent sequence (submit → receipt → submitting process gone → recover by id
+→ Ready for review → branch present → one execution → idle policy restored) is
+the e2e above. Report the milestone as **implemented but not cloud-verified for
+Claude**.
+
+### Retained resources after this session
+
+`powerhouse-cloud-base` (stopped) and `ph-d3408a6f` (stopped, holds the e2e
+evidence and its workspace). `powerhouse-cloud-spike`, `powerhouse-cloud-probe-iso`
+and `powerhouse-cloud-fork-probe` were destroyed after their tests. No model
+call was made; no credential was copied anywhere.
 
 ### 2026-09-18 boot failure: diagnosis
 
