@@ -7,6 +7,7 @@ import { hydrateFromDisk, startPersistence } from "./store/persist";
 import { startQueueSync } from "./lib/queueSync";
 import { ptyKillAll } from "./lib/ipc";
 import { initHandoff } from "./lib/handoff";
+import { startCloudSync } from "./lib/cloud";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
@@ -16,6 +17,7 @@ import { NewBranchModal } from "./components/NewBranchModal";
 import { WorkflowModal } from "./components/WorkflowModal";
 import { RightSidebar } from "./components/RightSidebar";
 import { NewChatPicker } from "./components/NewChatPicker";
+import { CloudRunModal } from "./components/CloudRunModal";
 
 let booted = false;
 
@@ -57,6 +59,8 @@ export default function App() {
       startPersistence();
       startQueueSync();
       void initHandoff();
+      // Cloud runs live in their VMs; this only observes and reconciles.
+      void startCloudSync();
       void checkForUpdates();
     })();
   }, []);
@@ -105,6 +109,7 @@ export default function App() {
       <NewBranchModal />
       <WorkflowModal />
       <NewChatPicker />
+      <CloudRunModal />
     </div>
   );
 }

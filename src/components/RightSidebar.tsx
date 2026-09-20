@@ -14,12 +14,14 @@ import {
 } from "../lib/ipc";
 import { DiffView } from "./DiffView";
 import { QueuePane } from "./QueuePane";
+import { CloudPane } from "./CloudPane";
 
 const TABS: { id: RightTab; label: string }[] = [
   { id: "files", label: "All files" },
   { id: "changes", label: "Changes" },
   { id: "diff", label: "Diff" },
   { id: "merge", label: "Merge" },
+  { id: "cloud", label: "Cloud" },
 ];
 
 function statusColor(status: string) {
@@ -389,6 +391,12 @@ export function RightSidebar({
         {rightTab === "merge" ? (
           repo ? (
             <QueuePane repo={repo} branch={branch} />
+          ) : (
+            <Empty>Select a project.</Empty>
+          )
+        ) : rightTab === "cloud" ? (
+          repo ? (
+            <CloudPane repo={repo} branch={branch} />
           ) : (
             <Empty>Select a project.</Empty>
           )
