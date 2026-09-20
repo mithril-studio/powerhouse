@@ -473,18 +473,31 @@ fn run_agent(ctx: &mut Ctx) -> Result<(AgentOutcome, Option<i32>, Option<Stop>),
     let mut eof = false;
     let mut stop: Option<Stop> = None;
     let mut exit: Option<Option<i32>> = None;
+    // Once the agent process itself has exited, descendants holding the stdout
+    // pipe (e.g. a backgrounded child) must not keep the run alive; but every
+    // line that is still arriving is drained first.
+    let mut exited = false;
+    let mut last_line_at = Instant::now();
 
     loop {
-        // Drain available lines without blocking for long.
+        // Drain available lines (bounded burst), then store them in one transaction.
+        let mut batch: Vec<(String, serde_json::Value)> = Vec::new();
+        let drain_started = Instant::now();
         loop {
             match rx.recv_timeout(Duration::from_millis(200)) {
                 Ok(Some(line)) => {
+                    last_line_at = Instant::now();
                     if raw_bytes < MAX_RAW_LOG_BYTES {
                         let _ = raw.write_all(line.as_bytes());
                         let _ = raw.write_all(b"\n");
                         raw_bytes += line.len() as u64 + 1;
                     }
-                    record_agent_line(ctx, &mut outcome, &line);
+                    if let Some(ev) = classify_agent_line(ctx, &mut outcome, &line) {
+                        batch.push(ev);
+                    }
+                    if batch.len() >= 500 || drain_started.elapsed() > Duration::from_secs(1) {
+                        break;
+                    }
                 }
                 Ok(None) => {
                     eof = true;
@@ -497,12 +510,22 @@ fn run_agent(ctx: &mut Ctx) -> Result<(AgentOutcome, Option<i32>, Option<Stop>),
                 }
             }
         }
+        if !batch.is_empty() {
+            let _ = ctx.store.append_events(&ctx.row.run_id, &batch);
+        }
         if exit.is_none() {
             if let Ok(Some(status)) = child.try_wait() {
                 exit = Some(status.code());
+                exited = true;
+                // The agent is done; anything still in its process group is a stray.
+                kill_group(&mut child);
             }
         }
         if exit.is_some() && eof {
+            break;
+        }
+        if exited && !eof && last_line_at.elapsed() > Duration::from_secs(3) {
+            ctx.event("agent.output_pipe_abandoned", serde_json::Value::Null);
             break;
         }
         if exit.is_none() && stop.is_none() {
@@ -524,10 +547,12 @@ fn run_agent(ctx: &mut Ctx) -> Result<(AgentOutcome, Option<i32>, Option<Stop>),
     Ok((outcome, exit.flatten(), stop))
 }
 
-fn record_agent_line(ctx: &mut Ctx, outcome: &mut AgentOutcome, line: &str) {
+/// Parse one output line, feed the outcome, and return the event to store
+/// (or `None` once the per-run event budget is exhausted).
+fn classify_agent_line(ctx: &mut Ctx, outcome: &mut AgentOutcome, line: &str) -> Option<(String, serde_json::Value)> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
-        return;
+        return None;
     }
     let value: serde_json::Value = match serde_json::from_str(trimmed) {
         Ok(v) => v,
@@ -536,14 +561,14 @@ fn record_agent_line(ctx: &mut Ctx, outcome: &mut AgentOutcome, line: &str) {
     outcome.absorb(&value);
     if ctx.agent_events >= MAX_AGENT_EVENTS {
         ctx.agent_events_dropped += 1;
-        return;
+        return None;
     }
     ctx.agent_events += 1;
     let kind = format!(
         "agent.{}",
         value.get("type").and_then(|t| t.as_str()).unwrap_or("raw")
     );
-    ctx.event(&kind, value);
+    Some((kind, value))
 }
 
 /// Run every configured check in order under the agent identity. Returns

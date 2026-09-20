@@ -264,6 +264,19 @@ impl Store {
         Ok(seq)
     }
 
+    /// Append several events in one transaction (agent output is bursty).
+    pub fn append_events(&mut self, run_id: &str, events: &[(String, serde_json::Value)]) -> Result<u64> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut last = 0;
+        for (kind, payload) in events {
+            last = append_event_tx(&tx, run_id, kind, payload)?;
+        }
+        tx.commit()?;
+        Ok(last)
+    }
+
     /// Claim execution ownership. Succeeds only once, only from `accepted`.
     pub fn claim(&mut self, run_id: &str, owner_token: &str, pid: u32) -> Result<bool> {
         let tx = self

@@ -73,14 +73,12 @@ pub fn run(script: &str) -> i32 {
         "hang" => {
             let _ = std::fs::write("PARTIAL.md", "partial work before hang\n");
             emit(text("Working (CPU only, no network)…"));
+            // Busy loop with no network and no sleep: never returns on its own.
             let mut x: u64 = 0;
             loop {
                 x = x.wrapping_mul(6364136223846793005).wrapping_add(1);
-                if x == 1 {
-                    break;
-                }
+                std::hint::black_box(x);
             }
-            0
         }
         "huge-output" => {
             for i in 0..30_000u32 {

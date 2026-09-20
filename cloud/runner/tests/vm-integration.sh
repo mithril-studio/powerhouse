@@ -54,16 +54,7 @@ manifest() { # id script deadline checks_json
 newid() { python3 -c 'import uuid; print(uuid.uuid4())'; }
 submit() { # manifest-json -> receipt json (stdout), exit code preserved
   local f; f=$(mktemp /tmp/manifest.XXXXXX.json); echo "$1" > "$f"
-  local digest; digest=$(python3 - "$f" <<'PY'
-import json,sys,hashlib
-m=json.load(open(sys.argv[1]))
-def canon(v):
-    if isinstance(v,dict): return "{"+",".join(json.dumps(k)+":"+canon(v[k]) for k in sorted(v))+"}"
-    if isinstance(v,list): return "["+",".join(canon(x) for x in v)+"]"
-    return json.dumps(v)
-print(hashlib.sha256(canon(m).encode()).hexdigest())
-PY
-)
+  local digest; digest=$("$RUNNER" digest --manifest "$f" | jq -r .ok.digest)
   "$RUNNER" submit --manifest "$f" --expect-digest "$digest" || true
 }
 wait_terminal() { # id timeout
@@ -75,7 +66,15 @@ wait_terminal() { # id timeout
   done
   echo "TIMEOUT($s)"
 }
-events() { "$RUNNER" events "$1" --limit 500 | jq -c '.ok.events[]'; }
+events() { # page through every event
+  local after=0 page
+  while :; do
+    page=$("$RUNNER" events "$1" --after "$after" --limit 500)
+    echo "$page" | jq -c '.ok.events[]'
+    [[ $(echo "$page" | jq -r .ok.has_more) == true ]] || break
+    after=$(echo "$page" | jq -r .ok.next_after)
+  done
+}
 kinds()  { events "$1" | jq -r '.kind'; }
 
 setup_remote
@@ -175,12 +174,14 @@ echo; echo "## 12. deadline (60s) on CPU-only hang → failed, processes stopped
 ID=$(newid); submit "$(manifest "$ID" hang 60 '[]')" >/dev/null
 S=$(wait_terminal "$ID" 120); SNAP=$("$RUNNER" inspect "$ID")
 check "failed by deadline ($S)" '[[ $S == failed && $(echo "$SNAP" | j .ok.error.message) == *deadline* ]]'
-check "no processes left for run" '! pgrep -f "POWERHOUSE_RUN_ID=$ID" >/dev/null && ! systemctl is-active --quiet "powerhouse-run-$ID.service"'
+for _ in $(seq 1 30); do systemctl is-active --quiet "powerhouse-run-$ID.service" || break; sleep 1; done
+check "unit stopped after deadline" '! systemctl is-active --quiet "powerhouse-run-$ID.service"'
+check "no agent processes left for run" '[[ -z $(ps -eo pid,user,args | awk -v u="powerhouse-agent" "\$2==u") ]]'
 
 echo; echo "## 13. executor killed (crash) → interrupted, never rerun"
 ID=$(newid); submit "$(manifest "$ID" hang 600 '[]')" >/dev/null
 for _ in $(seq 1 30); do [[ $("$RUNNER" inspect "$ID" | j .ok.state) == running ]] && break; sleep 1; done
-systemctl kill --signal=SIGKILL --kill-whom=main "powerhouse-run-$ID.service"
+systemctl kill --signal=SIGKILL --kill-whom=main "powerhouse-run-$ID.service" || bad "unit was not running when killed"
 S=$(wait_terminal "$ID" 40); check "interrupted ($S)" '[[ $S == interrupted ]]'
 check "single claim (no blind rerun)" '[[ $(kinds "$ID" | grep -c "^run.claimed$") == 1 ]]'
 check "unit.finished recorded by finalize" 'kinds "$ID" | grep -q "^unit.finished$"'

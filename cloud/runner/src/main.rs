@@ -40,6 +40,11 @@ enum Cmd {
         #[arg(long)]
         credentials_from_env: bool,
     },
+    /// Print the canonical digest of a manifest (what `submit` will compute).
+    Digest {
+        #[arg(long)]
+        manifest: std::path::PathBuf,
+    },
     /// Accept a manifest and launch its supervised executor.
     Submit {
         #[arg(long)]
@@ -92,6 +97,7 @@ fn main() {
         Cmd::Install { install_binary, credentials_from_env } => {
             respond(install(&self_bin, install_binary, credentials_from_env))
         }
+        Cmd::Digest { manifest } => respond(digest_of(&manifest)),
         Cmd::Submit { manifest, expect_digest } => respond(submit(&manifest, expect_digest.as_deref())),
         Cmd::Inspect { run_id } => respond(inspect(&run_id)),
         Cmd::List => respond(list()),
@@ -260,6 +266,14 @@ fn install(self_bin: &str, install_binary: bool, credentials_from_env: bool) -> 
         steps.push("credentials stored (root-only)");
     }
     Ok(serde_json::json!({ "steps": steps, "probe": probe()? }))
+}
+
+fn digest_of(path: &std::path::Path) -> Result<serde_json::Value, RunnerError> {
+    let bytes = std::fs::read(path).map_err(|e| RunnerError::new("manifest_unreadable", e.to_string()))?;
+    let manifest: RunManifest =
+        serde_json::from_slice(&bytes).map_err(|e| RunnerError::new("manifest_invalid", e.to_string()))?;
+    manifest.validate().map_err(|m| RunnerError::new("manifest_invalid", m))?;
+    Ok(serde_json::json!({ "run_id": manifest.run_id, "digest": manifest.digest() }))
 }
 
 fn submit(manifest_path: &std::path::Path, expect_digest: Option<&str>) -> Result<powerhouse_cloud_protocol::Receipt, RunnerError> {
