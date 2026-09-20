@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["protocol", "runner"]
+
+[profile.release]
+opt-level = 2
+strip = true
