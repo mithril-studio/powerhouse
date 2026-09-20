@@ -2,68 +2,98 @@
 
 ## Status
 
-2026-09-19: slice 0 is blocked on boxd VM boot. Local baseline, CLI capability
-inspection, and a process test fixture are ready. No cloud agent feature has been implemented, and no
-detached cloud execution has been verified. Slices 1–6 remain pending.
+2026-09-20: slice 0 is **unblocked**. Both VMs that failed to boot on 2026-09-18
+started normally on 2026-09-19/20, a fresh isolated machine created on
+2026-09-20 booted in seconds, and the Linux/systemd fixture passed every
+scenario on the dedicated base. The 2026-09-18 boot failure is diagnosed
+below; it was platform-side and never involved Powerhouse code. Runner
+implementation (slices 1–2) is in progress on `feature/boxd-cloud-runs`.
 
-The user approved the proposed resource setup in this session. Provisioning
-started at 2026-09-18 23:32 UTC (2026-09-19 in Europe/Amsterdam). The cloud
-capability proof could not run; no credential has been copied or configured.
+### 2026-09-18 boot failure: diagnosis
 
-Provisioning receipt: `powerhouse-cloud-base`, stable ID
-`5a943507-3186-464c-b9f0-51f21f58c684`. Created private with `--isolated`,
-auto-suspend 300 seconds, and auto-hibernate 900 seconds. The create response
-reported `boot: timeout`; reconcile this identity instead of creating another VM.
+Evidence source: the kernel ring buffer of `powerhouse-cloud-base`, which was
+never rebooted since the golden image was built and therefore still held the
+failed first boot. Journald in the image is `Storage=none`, the exec server is
+in-kernel (`lttle` module, port 57073, no userspace process), and the public
+console-log API is unimplemented, so `dmesg` is the only in-guest record.
 
-Recovery: reboot and then a stop/start cycle both left the same VM in `starting`;
-three runtime probes failed with wake timeouts (`pending`, then `starting`).
-The single approved fork attempt, `powerhouse-cloud-spike` from the stopped
-base, failed with `error: couldn't fork that machine`. A subsequent get returned
-`VM 'powerhouse-cloud-spike' not found`, and inventory confirmed no fork exists.
-No new machine or unrelated environment was substituted.
+| UTC | Guest-side event |
+| --- | --- |
+| 2026-09-17 15:10 | Template `tpl-prep-computer-2x8-0.1.50` boots and is checkpointed with memory. |
+| 2026-09-18 23:33:01 | Fresh isolated VM = memory restore of that template. `lttle` re-inits kvmclock, prints the RCU "stall" expected from a 32-hour clock jump, logs `fork detected` with the new IP/name; systemd resumes. |
+| 23:33:01.8 | Isolation strip runs: `boxd-automations.service` removed, `jobs.json` emptied, entries removed from `/usr/local/bin`, `/etc/profile.d`, `~/.config/boxd`, `~/.claude/skills`. |
+| 23:33–23:42 | No further kernel output while the control plane reported `starting` and wake timeouts. The `reboot` request never reached the guest (a real reboot would have cleared `dmesg`). |
+| 2026-09-19 20:23 | `boxd machine start` restores the VM; `fork detected`; running in <25 s. Only identity files change. |
 
-At 2026-09-18 23:42 UTC the base was confirmed **stopped**, with its disk retained.
-It is the only new resource. Its configured idle values remain 300/900 seconds;
-both were never disabled. No model call or repository upload occurred. The
-failure is at the provisioning/boot layer, before any Powerhouse code ran; the
-underlying platform cause is not known.
+Conclusion: the guest booted and ran on 2026-09-18; the platform never moved the
+new machine from `pending/starting` to `running`. The only guest-visible
+difference between the failed first boot and every later successful boot is the
+first-boot isolation strip, so the fault sits in boxd's first-provisioning path
+for isolated machines (or a server-side incident that coincided with it), not in
+isolation itself, the image generation, or anything in this repository.
 
-Follow-up diagnosis: an existing VM (`factory-ui`) successfully executed
-`uname -sm` through the same CLI/session. Both CLI 0.2.9 and checksum-verified
-0.2.17 reproduce the new base's wake timeout. The SDK reports no successful boot
-for the base, image `computer:0.1.50`; the working VM uses `computer:0.1.21`.
-Both have 2 vCPU and 8 GiB memory. The public console-log API returns
-`UNIMPLEMENTED: stream_logs not yet implemented`. Isolation and image generation
-are remaining differences, not established causes.
+Confirming experiment (2026-09-20 06:56 UTC): `powerhouse-cloud-probe-iso`
+(fresh, `--isolated`, same template btime) reported `boot: 5ms`, was `running`
+after 26 s and executed commands after 36 s. The failure no longer reproduces.
+The empty diagnostic VM `powerhouse-cloud-spike` was destroyed to free the
+slot; the probe was destroyed after the test. Fork results are recorded below.
 
-Diagnostic intent: use the still-unused second resource slot for
-`powerhouse-cloud-spike`, a fresh isolated machine with the same vendor image
-`europe-docker.pkg.dev/azin-console-prod/boxd/computer:0.1.21` as the working
-VM, rather than a fork of the base that never booted. Keep 2 vCPU/8 GiB and
-300/900-second idle settings. This compares image boot behavior without copying
-any unrelated VM's disk, code, credentials, or processes. Keep the original base
-stopped during the comparison; retain both resources afterward.
+Operational rule adopted for the provisioning adapter: on `boot: timeout`
+never create another machine. Keep the identity, wait, then `stop`/`start` the
+same VM. On 2026-09-18 an immediate stop/start did not help; 21 hours later it
+did, so the retry must be patient or escalate to the user.
 
-Diagnostic receipt: `powerhouse-cloud-spike`, ID
-`bf40caab-eee0-4183-88aa-ddfb9a098647`, created at 23:53 UTC using SDK 0.2.10.
-It also remained `pending`; CLI 0.2.17 returned a wake timeout. It was stopped
-after the comparison, with the same 300/900-second idle settings. Both test VMs
-are now stopped. This was a fresh image test, **not a successful fork**.
+### Slice 0 fixture results (2026-09-20, `powerhouse-cloud-base`)
 
-The inventory also reports an existing non-isolated VM on `computer:0.1.50`
-with a successful historical boot, so the evidence does not establish an image
-regression. Both test machines were fresh and isolated; no existing machine's
-isolation was weakened for comparison. The exact server-side boot failure is
-still unavailable through the public API. Do not describe this as a general
-boxd outage or claim that isolated execution is proven unsupported.
+Base: Ubuntu 24.04.5, Linux 6.1.0+ x86_64, systemd 255, cgroup v2, Python
+3.12.3, git 2.43.0, node 24.20.0, Claude Code 2.1.263 preinstalled; no Rust
+toolchain (installed rustup 1.98.1 + build-essential for runner builds).
+Exec runs as `boxd` (uid 1000, passwordless sudo, docker group).
 
-Positive controls: `factory-ui` (`152.236.3.40`) and `legal-ai-app`
-(`152.236.3.23`, the same public IP reported for both test VMs) each returned
-`Linux x86_64` with exit code 0 through authenticated `exec`. Only `uname -sm`
-ran in those existing environments. This rules out a blanket account/network
-failure; it does not by itself distinguish fresh-provisioning failure from an
-isolation-specific defect. No new non-isolated control was created because the
-two-resource ceiling is now reached.
+| Scenario | Result |
+| --- | --- |
+| `detach01 complete` | `start` returned 20:29:54 UTC; supervisor outcome written 20:30:04 UTC after the connection closed; `service_result=success`, exit 0; artifact present; `runner_state_denied` emitted; child stopped. |
+| duplicate `start detach01` | Refused: reservation exists. |
+| `failure01 fail` | `service_result=exit-code`, `exit_status=23` retained; artifact present. |
+| `deadline01 wait` (CPU-only) | `service_result=timeout`, killed TERM at RuntimeMaxSec; child stopped. |
+| `cancel01 wait` | `systemctl stop` → cgroup empty, `exit_status=TERM`, history retained. |
+| stray `sleep 900` children after all runs | none. |
+
+Idle policy: `config set auto-suspend.timeout 0` / `auto-hibernate.timeout 0`
+took effect (`get` showed `off`) and restoring 300/900 took effect. Only the
+external CLI can do this; the in-VM CLI is absent on isolated machines, so
+cloud-owned restoration needs an org-fenced API key (`boxd auth keys create
+--org … --expires-in-secs …`) provisioned into the runner's root-only state.
+Not done; requires user approval.
+
+Credential audit (names only): `boxd machine exec` sessions on the isolated
+base carry `CLAUDE_CODE_OAUTH_TOKEN`, `GITHUB_PAT_TOKEN`, `OPENROUTER_API_KEY`,
+`VOYAGE_API_KEY` injected by boxd org secrets. Per boxd docs isolated machines
+get them "in exec and SSH sessions only, never at boot", which matches: the
+fixture's systemd unit saw none of them. The runner therefore receives secrets
+only through an explicit root-only credentials file, and the agent identity
+only what the run needs.
+
+### Fork path (2026-09-20 06:57 UTC)
+
+`boxd machine fork powerhouse-cloud-base powerhouse-cloud-fork-probe` (source
+`running`, isolated) returned in 11 s with `boot: 230ms`; the fork
+(`0a1d1ba9-ab82-48d8-90b8-3c49c4dc43ab`, `isolated: yes`,
+`source: fork/powerhouse-cloud-base`) was `running` at +26 s. A detached fixture
+run (`forkcheck complete`) on the fork completed after the connection closed,
+with `runner_state_denied` and the child stopped; the base's control directory
+was unchanged. The 2026-09-18 `couldn't fork that machine` error was a symptom
+of the never-booted base, not of forking.
+
+Observation that matters for the runner: the fork copied the base's systemd
+state verbatim, including two **failed** transient units and all fixture
+reservations. A base must be swept clean (no reserved run IDs, no loaded
+transient units) before it is used as a fork source, and the runner must scope
+its state by VM identity rather than assume an empty store on a fresh fork.
+
+Retained resources after the session: `powerhouse-cloud-base` and
+`powerhouse-cloud-fork-probe` (both stopped; 300/900 s idle policy). Both probe
+VMs created for the boot test were destroyed.
 
 ## Local baseline
 
