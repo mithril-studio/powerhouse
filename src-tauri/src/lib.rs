@@ -1,8 +1,10 @@
+mod cloud;
 mod git;
 mod handoff;
 mod pty;
 mod queue;
 
+use cloud::commands::CloudManager;
 use handoff::HandoffWatchers;
 use pty::PtyManager;
 use queue::QueueManager;
@@ -25,6 +27,7 @@ pub fn run() {
         .manage(PtyManager::default())
         .manage(QueueManager::default())
         .manage(HandoffWatchers::default())
+        .manage(CloudManager::default())
         .invoke_handler(tauri::generate_handler![
             js_log,
             pty::pty_spawn,
@@ -49,11 +52,22 @@ pub fn run() {
             handoff::handoff_ensure_commands,
             handoff::handoff_watch_start,
             handoff::handoff_watch_stop,
+            cloud::commands::cloud_list_runs,
+            cloud::commands::cloud_inspect_source,
+            cloud::commands::cloud_probe_base,
+            cloud::commands::cloud_submit,
+            cloud::commands::cloud_sync,
+            cloud::commands::cloud_cancel,
+            cloud::commands::cloud_diff,
+            cloud::commands::cloud_import,
+            cloud::commands::cloud_forget,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                // Local processes only. Cloud runs are owned by their VM runner
+                // and deliberately untouched here.
                 app.state::<PtyManager>().kill_all();
                 app.state::<QueueManager>().kill_running();
             }
