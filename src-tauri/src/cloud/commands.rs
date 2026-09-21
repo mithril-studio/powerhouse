@@ -593,7 +593,22 @@ pub fn do_import(mgr: &CloudManager, run_id: &str) -> Result<ImportResult, Strin
     let repo = Path::new(&record.repo_path);
     let branch = record.manifest.output_branch.clone();
     let refspec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
-    git(repo, &["fetch", "--quiet", "origin", &refspec])?;
+    // Fetch with Powerhouse's own token for HTTPS remotes (header in the
+    // environment only), so import works even without a local git helper.
+    let remote = record.manifest.source.remote_url.clone();
+    let auth_env: Vec<(String, String)> = if remote.starts_with("https://") {
+        match secrets::render_run_credentials(mgr.secrets.as_ref(), false, Some(&remote)) {
+            Ok(text) => text
+                .lines()
+                .find_map(|l| l.strip_prefix("GIT_PUBLISH_TOKEN=").map(|t| t.to_string()))
+                .map(|t| https_auth_env(&t))
+                .unwrap_or_default(),
+            Err(_) => vec![],
+        }
+    } else {
+        vec![]
+    };
+    git_with_env(repo, &["fetch", "--quiet", "origin", &refspec], &auth_env)?;
     let remote_sha = git(repo, &["rev-parse", &format!("refs/remotes/origin/{branch}")])?;
     if remote_sha != result_sha {
         return Err(format!(
@@ -611,6 +626,30 @@ pub fn do_import(mgr: &CloudManager, run_id: &str) -> Result<ImportResult, Strin
     record.imported_worktree = Some(path.clone());
     mgr.store.lock().unwrap().put(record)?;
     Ok(ImportResult { worktree_path: path, branch: local_branch, result_sha })
+}
+
+fn https_auth_env(token: &str) -> Vec<(String, String)> {
+    use base64::Engine;
+    let basic = base64::engine::general_purpose::STANDARD.encode(format!("x-access-token:{token}"));
+    vec![
+        ("GIT_CONFIG_COUNT".into(), "1".into()),
+        ("GIT_CONFIG_KEY_0".into(), "http.extraHeader".into()),
+        ("GIT_CONFIG_VALUE_0".into(), format!("Authorization: Basic {basic}")),
+    ]
+}
+
+fn git_with_env(cwd: &Path, args: &[&str], env: &[(String, String)]) -> Result<String, String> {
+    let mut cmd = std::process::Command::new(crate::git::GIT);
+    cmd.current_dir(cwd).args(args).env("GIT_TERMINAL_PROMPT", "0");
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let out = cmd.output().map_err(|e| format!("failed to run git: {e}"))?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else {
+        Err(super::super::cloud::redact_stderr(&String::from_utf8_lossy(&out.stderr)))
+    }
 }
 
 // --- tauri surface ------------------------------------------------------------
@@ -1120,6 +1159,12 @@ mod e2e {
             .map(PathBuf::from)
             .unwrap_or_else(|_| dir.path().join("cloud-runs.json"));
         let wait_secs: u64 = std::env::var("POWERHOUSE_CLOUD_E2E_WAIT_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(300);
+        if let Ok(existing) = std::env::var("POWERHOUSE_CLOUD_E2E_IMPORT") {
+            let mgr2 = CloudManager::with(CloudStore::open(store_path), Arc::new(BoxdCli::default()), Arc::new(secrets::Keychain));
+            let imported = do_import(&mgr2, &existing).expect("import");
+            eprintln!("IMPORT OK: {} at {} ({})", imported.branch, imported.worktree_path, imported.result_sha);
+            return;
+        }
         if let Ok(existing) = std::env::var("POWERHOUSE_CLOUD_E2E_RESUME") {
             // Reconcile-only mode: no submission, just follow an accepted run.
             let mgr2 = CloudManager::with(CloudStore::open(store_path), Arc::new(BoxdCli::default()), Arc::new(secrets::Keychain));
