@@ -10,6 +10,31 @@ runbook). Everything lives on `feature/boxd-cloud-runs`. The 2026-09-18 boot
 failure is diagnosed below; it was platform-side and never involved Powerhouse
 code. Operational guidance: `docs/boxd-cloud-agents-runbook.md`.
 
+### Credential model (2026-09-21)
+
+Decisions: Powerhouse stays single-user; no separate boxd org; ambient boxd org
+secrets are removed by hand; Powerhouse machines are named `powerhouse-<branch>`.
+Implemented: credentials come only from the macOS Keychain (`Powerhouse` /
+`claude_oauth_token`, `github_token`), are rendered per run with only what the
+run needs, uploaded next to the manifest, taken into root-only custody by
+`submit --credentials`, delivered separately (model token → agent env, Git
+token → trusted publisher env), and shredded at every terminal state. The base
+never holds a secret. Evidence on the base (Linux suite, 69/69): drop location
+shredded, custody file `600:root` while live, agent saw the model token and not
+the Git token, brief present and excluded from the published tree, token value
+absent from events, file destroyed after completion and after cancel, empty
+credential files rejected. The GitHub token pasted in chat on 2026-09-21 was
+rejected by GitHub (401) and was **not** stored anywhere; a valid fine-grained
+token has to be entered in the cloud form.
+
+Second desktop e2e (2026-09-21 10:18 UTC): run
+`931241ff-84f2-40ba-b5c0-522785b5de46` on `powerhouse-main`
+(`16b7f280-75cf-4413-bb95-5f3b7b14c95a`, fork of the base), accepted after 82 s,
+recovered by id from a fresh store, completed with result `625b818b…`, brief
+present at `.powerhouse/cloud-task.md` in the workspace, `pending_credentials`
+0, idle policy restored to 300/900 s. The earlier evidence fork `ph-d3408a6f`
+was destroyed to keep the two-machine footprint.
+
 ### Slice evidence (2026-09-20)
 
 | Slice | Evidence |
@@ -55,10 +80,11 @@ Claude**.
 
 ### Retained resources after this session
 
-`powerhouse-cloud-base` (stopped) and `ph-d3408a6f` (stopped, holds the e2e
-evidence and its workspace). `powerhouse-cloud-spike`, `powerhouse-cloud-probe-iso`
-and `powerhouse-cloud-fork-probe` were destroyed after their tests. No model
-call was made; no credential was copied anywhere.
+`powerhouse-cloud-base` (stopped) and `powerhouse-main` (stopped, holds the
+2026-09-21 e2e evidence and its workspace). `powerhouse-cloud-spike`,
+`powerhouse-cloud-probe-iso`, `powerhouse-cloud-fork-probe` and `ph-d3408a6f`
+were destroyed after their tests. No model call was made; no credential was
+copied anywhere.
 
 ### 2026-09-18 boot failure: diagnosis
 
