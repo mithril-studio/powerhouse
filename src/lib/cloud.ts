@@ -134,6 +134,8 @@ export interface ProbeInfo {
 export interface SecretStatus {
   claude: boolean;
   github: boolean;
+  /** Keychain entry that serves the queried remote, e.g. `github_token:mithril-studio`. */
+  github_slot: string | null;
 }
 
 export interface HandoffDoc {
@@ -179,9 +181,16 @@ export const cloudImport = (runId: string) =>
   invoke<{ worktree_path: string; branch: string; result_sha: string }>("cloud_import", { runId });
 export const cloudForget = (runId: string, force = false) =>
   invoke<void>("cloud_forget", { runId, force });
-export const cloudSecretStatus = () => invoke<SecretStatus>("cloud_secret_status");
-export const cloudSetSecret = (name: "claude_oauth_token" | "github_token", value: string) =>
-  invoke<SecretStatus>("cloud_set_secret", { name, value });
+export const cloudSecretStatus = (remoteUrl?: string | null) =>
+  invoke<SecretStatus>("cloud_secret_status", { remoteUrl: remoteUrl ?? null });
+/** `name`: `claude_oauth_token`, `github_token`, or `github_token:<owner>[/<repo>]`. */
+export const cloudSetSecret = (name: string, value: string, remoteUrl?: string | null) =>
+  invoke<SecretStatus>("cloud_set_secret", { name, value, remoteUrl: remoteUrl ?? null });
+/** Owner of an https GitHub-style remote, for scoped token slots. */
+export const remoteOwner = (remoteUrl: string | null | undefined): string | null => {
+  const m = /^https:\/\/[^/]+\/([^/]+)\/([^/]+?)(?:\.git)?$/.exec(remoteUrl ?? "");
+  return m ? m[1] : null;
+};
 export const cloudLatestHandoff = (sourcePath: string) =>
   invoke<HandoffDoc | null>("cloud_latest_handoff", { sourcePath });
 

@@ -66,13 +66,24 @@ recognisable by name (`powerhouse-<branch>`, base `powerhouse-cloud-base`).
 
 How a run gets its credentials:
 
-1. You store two secrets once in the cloud form. They live in the macOS
-   Keychain under service `Powerhouse` (`claude_oauth_token`, `github_token`).
-   Claude: the token from `claude setup-token` on the account you want the
-   cloud agent to bill. GitHub: a fine-grained personal access token limited to
-   the target repository with *Contents: read and write* (needed to fetch a
-   private repo and to push the run branch). Nothing is read from boxd, from
-   the base VM, or from your other tools.
+1. You store secrets once in the cloud form. They live in the macOS Keychain
+   under service `Powerhouse`. Claude: `claude_oauth_token`, the token from
+   `claude setup-token` on the account you want the cloud agent to bill.
+   GitHub: fine-grained personal access tokens with *Contents: read and write*
+   (needed to fetch a private repo and to push the run branch). Because
+   Powerhouse runs tasks on any repository you develop, and a fine-grained
+   token covers exactly one resource owner, store one token per owner under
+   `github_token:<owner>` with access to all that owner's repositories. To
+   narrow a sensitive repository, add `github_token:<owner>/<repo>`; a plain
+   `github_token` is the last fallback. Powerhouse picks the most specific
+   entry for a run's remote and the form shows which one applies. Nothing is
+   read from boxd, from the base VM, or from your other tools.
+   Command-line equivalent:
+
+   ```sh
+   security add-generic-password -s Powerhouse -a github_token:mithril-studio -w '<github_pat_…>' -U
+   security add-generic-password -s Powerhouse -a claude_oauth_token -w '<token from claude setup-token>' -U
+   ```
 2. On submit, Powerhouse renders a `KEY=VALUE` file with only what that run
    needs (`CLAUDE_CODE_OAUTH_TOKEN` for Claude runs, `GIT_PUBLISH_TOKEN` for
    HTTPS remotes), uploads it next to the manifest, and passes it to

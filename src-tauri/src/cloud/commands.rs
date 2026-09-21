@@ -315,8 +315,8 @@ pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest
     // Credentials are Powerhouse's own, per run, and must exist before any
     // machine is touched. Git publication needs a token only for HTTPS remotes.
     let need_claude = manifest.agent.provider == AgentProvider::Claude;
-    let need_git = manifest.source.remote_url.starts_with("https://");
-    let credentials_text = secrets::render_run_credentials(mgr.secrets.as_ref(), need_claude, need_git)?;
+    let git_remote = manifest.source.remote_url.starts_with("https://").then_some(manifest.source.remote_url.as_str());
+    let credentials_text = secrets::render_run_credentials(mgr.secrets.as_ref(), need_claude, git_remote)?;
     let idle_policy = (parse_idle(base.auto_suspend.as_deref()), parse_idle(base.auto_hibernate.as_deref()));
 
     let mut record = CloudRunRecord {
@@ -695,22 +695,30 @@ pub async fn cloud_import(app: AppHandle, run_id: String) -> Result<ImportResult
     .map_err(|e| e.to_string())?
 }
 
+/// Status for the remote a run would use, so the form can show which Keychain
+/// entry (`github_token`, `github_token:<owner>`, `github_token:<owner>/<repo>`)
+/// applies.
 #[tauri::command]
-pub fn cloud_secret_status(state: State<CloudManager>) -> Result<secrets::SecretStatus, String> {
-    secrets::status(state.secrets.as_ref())
+pub fn cloud_secret_status(state: State<CloudManager>, remote_url: Option<String>) -> Result<secrets::SecretStatus, String> {
+    secrets::status_for(state.secrets.as_ref(), remote_url.as_deref())
 }
 
+/// `name` is `claude_oauth_token`, `github_token`, or a scoped
+/// `github_token:<owner>[/<repo>]` slot. An empty value clears the entry.
 #[tauri::command]
-pub fn cloud_set_secret(state: State<CloudManager>, name: String, value: String) -> Result<secrets::SecretStatus, String> {
-    if !secrets::KNOWN.contains(&name.as_str()) {
+pub fn cloud_set_secret(state: State<CloudManager>, name: String, value: String, remote_url: Option<String>) -> Result<secrets::SecretStatus, String> {
+    if !secrets::KNOWN.contains(&name.as_str()) && !secrets::is_github_slot(&name) {
         return Err(format!("unknown secret {name}"));
+    }
+    if name.len() > 200 || name.chars().any(|c| c.is_whitespace()) {
+        return Err("invalid secret name".into());
     }
     if value.trim().is_empty() {
         state.secrets.clear(&name)?;
     } else {
         state.secrets.set(&name, value.trim())?;
     }
-    secrets::status(state.secrets.as_ref())
+    secrets::status_for(state.secrets.as_ref(), remote_url.as_deref())
 }
 
 #[derive(Clone, Debug, serde::Serialize)]

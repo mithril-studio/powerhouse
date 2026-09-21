@@ -8,6 +8,7 @@ import {
   cloudSecretStatus,
   cloudSetSecret,
   cloudSubmit,
+  remoteOwner,
   type ProbeInfo,
   type SecretStatus,
   type SourceInfo,
@@ -42,6 +43,7 @@ export function CloudRunModal() {
   const [secretsOpen, setSecretsOpen] = useState(false);
   const [claudeInput, setClaudeInput] = useState("");
   const [githubInput, setGithubInput] = useState("");
+  const [githubScope, setGithubScope] = useState<"owner" | "all" | "repo">("owner");
   const [secretError, setSecretError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -61,14 +63,15 @@ export function CloudRunModal() {
     setGithubInput("");
     requestAnimationFrame(() => taskRef.current?.focus());
     void cloudInspectSource(modal.sourcePath)
-      .then(setSource)
-      .catch((e) => setSourceError(String(e)));
-    void cloudSecretStatus()
+      .then((src) => {
+        setSource(src);
+        return cloudSecretStatus(src.remote_url);
+      })
       .then((st) => {
         setSecrets(st);
         setSecretsOpen(!st.claude || !st.github);
       })
-      .catch((e) => setSecretError(String(e)));
+      .catch((e) => setSourceError(String(e)));
     // The handoff document is the plan Powerhouse already produces; offer it as the brief.
     void cloudLatestHandoff(modal.sourcePath)
       .then((doc) => {
@@ -88,10 +91,19 @@ export function CloudRunModal() {
   const credsReady = !!secrets && secrets.claude && (!needsGit || secrets.github);
   const canSubmit = !!task.trim() && !!source && problems.length === 0 && !busy && !!cloud.baseVm.trim() && credsReady;
 
-  const saveSecret = async (name: "claude_oauth_token" | "github_token", value: string) => {
+  const owner = remoteOwner(source?.remote_url);
+  const repoSlug = source?.remote_url ? /\/([^/]+?)(?:\.git)?$/.exec(source.remote_url)?.[1] ?? null : null;
+  const githubSlotName =
+    githubScope === "all" || !owner
+      ? "github_token"
+      : githubScope === "repo" && repoSlug
+        ? `github_token:${owner}/${repoSlug}`
+        : `github_token:${owner}`;
+
+  const saveSecret = async (name: string, value: string) => {
     setSecretError(null);
     try {
-      setSecrets(await cloudSetSecret(name, value));
+      setSecrets(await cloudSetSecret(name, value, source?.remote_url));
       if (name === "claude_oauth_token") setClaudeInput("");
       else setGithubInput("");
     } catch (e) {
@@ -298,7 +310,16 @@ export function CloudRunModal() {
           <div className="flex items-center gap-2">
             <span className="font-semibold uppercase tracking-wider text-[11px] text-muted-foreground">Powerhouse credentials</span>
             <span className="text-muted-foreground">
-              Claude {secrets?.claude ? "✓" : "missing"} · GitHub {secrets?.github ? "✓" : needsGit ? "missing" : "not needed"}
+              Claude {secrets?.claude ? "✓" : "missing"} · GitHub{" "}
+              {secrets?.github ? (
+                <>
+                  ✓ <span className="font-mono">{secrets.github_slot}</span>
+                </>
+              ) : needsGit ? (
+                "missing"
+              ) : (
+                "not needed"
+              )}
             </span>
             <button
               onClick={() => setSecretsOpen((o) => !o)}
@@ -335,18 +356,31 @@ export function CloudRunModal() {
                   type="password"
                   value={githubInput}
                   onChange={(e) => setGithubInput(e.target.value)}
-                  placeholder={secrets?.github ? "GitHub token (stored) — paste to replace" : "GitHub fine-grained token: this repo, contents: read & write"}
+                  placeholder="GitHub fine-grained token, Contents: read & write"
                   spellCheck={false}
                   className={`${input} font-mono`}
                 />
+                <select
+                  value={githubScope}
+                  onChange={(e) => setGithubScope(e.target.value as "owner" | "all" | "repo")}
+                  title="Which Keychain slot this token fills. Powerhouse picks the most specific slot for a run's remote."
+                  className="h-8 shrink-0 rounded-lg border border-input bg-background px-2 text-xs outline-none"
+                >
+                  {owner && <option value="owner">for {owner}</option>}
+                  {owner && repoSlug && <option value="repo">only {owner}/{repoSlug}</option>}
+                  <option value="all">any owner</option>
+                </select>
                 <button
-                  onClick={() => void saveSecret("github_token", githubInput)}
-                  disabled={!githubInput.trim() && !secrets?.github}
+                  onClick={() => void saveSecret(githubSlotName, githubInput)}
+                  disabled={!githubInput.trim()}
                   className="h-8 shrink-0 rounded-lg border border-border px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
                 >
-                  {githubInput.trim() ? "Save" : "Clear"}
+                  Save
                 </button>
               </div>
+              <p className="text-muted-foreground">
+                GitHub fine-grained tokens cover one owner. Store one per owner you develop under ("for {owner ?? "owner"}", all its repositories), or narrow a sensitive repo with its own token. Saves to <span className="font-mono">{githubSlotName}</span>.
+              </p>
               {secretError && <Problem>{secretError}</Problem>}
             </div>
           )}
