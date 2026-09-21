@@ -171,12 +171,17 @@ fn probe() -> Result<ProbeInfo, RunnerError> {
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default();
-    let claude_version = std::process::Command::new("claude")
-        .arg("--version")
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    // Report Claude as the *agent identity* would see it; a root-only view
+    // would hide the usual failure (binary under /home/boxd, not traversable).
+    let claude_version = {
+        let mut c = std::process::Command::new(agent::claude_binary());
+        c.arg("--version").env_clear().env("PATH", format!("{}:/usr/local/bin:/usr/bin:/bin", paths::AGENT_TOOLS_BIN)).env("HOME", "/tmp");
+        if let Ok((uid, gid)) = exec::agent_uid_gid() {
+            use std::os::unix::process::CommandExt;
+            c.uid(uid).gid(gid);
+        }
+        c.output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    };
     let git_version = std::process::Command::new("git")
         .arg("--version")
         .output()

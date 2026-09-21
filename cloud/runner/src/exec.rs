@@ -253,7 +253,12 @@ pub fn execute(run_id: &str, self_bin: &str) -> Result<(), String> {
     match outcome {
         Ok(()) => Ok(()),
         Err(e) => {
+            // An internal error is still a definite outcome: record it as
+            // failed at the current stage so finalize does not have to guess.
             eprintln!("run {run_id}: {e}");
+            let stage = ctx.store.get(run_id).ok().and_then(|r| r.stage).unwrap_or_else(|| "executor".into());
+            let partial = empty_result(&ctx);
+            let _ = finish(&mut ctx, RunState::Failed, Some(RunError { stage, message: e.clone() }), &partial);
             Ok(())
         }
     }
@@ -706,7 +711,7 @@ fn run_check_command(ctx: &mut Ctx, command: &str, log_path: &Path) -> (Option<i
     let mut cmd = Command::new("/bin/bash");
     cmd.arg("-c").arg(command);
     cmd.env_clear()
-        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+        .env("PATH", format!("{}:/usr/local/bin:/usr/bin:/bin", paths::AGENT_TOOLS_BIN))
         .env("HOME", &home)
         .env("USER", paths::AGENT_USER)
         .env("LANG", "C.UTF-8")

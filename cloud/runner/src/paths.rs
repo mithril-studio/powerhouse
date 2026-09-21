@@ -8,6 +8,9 @@ pub const DEFAULT_WORK_ROOT: &str = "/var/lib/powerhouse-runner-work";
 pub const DEFAULT_BIN: &str = "/usr/local/bin/powerhouse-runner";
 pub const AGENT_USER: &str = "powerhouse-agent";
 pub const UNIT_PREFIX: &str = "powerhouse-run-";
+/// Tools staged for the unprivileged agent identity (root-owned, world-readable).
+/// The base image keeps Claude under /home/boxd, which the agent cannot traverse.
+pub const AGENT_TOOLS_BIN: &str = "/opt/powerhouse/bin";
 pub const RECONCILE_UNIT: &str = "powerhouse-runner-reconcile.service";
 
 /// `POWERHOUSE_RUNNER_ROOT` lets tests point the store somewhere writable.

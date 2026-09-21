@@ -91,7 +91,7 @@ pub fn build_command(
             c
         }
         AgentProvider::Claude => {
-            let mut c = Command::new("claude");
+            let mut c = Command::new(claude_binary());
             c.arg("--print")
                 .arg("--verbose")
                 .arg("--output-format")
@@ -117,7 +117,7 @@ pub fn build_command(
         }
     };
     cmd.env_clear();
-    cmd.env("PATH", "/usr/local/bin:/usr/bin:/bin");
+    cmd.env("PATH", format!("{}:/usr/local/bin:/usr/bin:/bin", crate::paths::AGENT_TOOLS_BIN));
     cmd.env("HOME", home);
     cmd.env("USER", crate::paths::AGENT_USER);
     cmd.env("LANG", "C.UTF-8");
@@ -130,6 +130,16 @@ pub fn build_command(
     }
     cmd.current_dir(workspace);
     cmd
+}
+
+/// Claude staged for the agent identity, falling back to PATH lookup.
+pub fn claude_binary() -> String {
+    let staged = format!("{}/claude", crate::paths::AGENT_TOOLS_BIN);
+    if Path::new(&staged).exists() {
+        staged
+    } else {
+        "claude".to_string()
+    }
 }
 
 pub fn build_prompt(m: &RunManifest) -> String {

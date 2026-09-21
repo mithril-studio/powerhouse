@@ -68,6 +68,11 @@ if [[ $RESET == 1 ]]; then
   x sudo sh -c 'systemctl stop "powerhouse-run-*.service" 2>/dev/null; rm -rf /var/lib/powerhouse-runner/runner.db* /var/lib/powerhouse-runner/results /var/lib/powerhouse-runner/publish /var/lib/powerhouse-runner-work/*; echo reset'
 fi
 
+echo "→ staging Claude for the unprivileged agent identity (/opt/powerhouse/bin)"
+# The image installs Claude under /home/boxd, which powerhouse-agent cannot
+# traverse. Copy the native binary (or wrapper + node) to a world-readable path.
+x sudo sh -c 'set -e; install -d -m 0755 /opt/powerhouse/bin; src=$(readlink -f /usr/local/bin/claude || readlink -f /home/boxd/.local/bin/claude); if head -c 2 "$src" | grep -q "#!"; then node=$(readlink -f /usr/local/bin/node); install -d -m 0755 /opt/powerhouse/node; cp -a "$(dirname "$(dirname "$node")")"/. /opt/powerhouse/node/; chmod -R a+rX /opt/powerhouse/node; ln -sfn /opt/powerhouse/node/bin/node /opt/powerhouse/bin/node; fi; install -m 0755 "$src" /opt/powerhouse/bin/claude; chmod -R a+rX /opt/powerhouse; su -s /bin/sh -c "/opt/powerhouse/bin/claude --version" powerhouse-agent 2>/dev/null || echo "agent user not created yet; verified after install"'
+
 echo "→ installing"
 x sudo /home/boxd/powerhouse-cloud/cloud/target/release/powerhouse-runner install
 

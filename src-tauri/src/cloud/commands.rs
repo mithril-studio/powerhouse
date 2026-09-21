@@ -1114,26 +1114,44 @@ mod e2e {
         };
         let source = std::env::var("POWERHOUSE_CLOUD_E2E_SOURCE").expect("POWERHOUSE_CLOUD_E2E_SOURCE");
         let dir = tempfile::tempdir().unwrap();
-        let store_path = dir.path().join("cloud-runs.json");
+        // A persistent store path lets a later invocation keep following the
+        // same run (the cloud run outlives this process either way).
+        let store_path = std::env::var("POWERHOUSE_CLOUD_E2E_STORE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| dir.path().join("cloud-runs.json"));
+        let wait_secs: u64 = std::env::var("POWERHOUSE_CLOUD_E2E_WAIT_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(300);
+        if let Ok(existing) = std::env::var("POWERHOUSE_CLOUD_E2E_RESUME") {
+            // Reconcile-only mode: no submission, just follow an accepted run.
+            let mgr2 = CloudManager::with(CloudStore::open(store_path), Arc::new(BoxdCli::default()), Arc::new(secrets::Keychain));
+            let r = do_sync(&mgr2, None, &existing, true).expect("sync");
+            eprintln!("RESUME state={:?} events={} err={:?} result={:?}", r.state(), r.events.len(), r.last_sync_error, r.result.as_ref().map(|x| (x.result_sha.clone(), x.published, x.checks.iter().map(|c| format!("{}={:?}", c.name, c.status)).collect::<Vec<_>>())));
+            return;
+        }
         let mgr = CloudManager::with(CloudStore::open(store_path.clone()), Arc::new(BoxdCli::default()), Arc::new(secrets::Keychain));
+        // Provider/task/check are overridable so the same test drives the real
+        // Claude path: POWERHOUSE_CLOUD_E2E_PROVIDER=claude plus TASK/CHECK.
+        let provider = std::env::var("POWERHOUSE_CLOUD_E2E_PROVIDER").unwrap_or_else(|_| "fake".into());
+        let task = std::env::var("POWERHOUSE_CLOUD_E2E_TASK").unwrap_or_else(|_| "E2E: add CLOUD_RUN.md".into());
+        let check = std::env::var("POWERHOUSE_CLOUD_E2E_CHECK").unwrap_or_else(|_| "test -f CLOUD_RUN.md".into());
+        let expect_file = std::env::var("POWERHOUSE_CLOUD_E2E_EXPECT_FILE").unwrap_or_else(|_| "CLOUD_RUN.md".into());
         let req = SubmitRequest {
             repo_id: "e2e".into(),
             repo_path: source.clone(),
-            repo_name: "e2e".into(),
+            repo_name: Path::new(&source).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "e2e".into()),
             source_path: source.clone(),
-            task: "E2E: add CLOUD_RUN.md".into(),
-            acceptance_criteria: vec![],
+            task: task.clone(),
+            acceptance_criteria: vec![format!("{expect_file} exists and the check passes")],
             base_vm: base,
-            checks: vec![CheckSpec { name: "file exists".into(), command: "test -f CLOUD_RUN.md".into() }],
-            deadline_seconds: 600,
-            permission_mode: "dontAsk".into(),
-            allowed_tools: vec![],
-            max_turns: None,
-            max_budget_usd: None,
-            model: None,
-            provider: "fake".into(),
-            fake_script: Some("slow-complete".into()),
-            brief: "# E2E plan\nAdd CLOUD_RUN.md".into(),
+            checks: vec![CheckSpec { name: "acceptance".into(), command: check }],
+            deadline_seconds: 900,
+            permission_mode: "acceptEdits".into(),
+            allowed_tools: vec!["Read".into(), "Edit".into(), "Write".into(), "Glob".into(), "Grep".into(), "Bash".into()],
+            max_turns: Some(30),
+            max_budget_usd: Some(1.0),
+            model: std::env::var("POWERHOUSE_CLOUD_E2E_MODEL").ok(),
+            provider: provider.clone(),
+            fake_script: (provider == "fake").then(|| "slow-complete".to_string()),
+            brief: format!("# Plan\n\n1. Read the repository layout.\n2. {task}\n3. Make the acceptance check pass: it verifies {expect_file} exists.\n"),
         };
         let t0 = Instant::now();
         let rec = do_submit(&mgr, None, req).expect("submit");
@@ -1145,7 +1163,7 @@ mod e2e {
         // "Close the app": a brand-new manager reloads the receipt from disk and
         // reconciles purely by run id.
         let mgr2 = CloudManager::with(CloudStore::open(store_path), Arc::new(BoxdCli::default()), Arc::new(secrets::Keychain));
-        let deadline = Instant::now() + Duration::from_secs(300);
+        let deadline = Instant::now() + Duration::from_secs(wait_secs);
         let mut last = None;
         while Instant::now() < deadline {
             let r = do_sync(&mgr2, None, &run_id, false).expect("sync");
@@ -1167,7 +1185,7 @@ mod e2e {
         assert_eq!(r.state(), Some(powerhouse_cloud_protocol::RunState::Completed), "{:?}", r.snapshot);
         let res = r.result.expect("result");
         assert!(res.published);
-        assert_eq!(res.changed_files, vec!["CLOUD_RUN.md".to_string()]);
+        assert!(res.changed_files.iter().any(|f| f == &expect_file), "changed files: {:?}", res.changed_files);
         assert!(r.idle_policy_restored);
         let claims = r.events.iter().filter(|e| e.kind == "run.claimed").count();
         assert_eq!(claims, 1, "exactly one agent execution");
