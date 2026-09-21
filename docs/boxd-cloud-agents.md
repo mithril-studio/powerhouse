@@ -65,14 +65,15 @@ Important compatibility requirements:
 ### Implement
 
 - A `Run in cloud` action for an existing repository, with a task and an exact committed source revision available from its configured remote.
-- A user-selected, private, prepared boxd base and an isolated fork for each independent task.
-- One active run per task VM. A second execution cannot mutate the same workspace concurrently.
+- A versioned, private base **snapshot** (published by `scripts/cloud-base-setup.sh --publish-snapshot`) and one isolated task VM created from it per run. No Powerhouse machine holds a boxd slot while idle (revised 2026-09-21; see `docs/boxd-cloud-vm-lifecycle-plan.md`).
+- One run per task VM (`ph-<run8>`). Each run owns its machine; a second execution cannot mutate the same workspace concurrently.
 - One supported headless agent: **Claude**, unless the capability spike establishes a blocker and the user approves a different first agent.
 - Durable submission receipts, run state, ordered events, cancellation, deadlines, and results.
 - A cloud-run view with status, output, validation results, summary, and diff/artifact access.
 - Reconnect and app-restart reconciliation without duplicate execution.
 - Result publication to a unique task branch and safe import into a new local worktree.
-- Explicit setup, recovery, idle-policy, and cleanup documentation.
+- A machine lifecycle owned by the desktop: release the VM once a completed run is cached and its remote branch verified; hold, park (snapshot + destroy) and restore VMs of runs that ended any other way; discard on request. Capacity gate against the org's 20 slots.
+- Explicit setup, recovery, lifecycle, and cleanup documentation.
 
 ### Do not implement in this milestone
 
@@ -82,7 +83,7 @@ Important compatibility requirements:
 - Follow-up conversations, interactive approval workflows, or automatic resumption after an ambiguous crash.
 - A fleet-wide cloud scheduler, dependent tasks, multi-device account synchronization, or automatic VM-capacity management.
 - Full remote file browsing/editing, live filesystem synchronization, or a rewrite of the local merge queue.
-- Automatic merging, production deployments, automatic VM deletion, or a public runner HTTP endpoint.
+- Automatic merging, production deployments, or a public runner HTTP endpoint. (Automatic VM deletion *is* in scope since the 2026-09-21 lifecycle revision, under the invariants in section 7.)
 
 **Stop when the acceptance tests in section 11 pass.** List remaining roadmap items; do not silently expand scope to implement them.
 
@@ -220,16 +221,18 @@ Keep desktop connection state and boxd machine state separate from this state ma
 - Validate IDs, paths, URLs, event payloads, and artifact sizes. Prevent traversal and shell interpolation. Treat model output and repository content as untrusted.
 - Redact known credentials from diagnostics and never include secrets in manifests, local UI persistence, or test fixtures. Minimize retained sensitive output.
 
-### Suspension, deadlines, and retention
+### Suspension, deadlines, and machine lifecycle
 
-boxd's idle policies are network-based. CPU-only checks must keep running without laptop traffic.
+Revised 2026-09-21 (`docs/boxd-cloud-vm-lifecycle-plan.md`). The org has 20 machine slots; no Powerhouse machine may hold one while idle. Templates and finished workspaces live as snapshots, which are cheaper to host and boot in seconds.
 
-- Disable **both auto-suspend and auto-hibernate** during active work, and verify effective settings.
+- The base is a versioned **snapshot**, never a VM. Each run creates `ph-<run8>` from it with `--isolated` and both idle timers at `0` (boxd's idle policies are network-based; CPU-only checks must keep running without laptop traffic). The manifest pins the snapshot name and the version current at submission; boxd cannot create from an older version, so the created machine's `source` is checked against the pinned version and a mismatch is refused and the machine removed.
 - Enforce the run deadline in the cloud across agent work, checks, and publication—not with a desktop timer.
-- Establish and test a cloud-owned way to restore post-run idle policy. The trusted supervisor owns any necessary lifecycle capability; the agent must not inherit it. Do not assume the external CLI is also the in-VM CLI.
-- Apply terminal cleanup after success, cancellation, failure, and deadline expiry. Preserve recoverable work; never destroy a VM automatically in v1.
-- Document retained VM/artifact costs and the explicit cleanup procedure. Do not claim a provider-reported spend estimate is a hard budget limit.
-- If the platform cannot support required isolation or independent lifecycle enforcement, stop the capability spike and report the limitation before broad implementation.
+- **Release** a `completed` run's VM as soon as the result manifest, all event pages and `diff.patch` are cached locally and `git ls-remote` shows the recorded result SHA on the output branch. The branch and the local cache are the record.
+- **Hold** the VM of a run that ended `failed`, `blocked`, `cancelled` or `interrupted` (partial work only exists in its workspace) for one hour, then **park** it: `snapshots save ph-<run8>-park`, confirm `ready`, destroy the VM. **Restore** on request creates a new `ph-<run8>` from the park snapshot and holds it again. **Discard** removes the VM and the park snapshot. Forget refuses while either exists.
+- Invariants: never remove a VM whose runner reports a live run (cancel first, confirm `cancelled`); never remove a VM before the cache-and-verify gate; never remove a park snapshot while the run is parked or restoring; persist the intended machine state and resource names before each boxd call and reconcile a lost acknowledgement by name (`machine get`, `snapshots list`); destructive calls only accept `ph-…` names.
+- The hold timer and the park/release work run in the desktop while the app is open. A held VM stays up while the app is closed; the always-on Powerhouse instance takes this loop over later without a model change.
+- A capacity gate refuses to create a VM when the org already has `ceiling` machines (default 18 of 20). The Cloud tab shows Powerhouse machines and snapshots against the org total.
+- Document snapshot costs (a park snapshot is roughly the base size) and the explicit cleanup procedure. Do not claim a provider-reported spend estimate is a hard budget limit.
 
 ## 8. Result publication and local return
 
@@ -381,6 +384,12 @@ Add separate build/test commands for the standalone runner. Run its process/supe
 | Agent attempts to read runner state/control credentials | OS-enforced separation prevents access; no reliance on prompt compliance. |
 | Local import with unrelated local edits | New worktree at expected revision; existing edits are untouched. |
 | Close cloud view / startup PTY cleanup | Cloud run stays alive; existing local cleanup behavior is preserved. |
+| Completed run: release only after verified cache | VM removed only once result, all events and diff are cached and `ls-remote` shows the result SHA; a missing page or unverified remote keeps the VM and retries. |
+| Lost acknowledgment on `machine new` | The machine is found by name and reused; never two machines for one run. |
+| Lost acknowledgment on `snapshots save` | The park snapshot is found by name and the VM is then destroyed; never two saves or a destroyed VM without a ready snapshot. |
+| Park (or discard) during a live run | Refused while the runner reports the run live; cancel first. |
+| Machine ceiling reached | Submission refuses before creating anything; the record is `Not submitted` and holds no resources. |
+| Snapshot version bump between form and create | Submission refuses a version drift before creating; a machine built from a newer version than recorded is removed and the run refused. |
 
 ### Decisive real-world acceptance test
 
@@ -391,7 +400,7 @@ Add separate build/test commands for the standalone runner. Run its process/supe
 5. Reopen Powerhouse and reconnect.
 6. Confirm the same run is `Ready for review`, with complete available history, checks, summary, and result revision.
 7. Fetch its changes into a new local worktree and verify the expected modification and check outcome.
-8. Verify there was exactly one agent execution and that cloud idle policy was restored independently of reopening the app.
+8. Verify there was exactly one agent execution and that the run's VM was released (`boxd machine get ph-<run8>` → not found) once the result was cached and verified.
 
 If credentials or VM access prevent this test, report the milestone as **implemented but not cloud-verified**, not complete.
 

@@ -2,6 +2,15 @@
 
 ## Status
 
+2026-09-21 (evening): the **snapshot-based VM lifecycle**
+(`docs/boxd-cloud-vm-lifecycle-plan.md`) is implemented and verified on real
+boxd: the base is snapshot `powerhouse-base` v1 (9.8 GB), every run gets its
+own `ph-<run8>` machine, a completed run's VM is destroyed once the local cache
+and the remote branch are verified, and a failed run's VM was held, parked,
+restored and discarded end to end. Evidence in *Snapshot lifecycle* below.
+Two legacy machines (`powerhouse-main`, `powerhouse-cloud-base`) remain for
+the user to remove by hand (see *Retained resources*).
+
 2026-09-21: all six slices are implemented; slices 0–5 are verified against
 real boxd machines, including one **real headless Claude run** that finished
 and published while no desktop process was attached (details below). The one
@@ -115,13 +124,91 @@ app and sleeping the laptop, was not performed in this session and is the
 user's to do; nothing in the runner depends on the laptop once the receipt is
 durable. The Claude path is now **cloud-verified**.
 
+### Snapshot lifecycle (2026-09-21)
+
+Platform proof (slice 1), against the then-current base VM:
+
+| Step | Observation |
+| --- | --- |
+| `boxd snapshots save powerhouse-cloud-base ph-probe-base` | returned `ready` after 14 s; `{"snapshot_id": "snap_…", "version": 1, "size_bytes": 9316577280}`; `snapshots list` shows `v1`, `8.7G` |
+| `boxd machine new ph-probe --from-snapshot ph-probe-base --isolated --auto-suspend-timeout 0 --auto-hibernate-timeout 0` | returned after 11 s (`"boot": "5ms"`); `running` 21 s after the call; `machine get`: `isolated: yes`, `auto_suspend: off`, `auto_hibernate: off`, `source: snapshot/ph-probe-base:1` |
+| Runner on the snapshot-created machine | `probe` OK (systemd, cgroup v2, agent user, store), `list` empty — memory snapshot restores with systemd healthy |
+| Version pinning syntax | `--from-snapshot name@v1`, `name:v1`, `name:1`, `name/v1`, `snap_<id>:1` → `snapshot not found`. `--from-snapshot snap_<id>` works but the id is per name (re-saving keeps the id and bumps the version), so it does not pin either. **boxd always builds from the latest version.** Powerhouse therefore checks the version in `snapshots list` immediately before `machine new` and verifies the created machine's `source: snapshot/<name>:<n>` against the recorded version afterwards. |
+| Re-save same name | version `v1 → v2`, same id, `used` counts machines created from it |
+
+Base snapshot (slice 2): `scripts/cloud-base-setup.sh --publish-snapshot
+powerhouse-base` built `ph-base-build` from scratch (rustup, `cargo build
+--release` 37 s, install, probe protocol 2), swept, saved `powerhouse-base`
+**v1** (`snap_79cbf8df…`, 9.8 GB, 8 min end to end) and removed the build VM.
+The first attempt's sweep tripped on `ls` printing directory headers; fixed to
+`find -mindepth 1` and the remaining steps were run by hand with the same
+commands.
+
+Real end-to-end through the desktop backend (`cargo test cloud_e2e`, fake
+agent, source `mithril-studio/powerhouse` `main` @ `5eecc41c`, credentials from
+the Keychain):
+
+| Scenario | Run / VM | Outcome |
+| --- | --- | --- |
+| **Completed run releases its VM** (slice 4) | `3278b99e…` on `ph-3278b99e` from `powerhouse-base v1` | receipt after 104 s (create + boot + probe + upload + submit); a fresh store instance followed it to `completed` (check passed, `CLOUD_RUN.md`, result `34d0829b…`, one `run.claimed`); the sync that observed completion cached 23/23 events and `diff.patch` (187 B), verified `refs/heads/powerhouse/cloud/3278b99e…` = `34d0829b` on GitHub via `ls-remote`, asked the runner once more (not live) and removed the VM. `boxd machine get ph-3278b99e` → not found; zero `ph-*` machines in the org. |
+| **Hold → park → restore → discard** (slice 5) | `50b51537…` on `ph-50b51537`, fake script `fail`, `POWERHOUSE_CLOUD_HOLD_SECS=30` | `failed` (agent exit 23) → machine `holding`; three ticks did nothing; the fourth parked: `snapshots save ph-50b51537 ph-50b51537-park` → `v1`, 9.8 GB, then `machine remove`; VM confirmed gone, snapshot `ready`. `Restore` created `ph-50b51537` from the park snapshot in 41 s; the runner on it still reported the run `failed` and `/var/lib/powerhouse-runner-work/50b51537…` held `home` and `repo`. `Discard` removed the VM and the snapshot; both confirmed absent. |
+| **Lost submission (app killed mid-provisioning)** | `8700217b…` on `ph-8700217b` | the e2e process was killed while the record was `provisioning` and the VM `running`. A fresh store instance's sync asked the runner by run id (`not_found`), marked the record *Not submitted*, and removed `ph-8700217b` (`vm_released: true`). No machine left behind. |
+
+Fake-transport unit tests (`cargo test --manifest-path src-tauri/Cargo.toml
+cloud`, 34 passing) cover: dirty/unpushed source and missing snapshot refused
+before any record; version drift between form and submit refused; persistence
+before each side effect; accepted receipt with the pinned version in the
+manifest; missing credentials refused after only the snapshot lookup; lost
+`machine new` acknowledgement reconciled by name (one create); machine ceiling
+refused before creating and honoured when raised; failed submission after
+creation releases the VM; machine built from a newer snapshot version refused
+and removed; completed run released only after cache **and** `ls-remote`
+verification, and not while an event page is missing (tick finishes it);
+failed run holds, does not park before the timer, parks after it (save before
+remove); park and discard refused while the runner reports the run live; lost
+`snapshots save` acknowledgement reconciled by name; restore recreates the VM
+from the park snapshot and discard removes VM and snapshot; lost `machine
+remove` acknowledgement reconciled by the tick; stale snapshots never regress
+the machine state; transport errors keep the cache and never remove anything;
+forget refuses while resources are held; legacy (fork-era) records are never
+touched; inventory against the ceiling. Transport tests prove the `ph-` guard
+fires before the CLI is spawned. Store tests prove fork-era records load as
+*unmanaged* and hold no resources.
+
+Verification matrix additions:
+
+| Scenario | Status |
+| --- | --- |
+| Release only after verified cache | ✅ unit (remote missing → held; page missing → held, tick releases) + real e2e |
+| Lost ack on `machine new` | ✅ unit (timeout, machine exists → reused, one create) |
+| Lost ack on `snapshots save` | ✅ unit (timeout, snapshot exists → parked, VM removed) |
+| Park during a live run refused | ✅ unit (runner reports unit active → park and discard refused) |
+| Ceiling reached | ✅ unit (18/18 → refused before create; 19 → allowed) |
+| Snapshot version bump between submit and create | ✅ unit (form v1 vs list v2 → refused; machine `source` v2 vs recorded v1 → removed and refused). Real boxd confirmed `source` carries the version. |
+| App killed mid-provisioning | ✅ real e2e (`8700217b`, VM removed on the next sync) |
+
 ### Retained resources after this session
 
-`powerhouse-cloud-base` (stopped; runner + staged Claude, no secrets) and
-`powerhouse-main` (stopped; holds the real Claude run's workspace and result). `powerhouse-cloud-spike`,
-`powerhouse-cloud-probe-iso`, `powerhouse-cloud-fork-probe` and `ph-d3408a6f`
-were destroyed after their tests. No model call was made; no credential was
-copied anywhere.
+Snapshot `powerhouse-base` v1 (9.8 GB) is the only Powerhouse resource the
+lifecycle keeps; no `ph-*` machine or `ph-*-park` snapshot exists. The probe
+machines and snapshots (`ph-probe`, `ph-probe-base`, `ph-pin-vm`,
+`ph-pin-base`, `ph-base-build`) were destroyed after use, as were the e2e
+machines `ph-3278b99e`, `ph-50b51537` (and its park snapshot) and
+`ph-8700217b`. Remote branches `powerhouse/cloud/3278b99e…` and
+`powerhouse/cloud/49c6291e…` remain on GitHub as the runs' records.
+
+Two fork-era machines are still in the org and hold a slot each; removing them
+was left to the user (the assistant's destroy calls were blocked):
+
+```sh
+boxd machine remove powerhouse-main --confirm       # run 49c6291e: imported to cloud/49c6291e, branch on GitHub at 745df20b
+boxd machine remove powerhouse-cloud-base --confirm # replaced by snapshot powerhouse-base v1, proven by runs 3278b99e and 50b51537
+```
+
+Earlier: `powerhouse-cloud-spike`, `powerhouse-cloud-probe-iso`,
+`powerhouse-cloud-fork-probe` and `ph-d3408a6f` were destroyed after their
+tests. No model call was made in the lifecycle work; no credential was copied
+anywhere.
 
 ### 2026-09-18 boot failure: diagnosis
 

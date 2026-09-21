@@ -135,7 +135,7 @@ x sudo sh -c 'set -e
 systemctl stop "powerhouse-run-*.service" 2>/dev/null || true
 units=$(systemctl list-units --all --plain --no-legend "powerhouse-run-*" | wc -l); [ "$units" -eq 0 ] || { echo "run units still present: $units"; exit 1; }
 runs=$(/usr/local/bin/powerhouse-runner list | python3 -c "import sys,json; print(len(json.load(sys.stdin).get(\"ok\",[])))"); [ "$runs" -eq 0 ] || { echo "runner store not empty: $runs runs"; exit 1; }
-ls /var/lib/powerhouse-runner/results /var/lib/powerhouse-runner/credentials 2>/dev/null | grep -q . && { echo "results or credentials present"; exit 1; } || true
+leftovers=$(find /var/lib/powerhouse-runner/results /var/lib/powerhouse-runner/credentials /var/lib/powerhouse-runner-work -mindepth 1 2>/dev/null | wc -l); [ "$leftovers" -eq 0 ] || { echo "results, credentials or workspaces present: $leftovers"; exit 1; }
 rm -rf /tmp/* /var/tmp/* 2>/dev/null || true
 rm -f /root/.bash_history /home/boxd/.bash_history; history -c 2>/dev/null || true
 rm -f /home/boxd/powerhouse-cloud-src.tgz
