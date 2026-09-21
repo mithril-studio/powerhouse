@@ -2868,6 +2868,7 @@ dependencies = [
  "dirs 7.0.0",
  "keyring",
  "portable-pty",
+ "powerhouse-cloud-protocol",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -2879,7 +2880,17 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-store",
  "tauri-plugin-updater",
+ "tempfile",
  "uuid",
+]
+
+[[package]]
+name = "powerhouse-cloud-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

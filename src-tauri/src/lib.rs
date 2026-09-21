@@ -1,4 +1,5 @@
 mod acp;
+mod cloud;
 mod git;
 mod github;
 mod handoff;
@@ -6,6 +7,7 @@ mod pty;
 mod queue;
 
 use acp::AcpManager;
+use cloud::commands::CloudManager;
 use handoff::HandoffWatchers;
 use pty::PtyManager;
 use queue::QueueManager;
@@ -29,6 +31,7 @@ pub fn run() {
         .manage(PtyManager::default())
         .manage(QueueManager::default())
         .manage(HandoffWatchers::default())
+        .manage(CloudManager::default())
         .invoke_handler(tauri::generate_handler![
             js_log,
             acp::acp_spawn,
@@ -61,12 +64,30 @@ pub fn run() {
             github::github_poll,
             github::github_account,
             github::github_disconnect,
+            cloud::commands::cloud_list_runs,
+            cloud::commands::cloud_inspect_source,
+            cloud::commands::cloud_list_snapshots,
+            cloud::commands::cloud_inventory,
+            cloud::commands::cloud_release,
+            cloud::commands::cloud_restore,
+            cloud::commands::cloud_lifecycle_tick,
+            cloud::commands::cloud_submit,
+            cloud::commands::cloud_sync,
+            cloud::commands::cloud_cancel,
+            cloud::commands::cloud_diff,
+            cloud::commands::cloud_import,
+            cloud::commands::cloud_forget,
+            cloud::commands::cloud_secret_status,
+            cloud::commands::cloud_set_secret,
+            cloud::commands::cloud_latest_handoff,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 app.state::<AcpManager>().kill_all();
+                // Local processes only. Cloud runs are owned by their VM runner
+                // and deliberately untouched here.
                 app.state::<PtyManager>().kill_all();
                 app.state::<QueueManager>().kill_running();
             }

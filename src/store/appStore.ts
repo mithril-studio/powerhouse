@@ -15,6 +15,7 @@ export type BottomTab = "shell" | "agent";
  *   (only after real round-trip resume is verified for that runtime).
  */
 export type HandoffMode = "unsupported" | "workspace-only" | "resumable";
+import type { CloudRunRecord } from "../lib/cloud";
 
 export interface Chat {
   id: string;
@@ -73,11 +74,37 @@ export interface Connections {
   github: GithubConnection;
 }
 
+/** Defaults for the `Run in cloud` form. Additive; older stores lack it. */
+export interface CloudSettings {
+  /** boxd snapshot every task VM is created from (published by scripts/cloud-base-setup.sh). */
+  baseSnapshot: string;
+  /** Org-wide machine count at which Powerhouse refuses to create another VM (org limit 20). */
+  machineCeiling: number;
+  deadlineMinutes: number;
+  permissionMode: string;
+  allowedTools: string;
+  maxTurns: number | null;
+  maxBudgetUsd: number | null;
+  model: string;
+}
+
+export const DEFAULT_CLOUD_SETTINGS: CloudSettings = {
+  baseSnapshot: "powerhouse-base",
+  machineCeiling: 18,
+  deadlineMinutes: 45,
+  permissionMode: "acceptEdits",
+  allowedTools: "Read,Edit,Write,Glob,Grep,Bash",
+  maxTurns: 60,
+  maxBudgetUsd: 5,
+  model: "",
+};
+
 export interface Settings {
   agents: AgentProfile[];
   defaultAgentId: string;
   theme: Theme;
   connections: Connections;
+  cloud?: CloudSettings;
 }
 
 export interface Branch {
@@ -91,7 +118,7 @@ export interface Branch {
 }
 
 /** Tabs of the toggleable right inspector sidebar. */
-export type RightTab = "files" | "changes" | "diff" | "merge";
+export type RightTab = "files" | "changes" | "diff" | "merge" | "cloud";
 
 /** A configurable check step. `type` is reserved for future "agent" steps. */
 export interface WorkflowStep {
@@ -178,6 +205,10 @@ interface AppState extends PersistedTree {
   shellStatus: Record<string, ChatStatus>;
   /** branchId → setTimeout id of the in-flight handoff (presence = pending). */
   pendingHandoff: Record<string, number>;
+  /** Runtime mirror of the Rust-owned cloud-run store (never persisted here). */
+  cloudRuns: Record<string, CloudRunRecord>;
+  /** Repo whose `Run in cloud` form is open, plus the source directory. */
+  cloudModal: { repoId: string; sourcePath: string; sourceLabel: string } | null;
 
   settingsOpen: boolean;
 
@@ -233,6 +264,13 @@ interface AppState extends PersistedTree {
   setShellStatus: (branchId: string, status: ChatStatus) => void;
   setPendingHandoff: (branchId: string, timerId: number) => void;
   clearPendingHandoff: (branchId: string) => void;
+
+  setCloudRuns: (runs: CloudRunRecord[]) => void;
+  setCloudRun: (run: CloudRunRecord) => void;
+  removeCloudRun: (runId: string) => void;
+  openCloudModal: (repoId: string, sourcePath: string, sourceLabel: string) => void;
+  closeCloudModal: () => void;
+  setCloudSettings: (cloud: CloudSettings) => void;
 }
 
 const SEED_AGENTS: AgentProfile[] = [
@@ -338,6 +376,7 @@ export function migrateSettings(
       defaultAgentId: validDefault ? defaultAgentId : agents[0].id,
       theme,
       connections,
+      ...(tree.settings.cloud ? { cloud: { ...DEFAULT_CLOUD_SETTINGS, ...tree.settings.cloud } } : {}),
     };
   }
   const agents = SEED_AGENTS.map((a) => ({ ...a }));
@@ -428,6 +467,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   shellStatus: {},
   pendingHandoff: {},
   settingsOpen: false,
+  cloudRuns: {},
+  cloudModal: null,
 
   hydrate: (tree) =>
     set({
@@ -647,7 +688,29 @@ export const useAppStore = create<AppState>((set, get) => ({
       delete next[branchId];
       return { pendingHandoff: next };
     }),
+
+  setCloudRuns: (runs) =>
+    set({ cloudRuns: Object.fromEntries(runs.map((r) => [r.run_id, r])) }),
+  setCloudRun: (run) =>
+    set((s) => ({ cloudRuns: { ...s.cloudRuns, [run.run_id]: run } })),
+  removeCloudRun: (runId) =>
+    set((s) => {
+      if (!(runId in s.cloudRuns)) return s;
+      const next = { ...s.cloudRuns };
+      delete next[runId];
+      return { cloudRuns: next };
+    }),
+  openCloudModal: (repoId, sourcePath, sourceLabel) =>
+    set({ cloudModal: { repoId, sourcePath, sourceLabel } }),
+  closeCloudModal: () => set({ cloudModal: null }),
+  setCloudSettings: (cloud) => set((s) => ({ settings: { ...s.settings, cloud } })),
 }));
+
+export const cloudSettingsOf = (s: Settings): CloudSettings => {
+  // `baseVm` belonged to the fork-era settings; a snapshot name replaces it.
+  const { baseVm: _legacy, ...stored } = (s.cloud ?? {}) as Partial<CloudSettings> & { baseVm?: string };
+  return { ...DEFAULT_CLOUD_SETTINGS, ...stored };
+};
 
 export const selectedRepo = (s: AppState) =>
   s.repos.find((r) => r.id === s.selection.repoId) ?? null;

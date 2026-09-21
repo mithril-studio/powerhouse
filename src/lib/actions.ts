@@ -18,6 +18,7 @@ import {
 } from "./ipc";
 import { disposeTerminal, markAutoSpawn } from "./terminalRegistry";
 import { disposeAcp } from "./acpRegistry";
+import { cloudImport, cloudSync } from "./cloud";
 
 export async function pickAndAddRepo() {
   const dir = await open({ directory: true, multiple: false, title: "Add project" });
@@ -201,4 +202,29 @@ export async function retryQueueEntry(repoId: string, entry: QueueEntry) {
 export async function dismissEntry(repoId: string, entryId: string) {
   await queueDismiss(repoId, entryId).catch(() => {});
   useAppStore.getState().dismissQueueEntry(repoId, entryId);
+}
+
+/**
+ * Fetch a cloud run's published revision into a brand-new worktree and add it
+ * as a branch row. Existing worktrees are never touched; a mismatch between
+ * the remote branch and the recorded result is surfaced, not imported.
+ */
+export async function importCloudResult(runId: string) {
+  const s = useAppStore.getState();
+  const rec = s.cloudRuns[runId];
+  if (!rec) throw new Error("unknown cloud run");
+  const repo = s.repos.find((r) => r.id === rec.repo_id);
+  if (!repo) throw new Error("the run's repository is no longer in Powerhouse");
+  const imported = await cloudImport(runId);
+  const branch: Branch = {
+    id: crypto.randomUUID(),
+    name: imported.branch,
+    worktreePath: imported.worktree_path,
+    chats: [],
+    activeChatId: null,
+  };
+  s.addBranch(repo.id, branch);
+  s.openRightTab("changes");
+  // Refresh the record so the card shows the imported worktree.
+  useAppStore.getState().setCloudRun(await cloudSync(runId).catch(() => ({ ...rec, imported_worktree: imported.worktree_path })));
 }
