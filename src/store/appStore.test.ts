@@ -49,16 +49,27 @@ describe("hydrate with a pre-cloud powerhouse.json", () => {
     expect(s.settings.cloud).toBeUndefined();
     expect(s.cloudRuns).toEqual({});
     // Defaults are derived, not written into settings.
-    expect(cloudSettingsOf(s.settings).baseVm).toBe("powerhouse-cloud-base");
+    expect(cloudSettingsOf(s.settings).baseSnapshot).toBe("powerhouse-base");
+    expect(cloudSettingsOf(s.settings).machineCeiling).toBe(18);
   });
 
   it("preserves and completes stored cloud settings", () => {
     const tree = structuredClone(LEGACY_TREE) as { settings: Record<string, unknown> };
-    tree.settings.cloud = { baseVm: "my-base" };
+    tree.settings.cloud = { baseSnapshot: "my-base", deadlineMinutes: 10 };
     useAppStore.getState().hydrate(tree as never);
     const cloud = cloudSettingsOf(useAppStore.getState().settings);
-    expect(cloud.baseVm).toBe("my-base");
-    expect(cloud.deadlineMinutes).toBe(45);
+    expect(cloud.baseSnapshot).toBe("my-base");
+    expect(cloud.deadlineMinutes).toBe(10);
+    expect(cloud.machineCeiling).toBe(18);
+  });
+
+  it("drops the fork-era base VM setting in favour of the snapshot default", () => {
+    const tree = structuredClone(LEGACY_TREE) as { settings: Record<string, unknown> };
+    tree.settings.cloud = { baseVm: "powerhouse-cloud-base" };
+    useAppStore.getState().hydrate(tree as never);
+    const cloud = cloudSettingsOf(useAppStore.getState().settings);
+    expect(cloud.baseSnapshot).toBe("powerhouse-base");
+    expect("baseVm" in cloud).toBe(false);
   });
 });
 

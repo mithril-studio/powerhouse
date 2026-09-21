@@ -4,13 +4,13 @@ import { cloudSettingsOf, useAppStore, type CloudSettings } from "../store/appSt
 import {
   cloudInspectSource,
   cloudLatestHandoff,
-  cloudProbeBase,
+  cloudListSnapshots,
   cloudSecretStatus,
   cloudSetSecret,
   cloudSubmit,
   remoteOwner,
-  type ProbeInfo,
   type SecretStatus,
+  type SnapshotInfo,
   type SourceInfo,
 } from "../lib/cloud";
 import { shortSha } from "../lib/cloudView";
@@ -32,9 +32,10 @@ export function CloudRunModal() {
   const [cloud, setCloud] = useState<CloudSettings>(cloudSettingsOf(settings));
   const [source, setSource] = useState<SourceInfo | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
-  const [probe, setProbe] = useState<ProbeInfo | null>(null);
-  const [probeError, setProbeError] = useState<string | null>(null);
-  const [probing, setProbing] = useState(false);
+  /** The base snapshot as listed when the form opened; its version is pinned into the run. */
+  const [snapshot, setSnapshot] = useState<SnapshotInfo | null>(null);
+  const [snapshotError, setSnapshotError] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [brief, setBrief] = useState("");
@@ -51,8 +52,8 @@ export function CloudRunModal() {
     setTask("");
     setError(null);
     setBusy(false);
-    setProbe(null);
-    setProbeError(null);
+    setSnapshot(null);
+    setSnapshotError(null);
     setSource(null);
     setSourceError(null);
     setCloud(cloudSettingsOf(useAppStore.getState().settings));
@@ -62,6 +63,7 @@ export function CloudRunModal() {
     setClaudeInput("");
     setGithubInput("");
     requestAnimationFrame(() => taskRef.current?.focus());
+    void lookupSnapshot(cloudSettingsOf(useAppStore.getState().settings).baseSnapshot);
     void cloudInspectSource(modal.sourcePath)
       .then((src) => {
         setSource(src);
@@ -89,7 +91,7 @@ export function CloudRunModal() {
   const problems = source?.problems ?? [];
   const needsGit = !!source?.remote_url?.startsWith("https://");
   const credsReady = !!secrets && secrets.claude && (!needsGit || secrets.github);
-  const canSubmit = !!task.trim() && !!source && problems.length === 0 && !busy && !!cloud.baseVm.trim() && credsReady;
+  const canSubmit = !!task.trim() && !!source && problems.length === 0 && !busy && !!snapshot && credsReady;
 
   const owner = remoteOwner(source?.remote_url);
   const repoSlug = source?.remote_url ? /\/([^/]+?)(?:\.git)?$/.exec(source.remote_url)?.[1] ?? null : null;
@@ -111,18 +113,29 @@ export function CloudRunModal() {
     }
   };
 
-  const runProbe = async () => {
-    setProbing(true);
-    setProbe(null);
-    setProbeError(null);
+  async function lookupSnapshot(name: string) {
+    const wanted = name.trim();
+    setChecking(true);
+    setSnapshot(null);
+    setSnapshotError(null);
     try {
-      setProbe(await cloudProbeBase(cloud.baseVm.trim()));
+      const rows = await cloudListSnapshots();
+      const row = rows.find((r) => r.name === wanted);
+      if (!row) {
+        setSnapshotError(
+          `Snapshot \`${wanted}\` is not in your boxd org${rows.length ? ` (available: ${rows.map((r) => r.name).join(", ")})` : ""}. Publish it with scripts/cloud-base-setup.sh --publish-snapshot ${wanted}.`,
+        );
+      } else if (row.status !== "ready") {
+        setSnapshotError(`Snapshot \`${wanted}\` is ${row.status}, not ready.`);
+      } else {
+        setSnapshot(row);
+      }
     } catch (e) {
-      setProbeError(String(e));
+      setSnapshotError(String(e));
     } finally {
-      setProbing(false);
+      setChecking(false);
     }
-  };
+  }
 
   const submit = async () => {
     if (!canSubmit || !source) return;
@@ -137,7 +150,9 @@ export function CloudRunModal() {
         sourcePath: modal.sourcePath,
         task: task.trim(),
         acceptanceCriteria: [],
-        baseVm: cloud.baseVm.trim(),
+        baseSnapshot: cloud.baseSnapshot.trim(),
+        baseSnapshotVersion: snapshot?.version ?? null,
+        machineCeiling: cloud.machineCeiling,
         checks,
         deadlineSeconds: Math.max(1, Math.round(cloud.deadlineMinutes)) * 60,
         permissionMode: cloud.permissionMode,
@@ -204,24 +219,41 @@ export function CloudRunModal() {
         />
 
         <div className="grid grid-cols-2 gap-2">
-          <Field label="Base VM">
+          <Field label="Base snapshot">
             <div className="flex gap-1.5">
               <input
-                value={cloud.baseVm}
-                onChange={(e) => setCloud({ ...cloud, baseVm: e.target.value })}
+                value={cloud.baseSnapshot}
+                onChange={(e) => {
+                  setCloud({ ...cloud, baseSnapshot: e.target.value });
+                  setSnapshot(null);
+                  setSnapshotError(null);
+                }}
+                onBlur={() => !snapshot && cloud.baseSnapshot.trim() && void lookupSnapshot(cloud.baseSnapshot)}
                 disabled={busy}
                 spellCheck={false}
                 className={`${input} font-mono`}
               />
               <button
-                onClick={() => void runProbe()}
-                disabled={busy || probing || !cloud.baseVm.trim()}
-                title="Check the runner on this base VM"
+                onClick={() => void lookupSnapshot(cloud.baseSnapshot)}
+                disabled={busy || checking || !cloud.baseSnapshot.trim()}
+                title="Look the snapshot up in boxd (name, version, size)"
                 className="h-8 shrink-0 rounded-lg border border-border px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
               >
-                {probing ? "Checking…" : "Check"}
+                {checking ? "Checking…" : "Check"}
               </button>
             </div>
+          </Field>
+          <Field label="Machine ceiling (org has 20 slots)">
+            <input
+              type="number"
+              min={1}
+              max={20}
+              value={cloud.machineCeiling}
+              onChange={(e) => setCloud({ ...cloud, machineCeiling: Math.max(1, Math.min(20, Number(e.target.value) || 1)) })}
+              disabled={busy}
+              title="Refuse to create a VM when the org already has this many machines"
+              className={input}
+            />
           </Field>
           <Field label="Deadline (minutes)">
             <input
@@ -403,19 +435,14 @@ export function CloudRunModal() {
           <p className="mt-1">Checks run on Linux in the VM; macOS-only steps will fail there.</p>
         </div>
 
-        {probe && (
+        {snapshot && (
           <p className="text-xs text-muted-foreground">
-            Runner {probe.runner_version} (protocol {probe.protocol_version}) · Claude {probe.claude_version ?? "not installed"} · task VM will be{" "}
-            <span className="font-mono">powerhouse-{modal.sourceLabel.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}</span>
+            Base <span className="font-mono">{snapshot.name}</span> {snapshot.version ?? ""}
+            {snapshot.size ? ` · ${snapshot.size}` : ""} · a fresh isolated <span className="font-mono">ph-&lt;run&gt;</span> VM is created from it
+            for this run and destroyed once the result is fetched and verified. The runner is checked on that VM before the task is submitted.
           </p>
         )}
-        {probe && probe.ambient_secret_names.length > 0 && (
-          <Problem>
-            boxd injects org secrets into this machine's exec sessions ({probe.ambient_secret_names.join(", ")}). Runs never receive them, but remove
-            them from boxd to keep Powerhouse machines clean.
-          </Problem>
-        )}
-        {probeError && <Problem>{probeError}</Problem>}
+        {snapshotError && <Problem>{snapshotError}</Problem>}
         {error && <Problem>{error}</Problem>}
 
         <div className="flex items-center justify-end gap-2">

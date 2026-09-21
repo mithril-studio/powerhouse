@@ -1,6 +1,8 @@
 // Cloud runs: typed IPC wrappers + observation loop. Polling here is
 // observation only; nothing in this file drives a run forward, and closing
-// the app never cancels anything.
+// the app never cancels anything. The lifecycle tick (release / park / lost
+// acknowledgement reconciliation) runs in the backend once a minute while the
+// app is open.
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "../store/appStore";
@@ -25,6 +27,16 @@ export type Phase =
   | "submission_unknown"
   | "accepted"
   | "submit_failed";
+
+/** What boxd resources a run holds; independent of the run state. */
+export type MachineState =
+  | "provisioning"
+  | "active"
+  | "holding"
+  | "parked"
+  | "restoring"
+  | "released"
+  | "unmanaged";
 
 export interface RunEvent {
   seq: number;
@@ -79,6 +91,15 @@ export interface ResultManifest {
   partial_work_preserved: boolean;
 }
 
+export interface SnapshotRef {
+  name: string;
+  version: string | null;
+}
+
+export interface SnapshotHandle extends SnapshotRef {
+  size: string | null;
+}
+
 export interface CloudRunRecord {
   run_id: string;
   repo_id: string;
@@ -89,6 +110,7 @@ export interface CloudRunRecord {
     task: { text: string; acceptance_criteria: string[] };
     source: { commit_sha: string; source_branch: string | null; remote_url: string };
     output_branch: string;
+    workspace?: { base_snapshot?: SnapshotRef | null; base_vm_name?: string };
     checks: { name: string; command: string }[];
     context?: { brief_markdown: string };
     deadline_seconds: number;
@@ -98,7 +120,6 @@ export interface CloudRunRecord {
   created_at_ms: number;
   phase: Phase;
   phase_detail: string | null;
-  base_vm: { name: string; id: string | null } | null;
   task_vm: { name: string; id: string | null } | null;
   receipt: { state: RunState; accepted_at_ms: number; duplicate: boolean } | null;
   snapshot: RunSnapshot | null;
@@ -107,8 +128,14 @@ export interface CloudRunRecord {
   event_cursor: number;
   last_sync_ms: number | null;
   last_sync_error: string | null;
-  idle_policy_restored: boolean;
   imported_worktree: string | null;
+  machine: MachineState;
+  machine_changed_ms: number;
+  park_snapshot: SnapshotHandle | null;
+  vm_released: boolean;
+  diff_cached: { bytes: number; truncated: boolean } | null;
+  remote_verified: boolean;
+  machine_error: string | null;
 }
 
 export interface SourceInfo {
@@ -120,15 +147,31 @@ export interface SourceInfo {
   problems: string[];
 }
 
-export interface ProbeInfo {
-  protocol_version: number;
-  runner_version: string;
-  claude_version: string | null;
-  agent_user_ready: boolean;
-  store_ready: boolean;
-  /** Names only. Non-empty means boxd injects org secrets into exec sessions. */
-  ambient_secret_names: string[];
-  pending_credentials: number;
+/** One row of `boxd snapshots list`. */
+export interface SnapshotInfo {
+  name: string;
+  version: string | null;
+  status: string;
+  size: string | null;
+  id: string | null;
+}
+
+export interface MachineInfo {
+  name: string;
+  id: string | null;
+  status: string;
+  isolated: string | null;
+  auto_suspend: string | null;
+  auto_hibernate: string | null;
+  source: string | null;
+}
+
+export interface Inventory {
+  machines: MachineInfo[];
+  snapshots: SnapshotInfo[];
+  total_machines: number;
+  ceiling: number;
+  org_slots: number;
 }
 
 export interface SecretStatus {
@@ -150,7 +193,11 @@ export interface SubmitRequest {
   sourcePath: string;
   task: string;
   acceptanceCriteria: string[];
-  baseVm: string;
+  /** Base snapshot name; the task VM is created from its current version. */
+  baseSnapshot: string;
+  /** Version shown in the form; submission refuses if it changed since. */
+  baseSnapshotVersion: string | null;
+  machineCeiling: number | null;
   checks: { name: string; command: string }[];
   deadlineSeconds: number;
   permissionMode: string;
@@ -169,12 +216,19 @@ export interface SubmitRequest {
 export const cloudListRuns = () => invoke<CloudRunRecord[]>("cloud_list_runs");
 export const cloudInspectSource = (sourcePath: string) =>
   invoke<SourceInfo>("cloud_inspect_source", { sourcePath });
-export const cloudProbeBase = (baseVm: string) => invoke<ProbeInfo>("cloud_probe_base", { baseVm });
+export const cloudListSnapshots = () => invoke<SnapshotInfo[]>("cloud_list_snapshots");
+export const cloudInventory = (baseSnapshot?: string | null, ceiling?: number | null) =>
+  invoke<Inventory>("cloud_inventory", { baseSnapshot: baseSnapshot ?? null, ceiling: ceiling ?? null });
 export const cloudSubmit = (request: SubmitRequest) =>
   invoke<CloudRunRecord>("cloud_submit", { request });
 export const cloudSync = (runId: string, forceEvents = false) =>
   invoke<CloudRunRecord>("cloud_sync", { runId, forceEvents });
 export const cloudCancel = (runId: string) => invoke<CloudRunRecord>("cloud_cancel", { runId });
+/** Discard workspace: remove the run's VM and park snapshot. */
+export const cloudRelease = (runId: string) => invoke<CloudRunRecord>("cloud_release", { runId });
+/** Bring a parked run back on a fresh VM (held again for an hour). */
+export const cloudRestore = (runId: string) => invoke<CloudRunRecord>("cloud_restore", { runId });
+export const cloudLifecycleTick = () => invoke<string[]>("cloud_lifecycle_tick");
 export const cloudDiff = (runId: string) =>
   invoke<{ patch: string; truncated: boolean; bytes: number }>("cloud_diff", { runId });
 export const cloudImport = (runId: string) =>
@@ -198,6 +252,7 @@ export const cloudLatestHandoff = (sourcePath: string) =>
 
 const ACTIVE_POLL_MS = 5000;
 const RECONNECT_BACKOFF_MS = 30000;
+const LIFECYCLE_TICK_MS = 60000;
 
 export const isRunActive = (r: CloudRunRecord): boolean => {
   if (r.phase === "submit_failed") return false;
@@ -208,6 +263,13 @@ export const isRunActive = (r: CloudRunRecord): boolean => {
 
 export const isTerminal = (s: RunState) =>
   s === "completed" || s === "blocked" || s === "failed" || s === "cancelled" || s === "interrupted";
+
+/** True while boxd still holds a VM or snapshot for the run. */
+export const holdsResources = (r: CloudRunRecord): boolean => {
+  if (r.machine === "unmanaged") return false;
+  if (r.machine === "parked") return true;
+  return !r.vm_released || !!r.park_snapshot;
+};
 
 let started = false;
 const inFlight = new Set<string>();
@@ -234,10 +296,24 @@ export async function refreshCloudRun(runId: string) {
   await syncOne(runId);
 }
 
+let tickInFlight = false;
+/** Run the backend lifecycle pass now (park due holds, finish pending releases). */
+export async function runLifecycleTick() {
+  if (tickInFlight) return;
+  tickInFlight = true;
+  try {
+    await cloudLifecycleTick();
+  } catch (err) {
+    console.warn("cloud lifecycle tick failed:", err);
+  } finally {
+    tickInFlight = false;
+  }
+}
+
 /**
  * Boot: render cached history immediately, then reconcile every run that may
- * still be active. Terminal runs are refreshed only on explicit user action so
- * completed VMs can go idle.
+ * still be active. Terminal runs are refreshed only on explicit user action;
+ * their machines are handled by the lifecycle tick.
  */
 export async function startCloudSync() {
   if (started) return;
@@ -264,4 +340,6 @@ export async function startCloudSync() {
   };
   tick();
   window.setInterval(tick, 1000);
+  void runLifecycleTick();
+  window.setInterval(() => void runLifecycleTick(), LIFECYCLE_TICK_MS);
 }

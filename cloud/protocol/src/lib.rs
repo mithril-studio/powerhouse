@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 
 /// Bump when a change would make an older desktop and a newer runner (or the
 /// reverse) misinterpret each other. Both sides reject mismatches.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Prefix of every branch the runner is allowed to push. Enforced in code.
 pub const OUTPUT_BRANCH_PREFIX: &str = "powerhouse/cloud/";
@@ -42,10 +42,32 @@ pub struct SourceSpec {
     pub source_branch: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// A boxd snapshot pinned by name and the version that was current when the
+/// run was submitted (`boxd snapshots list` shows versions as `v1`, `v2`, …).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+pub struct SnapshotRef {
+    pub name: String,
+    #[serde(default)]
+    pub version: Option<String>,
+}
+
+/// Where the task VM came from. Snapshot-based runs (protocol 2) record the
+/// base snapshot; the legacy fork model recorded the base VM. Old manifests
+/// deserialise with `base_snapshot` absent.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 pub struct WorkspaceSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_snapshot: Option<SnapshotRef>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub base_vm_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub base_vm_name: String,
+}
+
+impl WorkspaceSpec {
+    pub fn from_snapshot(name: &str, version: Option<String>) -> Self {
+        Self { base_snapshot: Some(SnapshotRef { name: name.to_string(), version }), ..Default::default() }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -154,8 +176,9 @@ impl RunManifest {
                 Self::expected_output_branch(&self.run_id)
             ));
         }
-        if self.workspace.base_vm_id.is_empty() {
-            return Err("workspace.base_vm_id is required".into());
+        let has_snapshot = self.workspace.base_snapshot.as_ref().map(|s| !s.name.trim().is_empty()).unwrap_or(false);
+        if !has_snapshot && self.workspace.base_vm_id.is_empty() {
+            return Err("workspace.base_snapshot (or legacy base_vm_id) is required".into());
         }
         if !(MIN_DEADLINE_SECONDS..=MAX_DEADLINE_SECONDS).contains(&self.deadline_seconds) {
             return Err(format!(
@@ -539,10 +562,7 @@ mod tests {
                 source_branch: Some("main".into()),
             },
             output_branch: RunManifest::expected_output_branch(&run_id),
-            workspace: WorkspaceSpec {
-                base_vm_id: "5a943507-3186-464c-b9f0-51f21f58c684".into(),
-                base_vm_name: "powerhouse-cloud-base".into(),
-            },
+            workspace: WorkspaceSpec::from_snapshot("powerhouse-base", Some("v1".into())),
             agent: AgentSpec {
                 provider: AgentProvider::Fake,
                 model: None,

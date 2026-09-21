@@ -1,5 +1,5 @@
 // Pure presentation helpers for cloud runs (unit-tested; no Tauri imports).
-import type { CloudRunRecord, RunEvent, RunState } from "./cloud";
+import { isTerminal, type CloudRunRecord, type RunEvent, type RunState } from "./cloud";
 
 export type Tone = "live" | "ok" | "bad" | "muted" | "warn";
 
@@ -180,3 +180,43 @@ export function describeEvent(e: RunEvent): string | null {
 }
 
 export const shortSha = (s: string | null | undefined) => (s ? s.slice(0, 7) : "");
+
+// --- machine lifecycle ----------------------------------------------------------
+
+/** Mirrors the backend's default hold before a non-completed run is parked. */
+export const HOLD_MINUTES = 60;
+
+export interface MachinePresentation {
+  label: string;
+  tone: Tone;
+  /** Lifecycle problem or pending reason, if any. */
+  detail: string | null;
+}
+
+/** One-line description of what boxd holds for this run. */
+export function presentMachine(r: CloudRunRecord, now = Date.now()): MachinePresentation {
+  const detail = r.machine_error;
+  switch (r.machine) {
+    case "provisioning":
+      return { label: "VM starting", tone: "live", detail };
+    case "active": {
+      const state = r.snapshot?.state ?? r.receipt?.state;
+      const pending = !!state && isTerminal(state);
+      return { label: pending ? "VM active · release pending" : "VM active", tone: pending ? "warn" : "live", detail };
+    }
+    case "holding": {
+      const left = Math.max(0, Math.round((r.machine_changed_ms + HOLD_MINUTES * 60_000 - now) / 60_000));
+      return { label: left > 0 ? `VM held · parks in ${left} min` : "VM held · parking", tone: "warn", detail };
+    }
+    case "parked": {
+      const size = r.park_snapshot?.size ? ` ${r.park_snapshot.size}` : "";
+      return { label: `Parked (snapshot${size})`, tone: "muted", detail };
+    }
+    case "restoring":
+      return { label: "Restoring VM", tone: "live", detail };
+    case "released":
+      return { label: r.park_snapshot || !r.vm_released ? "Releasing" : "Released", tone: "muted", detail };
+    case "unmanaged":
+      return { label: r.task_vm ? `VM ${r.task_vm.name} not managed` : "No VM", tone: "muted", detail };
+  }
+}

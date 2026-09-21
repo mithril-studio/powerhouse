@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CloudRunRecord, RunEvent } from "./cloud";
-import { describeEvent, fmtAgo, latestActivity, presentRun } from "./cloudView";
+import { describeEvent, fmtAgo, latestActivity, presentMachine, presentRun } from "./cloudView";
 
 const base = (over: Partial<CloudRunRecord>): CloudRunRecord => ({
   run_id: "r",
@@ -20,7 +20,6 @@ const base = (over: Partial<CloudRunRecord>): CloudRunRecord => ({
   created_at_ms: 0,
   phase: "accepted",
   phase_detail: null,
-  base_vm: null,
   task_vm: null,
   receipt: { state: "accepted", accepted_at_ms: 0, duplicate: false },
   snapshot: null,
@@ -29,8 +28,14 @@ const base = (over: Partial<CloudRunRecord>): CloudRunRecord => ({
   event_cursor: 0,
   last_sync_ms: null,
   last_sync_error: null,
-  idle_policy_restored: false,
   imported_worktree: null,
+  machine: "active",
+  machine_changed_ms: 0,
+  park_snapshot: null,
+  vm_released: false,
+  diff_cached: null,
+  remote_verified: false,
+  machine_error: null,
   ...over,
 });
 
@@ -128,5 +133,30 @@ describe("fmtAgo", () => {
     expect(fmtAgo(now - 5_000, now)).toBe("5s ago");
     expect(fmtAgo(now - 90_000, now)).toBe("2m ago");
     expect(fmtAgo(now - 3 * 3_600_000, now)).toBe("3h ago");
+  });
+});
+
+describe("presentMachine", () => {
+  it("names what boxd holds for the run", () => {
+    expect(presentMachine(base({ machine: "active" })).label).toBe("VM active");
+    const completed = base({
+      machine: "active",
+      snapshot: snap({
+        run_id: "r", state: "completed", stage: null, last_event_seq: 1, accepted_at_ms: 0, updated_at_ms: 1,
+        started_at_ms: null, finished_at_ms: 1, error: null, cancel_requested: false, result_available: true, unit_active: false,
+      }),
+      machine_error: "release pending: remote branch not verified yet",
+    });
+    const p = presentMachine(completed);
+    expect(p.label).toBe("VM active · release pending");
+    expect(p.detail).toMatch(/remote branch/);
+    const now = 1_000_000_000;
+    expect(presentMachine(base({ machine: "holding", machine_changed_ms: now - 18 * 60_000 }), now).label).toBe("VM held · parks in 42 min");
+    expect(presentMachine(base({ machine: "parked", vm_released: true, park_snapshot: { name: "ph-r-park", version: "v1", size: "8.8G" } })).label).toBe(
+      "Parked (snapshot 8.8G)",
+    );
+    expect(presentMachine(base({ machine: "released", vm_released: true })).label).toBe("Released");
+    expect(presentMachine(base({ machine: "released", vm_released: false })).label).toBe("Releasing");
+    expect(presentMachine(base({ machine: "unmanaged", task_vm: { name: "powerhouse-main", id: null } })).label).toBe("VM powerhouse-main not managed");
   });
 });

@@ -31,7 +31,10 @@ export interface AgentProfile {
 
 /** Defaults for the `Run in cloud` form. Additive; older stores lack it. */
 export interface CloudSettings {
-  baseVm: string;
+  /** boxd snapshot every task VM is created from (published by scripts/cloud-base-setup.sh). */
+  baseSnapshot: string;
+  /** Org-wide machine count at which Powerhouse refuses to create another VM (org limit 20). */
+  machineCeiling: number;
   deadlineMinutes: number;
   permissionMode: string;
   allowedTools: string;
@@ -41,7 +44,8 @@ export interface CloudSettings {
 }
 
 export const DEFAULT_CLOUD_SETTINGS: CloudSettings = {
-  baseVm: "powerhouse-cloud-base",
+  baseSnapshot: "powerhouse-base",
+  machineCeiling: 18,
   deadlineMinutes: 45,
   permissionMode: "acceptEdits",
   allowedTools: "Read,Edit,Write,Glob,Grep,Bash",
@@ -528,10 +532,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   setCloudSettings: (cloud) => set((s) => ({ settings: { ...s.settings, cloud } })),
 }));
 
-export const cloudSettingsOf = (s: Settings): CloudSettings => ({
-  ...DEFAULT_CLOUD_SETTINGS,
-  ...(s.cloud ?? {}),
-});
+export const cloudSettingsOf = (s: Settings): CloudSettings => {
+  // `baseVm` belonged to the fork-era settings; a snapshot name replaces it.
+  const { baseVm: _legacy, ...stored } = (s.cloud ?? {}) as Partial<CloudSettings> & { baseVm?: string };
+  return { ...DEFAULT_CLOUD_SETTINGS, ...stored };
+};
 
 export const selectedRepo = (s: AppState) =>
   s.repos.find((r) => r.id === s.selection.repoId) ?? null;

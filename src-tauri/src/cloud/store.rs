@@ -1,6 +1,7 @@
 //! Desktop-side durable record of submitted cloud runs. This is a cache and a
-//! receipt log: the VM runner owns the truth. Writes are explicit and atomic
-//! (write, fsync, rename) so a launch receipt never depends on a debounce.
+//! receipt log: the VM runner owns the truth about the run, boxd owns the
+//! truth about machines and snapshots. Writes are explicit and atomic (write,
+//! fsync, rename) so a launch receipt never depends on a debounce.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -17,7 +18,7 @@ pub const EVENT_CACHE_CAP: usize = 4000;
 pub enum Phase {
     /// Record written; no remote side effect confirmed yet.
     Submitting,
-    /// A fork/create was issued; identity may or may not exist remotely.
+    /// A machine create was issued; identity may or may not exist remotely.
     Provisioning,
     /// Manifest transferred and `submit` was sent; acknowledgement pending.
     SubmissionUnknown,
@@ -27,11 +28,60 @@ pub enum Phase {
     SubmitFailed,
 }
 
+/// What boxd resources a run holds. Independent of the run state; see
+/// docs/boxd-cloud-vm-lifecycle-plan.md. The intended state is persisted
+/// *before* the boxd call that realises it, so a lost acknowledgement is
+/// reconciled by name (`ph-<run8>`, `ph-<run8>-park`).
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MachineState {
+    /// `machine new --from-snapshot` issued; VM not yet confirmed running.
+    Provisioning,
+    /// Run is live on the VM (idle timers 0/0).
+    Active,
+    /// Run reached a terminal state; VM kept for inspection, park timer running.
+    Holding,
+    /// VM snapshotted and destroyed; workspace recoverable from `park_snapshot`.
+    Parked,
+    /// New VM being created from the park snapshot.
+    Restoring,
+    /// VM and any park snapshot removed. Nothing is held.
+    Released,
+    /// Record predates lifecycle tracking (or names a machine Powerhouse does
+    /// not own). Powerhouse never touches its resources; clean up by hand.
+    #[default]
+    Unmanaged,
+}
+
+impl MachineState {
+    pub fn holds_vm(self) -> bool {
+        matches!(self, MachineState::Provisioning | MachineState::Active | MachineState::Holding | MachineState::Restoring)
+    }
+}
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct VmRef {
     pub name: String,
     #[serde(default)]
     pub id: Option<String>,
+}
+
+/// A park snapshot Powerhouse saved for a run.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SnapshotHandle {
+    pub name: String,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub size: Option<String>,
+}
+
+/// The run's diff is cached to disk next to the store once the run ends, so
+/// the VM can be released.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct DiffMeta {
+    pub bytes: u64,
+    pub truncated: bool,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -49,8 +99,6 @@ pub struct CloudRunRecord {
     #[serde(default)]
     pub phase_detail: Option<String>,
     #[serde(default)]
-    pub base_vm: Option<VmRef>,
-    #[serde(default)]
     pub task_vm: Option<VmRef>,
     #[serde(default)]
     pub receipt: Option<Receipt>,
@@ -67,13 +115,28 @@ pub struct CloudRunRecord {
     pub last_sync_ms: Option<u64>,
     #[serde(default)]
     pub last_sync_error: Option<String>,
-    /// Idle policy of the base, re-applied to the task VM after the run ends.
-    #[serde(default)]
-    pub idle_policy: Option<(u64, u64)>,
-    #[serde(default)]
-    pub idle_policy_restored: bool,
     #[serde(default)]
     pub imported_worktree: Option<String>,
+    // --- machine lifecycle -------------------------------------------------
+    #[serde(default)]
+    pub machine: MachineState,
+    /// When `machine` last changed; drives the hold timer.
+    #[serde(default)]
+    pub machine_changed_ms: u64,
+    /// Set (as intent) before `snapshots save`; cleared after the snapshot is removed.
+    #[serde(default)]
+    pub park_snapshot: Option<SnapshotHandle>,
+    /// True once `machine remove` was confirmed (or the name was gone).
+    #[serde(default)]
+    pub vm_released: bool,
+    #[serde(default)]
+    pub diff_cached: Option<DiffMeta>,
+    /// `git ls-remote` showed the result revision on the output branch.
+    #[serde(default)]
+    pub remote_verified: bool,
+    /// Last lifecycle problem (park/release/restore), shown on the card.
+    #[serde(default)]
+    pub machine_error: Option<String>,
 }
 
 impl CloudRunRecord {
@@ -135,6 +198,22 @@ impl CloudRunRecord {
             _ => true,
         }
     }
+
+    /// True while boxd still holds something for this run (VM or snapshot).
+    pub fn holds_resources(&self) -> bool {
+        match self.machine {
+            MachineState::Unmanaged => false,
+            MachineState::Parked => true,
+            _ => !self.vm_released || self.park_snapshot.is_some(),
+        }
+    }
+
+    pub fn set_machine(&mut self, next: MachineState, now_ms: u64) {
+        if self.machine != next {
+            self.machine = next;
+            self.machine_changed_ms = now_ms;
+        }
+    }
 }
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -167,6 +246,13 @@ impl CloudStore {
         Self { path, runs }
     }
 
+    /// Per-run artifact cache (diff.patch) next to the store file:
+    /// `<store>/../cloud-runs/<run id>/`.
+    pub fn cache_dir(&self, run_id: &str) -> PathBuf {
+        let stem = self.path.file_stem().and_then(|s| s.to_str()).unwrap_or("cloud-runs").to_string();
+        self.path.parent().unwrap_or(Path::new(".")).join(stem).join(run_id)
+    }
+
     pub fn list(&self) -> Vec<CloudRunRecord> {
         let mut v: Vec<_> = self.runs.values().cloned().collect();
         v.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
@@ -186,11 +272,12 @@ impl CloudStore {
     pub fn remove(&mut self, run_id: &str) -> Result<Option<CloudRunRecord>, String> {
         let r = self.runs.remove(run_id);
         self.flush()?;
+        let _ = std::fs::remove_dir_all(self.cache_dir(run_id));
         Ok(r)
     }
 
     fn flush(&self) -> Result<(), String> {
-        let shape = FileShape { version: 1, runs: self.runs.clone() };
+        let shape = FileShape { version: 2, runs: self.runs.clone() };
         let bytes = serde_json::to_vec_pretty(&shape).map_err(|e| e.to_string())?;
         write_atomic(&self.path, &bytes).map_err(|e| format!("could not persist cloud runs: {e}"))
     }
@@ -232,7 +319,7 @@ pub mod tests_support {
                 task: TaskSpec { text: "t".into(), acceptance_criteria: vec![] },
                 source: SourceSpec { repo_name: "r".into(), remote_url: "https://x/y.git".into(), commit_sha: "a".repeat(40), source_branch: None },
                 output_branch: RunManifest::expected_output_branch(&id),
-                workspace: WorkspaceSpec { base_vm_id: "b".into(), base_vm_name: "b".into() },
+                workspace: WorkspaceSpec::from_snapshot("ph-test-base", Some("v1".into())),
                 agent: AgentSpec { provider: AgentProvider::Fake, model: None, permission_mode: "dontAsk".into(), allowed_tools: vec![], max_turns: None, max_budget_usd: None, fake_script: None },
                 checks: vec![],
                 context: ContextSpec::default(),
@@ -244,7 +331,6 @@ pub mod tests_support {
             created_at_ms: 1,
             phase: Phase::Submitting,
             phase_detail: None,
-            base_vm: None,
             task_vm: Some(VmRef { name: vm.into(), id: None }),
             receipt: None,
             snapshot: None,
@@ -253,9 +339,14 @@ pub mod tests_support {
             event_cursor: 0,
             last_sync_ms: None,
             last_sync_error: None,
-            idle_policy: None,
-            idle_policy_restored: false,
             imported_worktree: None,
+            machine: MachineState::Active,
+            machine_changed_ms: 1,
+            park_snapshot: None,
+            vm_released: false,
+            diff_cached: None,
+            remote_verified: false,
+            machine_error: None,
         }
     }
 }
@@ -263,47 +354,13 @@ pub mod tests_support {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use powerhouse_cloud_protocol::*;
 
     fn record() -> CloudRunRecord {
-        let id = "11111111-2222-4333-8444-555555555555".to_string();
-        CloudRunRecord {
-            run_id: id.clone(),
-            repo_id: "r".into(),
-            repo_path: "/tmp/r".into(),
-            repo_name: "r".into(),
-            source_branch: None,
-            manifest: RunManifest {
-                protocol_version: PROTOCOL_VERSION,
-                run_id: id.clone(),
-                task: TaskSpec { text: "t".into(), acceptance_criteria: vec![] },
-                source: SourceSpec { repo_name: "r".into(), remote_url: "https://x/y.git".into(), commit_sha: "a".repeat(40), source_branch: None },
-                output_branch: RunManifest::expected_output_branch(&id),
-                workspace: WorkspaceSpec { base_vm_id: "b".into(), base_vm_name: "b".into() },
-                agent: AgentSpec { provider: AgentProvider::Fake, model: None, permission_mode: "dontAsk".into(), allowed_tools: vec![], max_turns: None, max_budget_usd: None, fake_script: None },
-                checks: vec![],
-                context: ContextSpec::default(),
-                deadline_seconds: 600,
-                created_at_ms: 1,
-                predecessor_run_id: None,
-            },
-            manifest_digest: "d".into(),
-            created_at_ms: 1,
-            phase: Phase::Accepted,
-            phase_detail: None,
-            base_vm: None,
-            task_vm: None,
-            receipt: None,
-            snapshot: None,
-            result: None,
-            events: vec![],
-            event_cursor: 0,
-            last_sync_ms: None,
-            last_sync_error: None,
-            idle_policy: None,
-            idle_policy_restored: false,
-            imported_worktree: None,
-        }
+        let mut r = tests_support::record_with_vm("11111111-2222-4333-8444-555555555555", "ph-11111111");
+        r.phase = Phase::Accepted;
+        r.task_vm = None;
+        r.machine = MachineState::Unmanaged;
+        r
     }
 
     fn snap(state: RunState, updated: u64) -> RunSnapshot {
@@ -350,5 +407,60 @@ mod tests {
         let again = CloudStore::open(path);
         assert_eq!(again.list().len(), 1);
         assert_eq!(again.list()[0].phase, Phase::Accepted);
+        assert!(again.cache_dir("abc").ends_with("cloud-runs/abc"));
+    }
+
+    #[test]
+    fn records_from_the_fork_era_load_as_unmanaged() {
+        // A record written by the base-VM/fork model: extra fields, no machine state.
+        let legacy = serde_json::json!({
+            "version": 1,
+            "runs": {
+                "49c6291e-290c-49e5-a2d0-4e17f8f8dba9": {
+                    "run_id": "49c6291e-290c-49e5-a2d0-4e17f8f8dba9",
+                    "repo_id": "r", "repo_path": "/tmp/r", "repo_name": "r",
+                    "manifest": {
+                        "protocol_version": 1, "run_id": "49c6291e-290c-49e5-a2d0-4e17f8f8dba9",
+                        "task": {"text": "t", "acceptance_criteria": []},
+                        "source": {"repo_name": "r", "remote_url": "https://x/y.git", "commit_sha": "a", "source_branch": "main"},
+                        "output_branch": "powerhouse/cloud/49c6291e-290c-49e5-a2d0-4e17f8f8dba9",
+                        "workspace": {"base_vm_id": "5a94", "base_vm_name": "powerhouse-cloud-base"},
+                        "agent": {"provider": "claude", "permission_mode": "acceptEdits", "allowed_tools": []},
+                        "deadline_seconds": 900, "created_at_ms": 1
+                    },
+                    "manifest_digest": "d", "created_at_ms": 1, "phase": "accepted",
+                    "base_vm": {"name": "powerhouse-cloud-base", "id": "5a94"},
+                    "task_vm": {"name": "powerhouse-main", "id": "9801"},
+                    "idle_policy": [300, 900], "idle_policy_restored": true
+                }
+            }
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cloud-runs.json");
+        std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let s = CloudStore::open(path);
+        let r = &s.list()[0];
+        assert_eq!(r.machine, MachineState::Unmanaged);
+        assert!(!r.holds_resources());
+        assert_eq!(r.task_vm.as_ref().unwrap().name, "powerhouse-main");
+        assert!(r.manifest.workspace.base_snapshot.is_none());
+        assert_eq!(r.manifest.workspace.base_vm_name, "powerhouse-cloud-base");
+    }
+
+    #[test]
+    fn resource_accounting_follows_machine_state() {
+        let mut r = record();
+        r.machine = MachineState::Active;
+        assert!(r.holds_resources());
+        r.vm_released = true;
+        assert!(!r.holds_resources());
+        r.park_snapshot = Some(SnapshotHandle { name: "ph-1-park".into(), version: None, size: None });
+        assert!(r.holds_resources());
+        r.machine = MachineState::Released;
+        assert!(r.holds_resources(), "a lingering park snapshot still counts");
+        r.park_snapshot = None;
+        assert!(!r.holds_resources());
+        r.machine = MachineState::Parked;
+        assert!(r.holds_resources());
     }
 }

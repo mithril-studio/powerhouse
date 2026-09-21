@@ -1,15 +1,21 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ask, message } from "@tauri-apps/plugin-dialog";
-import { useAppStore, type Branch, type Repo } from "../store/appStore";
+import { cloudSettingsOf, useAppStore, type Branch, type Repo } from "../store/appStore";
 import {
   cloudCancel,
   cloudDiff,
   cloudForget,
+  cloudInventory,
+  cloudRelease,
+  cloudRestore,
+  holdsResources,
   isRunActive,
   refreshCloudRun,
+  runLifecycleTick,
   type CloudRunRecord,
+  type Inventory,
 } from "../lib/cloud";
-import { describeEvent, fmtAgo, latestActivity, presentRun, shortSha, type Tone } from "../lib/cloudView";
+import { describeEvent, fmtAgo, latestActivity, presentMachine, presentRun, shortSha, type Tone } from "../lib/cloudView";
 import { importCloudResult } from "../lib/actions";
 import { DiffView } from "./DiffView";
 
@@ -40,10 +46,31 @@ export function CloudPane({ repo, branch }: { repo: Repo; branch?: Branch | null
   );
   const sourcePath = branch?.worktreePath ?? repo.path;
   const sourceLabel = branch?.name ?? repo.defaultBranch;
+  const settings = useAppStore((s) => s.settings);
+  const cloud = cloudSettingsOf(settings);
+  const [inventory, setInventory] = useState<Inventory | null>(null);
+  const [inventoryError, setInventoryError] = useState<string | null>(null);
+  const [inventoryBusy, setInventoryBusy] = useState(false);
+  const loadInventory = useCallback(async () => {
+    setInventoryBusy(true);
+    try {
+      setInventory(await cloudInventory(cloud.baseSnapshot, cloud.machineCeiling));
+      setInventoryError(null);
+    } catch (e) {
+      setInventoryError(String(e));
+    } finally {
+      setInventoryBusy(false);
+    }
+  }, [cloud.baseSnapshot, cloud.machineCeiling]);
+  // Machine states change on lifecycle events; refresh the footer when any run's machine changes.
+  const machineKey = useMemo(() => list.map((r) => `${r.run_id}:${r.machine}:${r.vm_released}:${r.park_snapshot?.name ?? ""}`).join("|"), [list]);
+  useEffect(() => {
+    void loadInventory();
+  }, [loadInventory, machineKey]);
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="p-3">
+    <div className="flex h-full flex-col">
+      <div className="min-h-0 flex-1 overflow-y-auto p-3">
         <div className="mb-4 flex items-center gap-2">
           <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{repo.name}</span>
           <button
@@ -67,6 +94,63 @@ export function CloudPane({ repo, branch }: { repo: Repo; branch?: Branch | null
           </div>
         )}
       </div>
+      <InventoryFooter inventory={inventory} error={inventoryError} busy={inventoryBusy} onRefresh={() => void loadInventory()} />
+    </div>
+  );
+}
+
+/** What Powerhouse holds in boxd right now, against the org's machine slots. */
+function InventoryFooter({
+  inventory,
+  error,
+  busy,
+  onRefresh,
+}: {
+  inventory: Inventory | null;
+  error: string | null;
+  busy: boolean;
+  onRefresh: () => void;
+}) {
+  return (
+    <div className="shrink-0 border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
+      <div className="flex items-center gap-2">
+        <span className="font-semibold uppercase tracking-wider">boxd</span>
+        {inventory ? (
+          <span>
+            {inventory.total_machines}/{inventory.org_slots} machines in the org (ceiling {inventory.ceiling}) ·{" "}
+            {inventory.machines.length} Powerhouse VM{inventory.machines.length === 1 ? "" : "s"} · {inventory.snapshots.length} snapshot
+            {inventory.snapshots.length === 1 ? "" : "s"}
+          </span>
+        ) : error ? (
+          <span className="truncate text-destructive" title={error}>
+            unavailable
+          </span>
+        ) : (
+          <span>loading…</span>
+        )}
+        <button
+          onClick={onRefresh}
+          disabled={busy}
+          title="Refresh boxd inventory"
+          className="ml-auto h-5 rounded-md px-1.5 hover:bg-muted hover:text-foreground disabled:opacity-50"
+        >
+          ↻
+        </button>
+      </div>
+      {inventory && (inventory.machines.length > 0 || inventory.snapshots.length > 0) && (
+        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono">
+          {inventory.machines.map((m) => (
+            <span key={`m-${m.name}`} title={`machine · ${m.status}`}>
+              {m.name} <span className="text-muted-foreground/60">{m.status}</span>
+            </span>
+          ))}
+          {inventory.snapshots.map((s) => (
+            <span key={`s-${s.name}`} title={`snapshot · ${s.status}`}>
+              {s.name} <span className="text-muted-foreground/60">{s.version ?? ""} {s.size ?? ""}</span>
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -76,10 +160,14 @@ function CloudRunCard({ record: r }: { record: CloudRunRecord }) {
   const [tab, setTab] = useState<"activity" | "checks" | "diff">("activity");
   const [busy, setBusy] = useState<string | null>(null);
   const p = presentRun(r);
+  const m = presentMachine(r);
   const active = isRunActive(r);
   const state = r.snapshot?.state ?? r.receipt?.state;
   const canCancel = r.phase === "accepted" && active && !r.snapshot?.cancel_requested;
   const canFetch = !!r.result?.published && !!r.result?.result_sha;
+  const held = holdsResources(r);
+  const canDiscard = held && !active && r.machine !== "restoring" && r.machine !== "provisioning";
+  const canRestore = r.machine === "parked";
   const activity = latestActivity(r.events);
 
   const run = async (label: string, fn: () => Promise<void>) => {
@@ -105,15 +193,41 @@ function CloudRunCard({ record: r }: { record: CloudRunRecord }) {
 
   const forget = () =>
     run("Forget run", async () => {
+      if (held) {
+        const discard = await ask(
+          "This run still holds a VM or snapshot in boxd. Discard its workspace first? Nothing would be left behind; the published branch (if any) stays on the remote.",
+          { title: "Discard before forgetting", kind: "warning", okLabel: "Discard workspace" },
+        );
+        if (!discard) return;
+        useAppStore.getState().setCloudRun(await cloudRelease(r.run_id));
+      }
       const ok = await ask(
         active
-          ? "This run may still be active. Forgetting it here does not stop it or delete the VM; you would lose the local record."
-          : "Remove this run from the list? The VM, branch and artifacts are kept until you clean them up.",
+          ? "This run may still be active. Forgetting it here does not stop it; you would lose the local record."
+          : "Remove this run from the list? The published branch stays on the remote until you delete it.",
         { title: "Forget cloud run", kind: "warning", okLabel: "Forget" },
       );
       if (!ok) return;
       await cloudForget(r.run_id, active);
       useAppStore.getState().removeCloudRun(r.run_id);
+    });
+
+  const discard = () =>
+    run("Discard workspace", async () => {
+      const ok = await ask(
+        r.machine === "parked"
+          ? "Delete this run's park snapshot? The workspace on it cannot be restored afterwards."
+          : "Destroy this run's VM (and park snapshot, if any)? Partial work on the VM is lost; the published branch stays on the remote.",
+        { title: "Discard workspace", kind: "warning", okLabel: "Discard" },
+      );
+      if (!ok) return;
+      useAppStore.getState().setCloudRun(await cloudRelease(r.run_id));
+      void runLifecycleTick();
+    });
+
+  const restore = () =>
+    run("Restore", async () => {
+      useAppStore.getState().setCloudRun(await cloudRestore(r.run_id));
     });
 
   return (
@@ -143,6 +257,11 @@ function CloudRunCard({ record: r }: { record: CloudRunRecord }) {
         {" · "}
         {fmtAgo(r.created_at_ms)}
         {r.snapshot && ` · synced ${fmtAgo(r.snapshot.updated_at_ms)}`}
+      </p>
+      <p className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground" title={m.detail ?? undefined}>
+        <span className={`size-1.5 shrink-0 rounded-full ${dot(m.tone)}`} aria-hidden />
+        <span>{m.label}</span>
+        {m.detail && <span className="min-w-0 truncate text-muted-foreground/70">· {m.detail}</span>}
       </p>
       {p.detail && (
         <p className={`mt-1 select-text whitespace-pre-wrap text-xs ${p.tone === "bad" ? "text-destructive" : "text-muted-foreground"}`}>
@@ -186,6 +305,26 @@ function CloudRunCard({ record: r }: { record: CloudRunRecord }) {
             className="h-7 rounded-lg border border-border px-3 text-xs text-muted-foreground hover:text-destructive disabled:opacity-50"
           >
             Cancel
+          </button>
+        )}
+        {canRestore && (
+          <button
+            onClick={() => void restore()}
+            disabled={!!busy}
+            title="Create a VM from the park snapshot to inspect the workspace (held for an hour, then parked again)"
+            className="h-7 rounded-lg border border-border px-3 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+          >
+            {busy === "Restore" ? "Restoring…" : "Restore"}
+          </button>
+        )}
+        {canDiscard && (
+          <button
+            onClick={() => void discard()}
+            disabled={!!busy}
+            title="Remove this run's VM and park snapshot from boxd"
+            className="h-7 rounded-lg border border-border px-3 text-xs text-muted-foreground hover:text-destructive disabled:opacity-50"
+          >
+            {busy === "Discard workspace" ? "Discarding…" : "Discard workspace"}
           </button>
         )}
         {r.phase === "accepted" && (

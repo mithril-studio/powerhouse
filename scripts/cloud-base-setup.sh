@@ -1,29 +1,49 @@
 #!/usr/bin/env bash
-# Prepare (or refresh) a boxd base VM for Powerhouse cloud runs.
+# Prepare a boxd base for Powerhouse cloud runs.
 #
-#   scripts/cloud-base-setup.sh <base-vm> [--reset-store]
+# Publish a versioned base snapshot (the normal path; no VM holds a slot afterwards):
+#   scripts/cloud-base-setup.sh --publish-snapshot <name>          # e.g. powerhouse-base
 #
-# What it does, from your laptop with the external `boxd` CLI:
-#   1. uploads cloud/ (protocol + runner sources) to the VM
-#   2. installs a Rust toolchain there if missing and builds the runner
-#   3. runs `powerhouse-runner install` (agent user, root-only store, boot reconcile unit)
-#   4. optionally wipes the runner store so the base is a clean fork source
+# Refresh an existing VM in place (development / debugging):
+#   scripts/cloud-base-setup.sh <vm> [--reset-store]
+#
+# --publish-snapshot, from your laptop with the external `boxd` CLI:
+#   1. creates a fresh isolated build VM `ph-base-build` (removed if it exists)
+#   2. uploads cloud/ (protocol + runner sources), installs a Rust toolchain if
+#      missing, builds the runner, stages Claude for the agent identity, runs
+#      `powerhouse-runner install` (agent user, root-only store, boot reconcile unit)
+#   3. sweeps: stops all powerhouse-run-* units, verifies the runner store is
+#      empty, clears shell history and /tmp
+#   4. `boxd snapshots save ph-base-build <name>` (re-saving bumps the version),
+#      reads the version back from `snapshots list`
+#   5. removes `ph-base-build`
 #
 # Credentials are never placed on the base: Powerhouse sends each run its own
 # from the macOS Keychain and the runner destroys them when the run ends.
-# The script never creates, deletes, or reconfigures machines.
+# The refresh mode never creates, deletes, or reconfigures machines.
 set -euo pipefail
 
-VM=${1:-}
-[[ -n $VM ]] || { echo "usage: $0 <base-vm> [--reset-store]" >&2; exit 2; }
-shift
+usage() { echo "usage: $0 --publish-snapshot <name> | $0 <vm> [--reset-store]" >&2; exit 2; }
+
+MODE=refresh
+VM=
+SNAPSHOT=
 RESET=0
-for a in "$@"; do
-  case $a in
-    --reset-store) RESET=1;;
-    *) echo "unknown flag $a" >&2; exit 2;;
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --publish-snapshot) MODE=publish; SNAPSHOT=${2:-}; [[ -n $SNAPSHOT ]] || usage; shift 2;;
+    --reset-store) RESET=1; shift;;
+    -h|--help) usage;;
+    -*) echo "unknown flag $1" >&2; usage;;
+    *) VM=$1; shift;;
   esac
 done
+if [[ $MODE == publish ]]; then
+  VM=ph-base-build; RESET=1
+  [[ $SNAPSHOT =~ ^[a-z0-9][a-z0-9-]*$ ]] || { echo "snapshot name must be lowercase letters, digits and dashes" >&2; exit 2; }
+else
+  [[ -n $VM ]] || usage
+fi
 
 here=$(cd "$(dirname "$0")/.." && pwd)
 tgz=$(mktemp -t powerhouse-cloud.XXXXXX)
@@ -31,6 +51,14 @@ trap 'rm -f "$tgz"' EXIT
 COPYFILE_DISABLE=1 tar czf "$tgz" -C "$here" --exclude=target --exclude=.DS_Store cloud
 
 filter() { grep -v -e 'new version' -e 'install.sh' -e 'client-utilities' || true; }
+j() { # first JSON document on stdin, or nothing
+  python3 -c '
+import sys,json
+r=sys.stdin.read()
+i=[x for x in (r.find("{"), r.find("[")) if x>=0]
+if not i: sys.exit(0)
+d,_=json.JSONDecoder().raw_decode(r[min(i):]); print(json.dumps(d))'
+}
 x() { # exec on the VM, print output, propagate exit code
   local out; out=$(boxd machine exec "$VM" --timeout 900 --json -- "$@" 2>&1 | filter)
   python3 - "$out" <<'PY'
@@ -44,14 +72,32 @@ print(d.get("output","").rstrip())
 sys.exit(int(d.get("exit_code",1)))
 PY
 }
+status_of() { # running | stopped | … | absent
+  local out; out=$(boxd machine get "$1" --json 2>&1 || true)
+  echo "$out" | filter | j | python3 -c 'import sys,json; r=sys.stdin.read(); print(json.loads(r).get("status","unknown") if r.strip() else "absent")'
+}
+wait_running() {
+  for _ in $(seq 1 36); do
+    st=$(status_of "$1")
+    [[ $st == running || $st == standby ]] && return 0
+    sleep 5
+  done
+  echo "$1 did not become running (last: $st)" >&2; return 1
+}
 
-echo "→ starting $VM if needed"
-boxd machine start "$VM" --json 2>&1 | filter >/dev/null || true
-for _ in $(seq 1 24); do
-  st=$(boxd machine get "$VM" --json 2>&1 | filter | python3 -c 'import sys,json; r=sys.stdin.read(); print(json.loads(r[r.index("{"):]).get("status"))' 2>/dev/null || echo unknown)
-  [[ $st == running || $st == standby ]] && break
-  sleep 5
-done
+if [[ $MODE == publish ]]; then
+  if [[ $(status_of "$VM") != absent ]]; then
+    echo "→ removing stale $VM"
+    (boxd machine remove "$VM" --confirm --json 2>&1 || true) | filter | j >/dev/null
+  fi
+  echo "→ creating $VM (isolated, from scratch)"
+  boxd machine new "$VM" --isolated --auto-suspend-timeout 0 --auto-hibernate-timeout 0 --json 2>&1 | filter | j
+  wait_running "$VM"
+else
+  echo "→ starting $VM if needed"
+  boxd machine start "$VM" --json 2>&1 | filter >/dev/null || true
+  wait_running "$VM"
+fi
 
 echo "→ uploading runner sources"
 boxd machine cp "$tgz" "$VM:/home/boxd/powerhouse-cloud-src.tgz" --json 2>&1 | filter >/dev/null
@@ -64,8 +110,8 @@ echo "→ building the runner (release)"
 x sh -c 'cd ~/powerhouse-cloud/cloud && ~/.cargo/bin/cargo build --release 2>&1 | tail -2'
 
 if [[ $RESET == 1 ]]; then
-  echo "→ resetting the runner store (clean fork source)"
-  x sudo sh -c 'systemctl stop "powerhouse-run-*.service" 2>/dev/null; rm -rf /var/lib/powerhouse-runner/runner.db* /var/lib/powerhouse-runner/results /var/lib/powerhouse-runner/publish /var/lib/powerhouse-runner-work/*; echo reset'
+  echo "→ resetting the runner store (clean base)"
+  x sudo sh -c 'systemctl stop "powerhouse-run-*.service" 2>/dev/null; rm -rf /var/lib/powerhouse-runner/runner.db* /var/lib/powerhouse-runner/results /var/lib/powerhouse-runner/publish /var/lib/powerhouse-runner/credentials /var/lib/powerhouse-runner-work/*; echo reset'
 fi
 
 echo "→ staging Claude for the unprivileged agent identity (/opt/powerhouse/bin)"
@@ -78,4 +124,32 @@ x sudo /home/boxd/powerhouse-cloud/cloud/target/release/powerhouse-runner instal
 
 echo "→ probe"
 x sudo /usr/local/bin/powerhouse-runner probe
-echo "done. Fork this base per run from Powerhouse (Cloud tab → Run in cloud)."
+
+if [[ $MODE != publish ]]; then
+  echo "done. Refreshed $VM in place."
+  exit 0
+fi
+
+echo "→ sweep: no run units, empty store, no reserved runs, clean history and /tmp"
+x sudo sh -c 'set -e
+systemctl stop "powerhouse-run-*.service" 2>/dev/null || true
+units=$(systemctl list-units --all --plain --no-legend "powerhouse-run-*" | wc -l); [ "$units" -eq 0 ] || { echo "run units still present: $units"; exit 1; }
+runs=$(/usr/local/bin/powerhouse-runner list | python3 -c "import sys,json; print(len(json.load(sys.stdin).get(\"ok\",[])))"); [ "$runs" -eq 0 ] || { echo "runner store not empty: $runs runs"; exit 1; }
+ls /var/lib/powerhouse-runner/results /var/lib/powerhouse-runner/credentials 2>/dev/null | grep -q . && { echo "results or credentials present"; exit 1; } || true
+rm -rf /tmp/* /var/tmp/* 2>/dev/null || true
+rm -f /root/.bash_history /home/boxd/.bash_history; history -c 2>/dev/null || true
+rm -f /home/boxd/powerhouse-cloud-src.tgz
+echo "sweep ok"'
+
+echo "→ saving snapshot $SNAPSHOT from $VM"
+boxd snapshots save "$VM" "$SNAPSHOT" --json 2>&1 | filter | j
+row=$(boxd snapshots list --json 2>&1 | filter | j | python3 -c "import sys,json; d=json.load(sys.stdin); print(json.dumps(next((s for s in d if s['name']=='$SNAPSHOT'), {})))")
+[[ $row != '{}' ]] || { echo "snapshot $SNAPSHOT not listed after save" >&2; exit 1; }
+echo "   $row"
+
+echo "→ removing $VM"
+boxd machine remove "$VM" --confirm --json 2>&1 | filter | j
+
+ver=$(echo "$row" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("version",""))')
+size=$(echo "$row" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("size",""))')
+echo "done. Base snapshot: $SNAPSHOT $ver ($size). Powerhouse creates one VM per run from it (Cloud tab → Run in cloud)."

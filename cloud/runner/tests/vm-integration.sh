@@ -42,11 +42,11 @@ SH
 manifest() { # id script deadline checks_json
   local id=$1 script=$2 deadline=$3 checks=$4
   jq -nc --arg id "$id" --arg script "$script" --arg sha "$SHA" --arg remote "$REMOTE" --argjson deadline "$deadline" --argjson checks "$checks" '{
-    protocol_version: 1, run_id: $id,
+    protocol_version: 2, run_id: $id,
     task: { text: "Add CLOUD_RUN.md", acceptance_criteria: ["file exists"] },
     source: { repo_name: "test", remote_url: $remote, commit_sha: $sha, source_branch: "main" },
     output_branch: ("powerhouse/cloud/" + $id),
-    workspace: { base_vm_id: "test-base", base_vm_name: "test-base" },
+    workspace: { base_snapshot: { name: "test-base", version: "v1" } },
     agent: { provider: "fake", permission_mode: "dontAsk", allowed_tools: [], fake_script: $script },
     checks: $checks, deadline_seconds: $deadline, created_at_ms: 1
   }'
@@ -81,7 +81,7 @@ setup_remote
 echo "remote at $REMOTE sha=$SHA"
 echo; echo "## probe"
 P=$("$RUNNER" probe); echo "$P" | jq -c .ok
-check "probe reports protocol 1 and systemd/cgroup" '[[ $(echo "$P" | j .ok.protocol_version) == 1 && $(echo "$P" | j .ok.systemd) == true && $(echo "$P" | j .ok.agent_user_ready) == true ]]'
+check "probe reports protocol 2 and systemd/cgroup" '[[ $(echo "$P" | j .ok.protocol_version) == 2 && $(echo "$P" | j .ok.systemd) == true && $(echo "$P" | j .ok.agent_user_ready) == true ]]'
 
 # ---------------------------------------------------------------------------
 echo; echo "## 1. complete + passing check → completed, published"

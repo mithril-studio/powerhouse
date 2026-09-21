@@ -511,7 +511,7 @@ mod tests {
                 source_branch: None,
             },
             output_branch: RunManifest::expected_output_branch(id),
-            workspace: WorkspaceSpec { base_vm_id: "vm".into(), base_vm_name: "vm".into() },
+            workspace: WorkspaceSpec::from_snapshot("base", Some("v1".into())),
             agent: AgentSpec {
                 provider: AgentProvider::Fake,
                 model: None,
