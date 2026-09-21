@@ -39,32 +39,54 @@ pub struct Secrets {
     pub git_publish_token: Option<String>,
 }
 
-/// Parse `KEY=VALUE` lines from the root-only credentials file.
-pub fn load_secrets() -> Secrets {
+/// Parse `KEY=VALUE` lines. Only known keys are accepted.
+pub fn parse_secrets(text: &str) -> Secrets {
     let mut claude = vec![];
     let mut git = None;
-    if let Ok(text) = std::fs::read_to_string(paths::CREDENTIALS_FILE) {
-        for line in text.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once('=') {
+            let v = v.trim().trim_matches('"').to_string();
+            if v.is_empty() {
                 continue;
             }
-            if let Some((k, v)) = line.split_once('=') {
-                let v = v.trim().trim_matches('"').to_string();
-                match k.trim() {
-                    "CLAUDE_CODE_OAUTH_TOKEN" | "ANTHROPIC_API_KEY" => {
-                        claude.push((k.trim().to_string(), v))
-                    }
-                    "GIT_PUBLISH_TOKEN" => git = Some(v),
-                    _ => {}
-                }
+            match k.trim() {
+                "CLAUDE_CODE_OAUTH_TOKEN" | "ANTHROPIC_API_KEY" => claude.push((k.trim().to_string(), v)),
+                "GIT_PUBLISH_TOKEN" => git = Some(v),
+                _ => {}
             }
         }
     }
-    Secrets {
-        claude,
-        git_publish_token: git,
+    Secrets { claude, git_publish_token: git }
+}
+
+/// The run's own credentials, delivered with its submission. Nothing ambient
+/// is ever consulted.
+pub fn load_secrets(run_id: &str) -> Secrets {
+    match std::fs::read_to_string(paths::credentials_file(run_id)) {
+        Ok(text) => parse_secrets(&text),
+        Err(_) => Secrets { claude: vec![], git_publish_token: None },
     }
+}
+
+/// Overwrite and remove a secret file. Best effort; absence is success.
+pub fn shred(path: &Path) {
+    if let Ok(meta) = std::fs::metadata(path) {
+        if let Ok(mut f) = std::fs::OpenOptions::new().write(true).open(path) {
+            use std::io::Write;
+            let zeros = vec![0u8; meta.len() as usize];
+            let _ = f.write_all(&zeros);
+            let _ = f.sync_all();
+        }
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+pub fn shred_run_credentials(run_id: &str) {
+    shred(&paths::credentials_file(run_id));
 }
 
 pub fn agent_uid_gid() -> Result<(u32, u32), String> {
@@ -212,7 +234,7 @@ pub fn execute(run_id: &str, self_bin: &str) -> Result<(), String> {
         terminating,
         uid,
         gid,
-        secrets: load_secrets(),
+        secrets: load_secrets(run_id),
         agent_events: 0,
         agent_events_dropped: 0,
     };
@@ -283,6 +305,9 @@ fn persist_result(ctx: &mut Ctx, result: &ResultManifest) {
 }
 
 fn finish(ctx: &mut Ctx, state: RunState, error: Option<RunError>, result: &ResultManifest) -> Result<(), String> {
+    // Credentials live exactly as long as the run.
+    shred_run_credentials(&ctx.row.run_id);
+    ctx.secrets = Secrets { claude: vec![], git_publish_token: None };
     persist_result(ctx, result);
     let first = ctx
         .store
@@ -412,6 +437,22 @@ fn prepare_workspace(ctx: &mut Ctx) -> Result<(), String> {
     let work = paths::work_dir(&m.run_id);
     std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
     gitops::create_agent_checkout(&ctx.trusted, &ctx.workspace, &m.source.remote_url, &m.source.commit_sha)?;
+    // Context from the desktop: `.powerhouse/cloud-task.md`, excluded from
+    // snapshots via the trusted repo's info/exclude (the agent's `.git` is
+    // never consulted for ignore rules).
+    let ph_dir = ctx.workspace.join(".powerhouse");
+    std::fs::create_dir_all(&ph_dir).map_err(|e| e.to_string())?;
+    let brief = render_brief(&m);
+    std::fs::write(ph_dir.join("cloud-task.md"), brief).map_err(|e| e.to_string())?;
+    let exclude = ctx.trusted.join(".git").join("info").join("exclude");
+    if let Some(parent) = exclude.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().append(true).create(true).open(&exclude).map_err(|e| e.to_string())?;
+        writeln!(f, ".powerhouse/").map_err(|e| e.to_string())?;
+    }
     let home = paths::agent_home(&m.run_id);
     std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
     chown_recursive(&work, ctx.uid, ctx.gid)?;
@@ -420,13 +461,43 @@ fn prepare_workspace(ctx: &mut Ctx) -> Result<(), String> {
     Ok(())
 }
 
+/// The brief the agent reads first: task, criteria, checks, and the plan the
+/// desktop attached.
+pub fn render_brief(m: &powerhouse_cloud_protocol::RunManifest) -> String {
+    let mut out = String::new();
+    out.push_str("# Cloud task\n\n");
+    out.push_str(&format!("Run: {}\nRepository: {}\nSource commit: {}\n", m.run_id, m.source.repo_name, m.source.commit_sha));
+    if let Some(b) = &m.source.source_branch {
+        out.push_str(&format!("Source branch: {b}\n"));
+    }
+    out.push_str(&format!("Deadline: {} minutes\n\n## Task\n\n{}\n", m.deadline_seconds / 60, m.task.text.trim()));
+    if !m.task.acceptance_criteria.is_empty() {
+        out.push_str("\n## Acceptance criteria\n\n");
+        for c in &m.task.acceptance_criteria {
+            out.push_str(&format!("- {c}\n"));
+        }
+    }
+    if !m.checks.is_empty() {
+        out.push_str("\n## Checks that run after you finish\n\n");
+        for c in &m.checks {
+            out.push_str(&format!("- `{}`{}\n", c.command, if c.name.is_empty() { String::new() } else { format!(" ({})", c.name) }));
+        }
+    }
+    if !m.context.brief_markdown.trim().is_empty() {
+        out.push_str("\n## Context and plan from Powerhouse\n\n");
+        out.push_str(m.context.brief_markdown.trim());
+        out.push('\n');
+    }
+    out.push_str("\n## Rules\n\n- Work only inside this checkout. Do not push, open pull requests, or switch branches.\n- Nobody can answer questions; if blocked, explain why in your final message and stop.\n- End with a short summary of what changed and any remaining concerns.\n");
+    out
+}
+
 /// Spawn the agent under the unprivileged identity and stream its output.
 fn run_agent(ctx: &mut Ctx) -> Result<(AgentOutcome, Option<i32>, Option<Stop>), String> {
     let m = ctx.row.manifest.clone();
-    let secrets: Vec<(String, String)> = match m.agent.provider {
-        AgentProvider::Claude => ctx.secrets.claude.clone(),
-        AgentProvider::Fake => vec![],
-    };
+    // The fake provider walks the same delivery path as the real one, so tests
+    // prove what the agent process can and cannot see.
+    let secrets: Vec<(String, String)> = ctx.secrets.claude.clone();
     if m.agent.provider == AgentProvider::Claude && secrets.is_empty() {
         return Ok((
             AgentOutcome::default(),
@@ -803,6 +874,7 @@ pub fn finalize(run_id: &str) -> Result<(), String> {
     });
     partial.partial_work_preserved = paths::workspace_dir(run_id).exists();
     store.finish(run_id, state, error, Some(&partial)).map_err(|e| e.to_string())?;
+    shred_run_credentials(run_id);
     Ok(())
 }
 
@@ -833,6 +905,7 @@ pub fn reconcile(reason: &str) -> Result<Vec<String>, String> {
             };
             let _ = store.append_event(&row.run_id, "run.reconciled", &serde_json::json!({ "reason": reason, "unit": unit, "unit_status": format!("{status:?}") }));
             let _ = store.finish(&row.run_id, state, Some(RunError { stage, message: msg }), None);
+            shred_run_credentials(&row.run_id);
             touched.push(row.run_id.clone());
         }
     }

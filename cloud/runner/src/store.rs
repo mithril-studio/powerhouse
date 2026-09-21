@@ -522,6 +522,7 @@ mod tests {
                 fake_script: Some("complete".into()),
             },
             checks: vec![],
+            context: ContextSpec::default(),
             deadline_seconds: 300,
             created_at_ms: 1,
             predecessor_run_id: None,

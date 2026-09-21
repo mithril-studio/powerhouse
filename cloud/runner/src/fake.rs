@@ -24,7 +24,10 @@ pub fn run(script: &str) -> i32 {
     let db = Path::new(&root).join("runner.db");
     let readable = std::fs::File::open(&db).is_ok();
     let writable_root = std::fs::write(Path::new(&root).join("fake-agent-wrote-here"), b"x").is_ok();
-    emit(serde_json::json!({"type":"fake","subtype":"isolation","runner_state_readable":readable,"runner_root_writable":writable_root,"uid":unsafe{libc::geteuid()}}));
+    let brief_present = Path::new(".powerhouse/cloud-task.md").exists();
+    let has_claude = std::env::var_os("CLAUDE_CODE_OAUTH_TOKEN").is_some() || std::env::var_os("ANTHROPIC_API_KEY").is_some();
+    let has_git = std::env::var_os("GIT_PUBLISH_TOKEN").is_some() || std::env::var_os("GITHUB_PAT_TOKEN").is_some();
+    emit(serde_json::json!({"type":"fake","subtype":"isolation","runner_state_readable":readable,"runner_root_writable":writable_root,"uid":unsafe{libc::geteuid()},"brief_present":brief_present,"has_model_token":has_claude,"has_git_token":has_git}));
     if readable || writable_root {
         emit(text("isolation failure: runner state reachable"));
         return 97;

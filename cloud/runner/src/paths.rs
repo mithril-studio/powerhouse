@@ -6,7 +6,6 @@ use std::path::PathBuf;
 pub const DEFAULT_ROOT: &str = "/var/lib/powerhouse-runner";
 pub const DEFAULT_WORK_ROOT: &str = "/var/lib/powerhouse-runner-work";
 pub const DEFAULT_BIN: &str = "/usr/local/bin/powerhouse-runner";
-pub const CREDENTIALS_FILE: &str = "/etc/powerhouse-runner/credentials.env";
 pub const AGENT_USER: &str = "powerhouse-agent";
 pub const UNIT_PREFIX: &str = "powerhouse-run-";
 pub const RECONCILE_UNIT: &str = "powerhouse-runner-reconcile.service";
@@ -30,6 +29,16 @@ pub fn db_path() -> PathBuf {
 
 pub fn manifests_dir() -> PathBuf {
     root().join("manifests")
+}
+
+/// Per-run credentials delivered with the submission; root-only, shredded at
+/// the run's terminal state. There is deliberately no machine-wide file.
+pub fn credentials_dir() -> PathBuf {
+    root().join("credentials")
+}
+
+pub fn credentials_file(run_id: &str) -> PathBuf {
+    credentials_dir().join(format!("{run_id}.env"))
 }
 
 pub fn results_dir(run_id: &str) -> PathBuf {

@@ -76,6 +76,17 @@ pub struct AgentSpec {
     pub fake_script: Option<String>,
 }
 
+/// Context the desktop hands to the agent: the plan/brief rendered by
+/// Powerhouse (handoff document, notes). Written into the workspace as
+/// `.powerhouse/cloud-task.md`, excluded from the published tree.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ContextSpec {
+    #[serde(default)]
+    pub brief_markdown: String,
+}
+
+pub const MAX_BRIEF_BYTES: usize = 256 * 1024;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CheckSpec {
     pub name: String,
@@ -95,6 +106,8 @@ pub struct RunManifest {
     pub agent: AgentSpec,
     #[serde(default)]
     pub checks: Vec<CheckSpec>,
+    #[serde(default)]
+    pub context: ContextSpec,
     pub deadline_seconds: u64,
     pub created_at_ms: u64,
     #[serde(default)]
@@ -159,6 +172,9 @@ impl RunManifest {
         }
         if let Some(prev) = &self.predecessor_run_id {
             validate_run_id(prev)?;
+        }
+        if self.context.brief_markdown.len() > MAX_BRIEF_BYTES {
+            return Err(format!("context brief exceeds {MAX_BRIEF_BYTES} bytes"));
         }
         if self.checks.len() > 50 {
             return Err("at most 50 checks".into());
@@ -461,14 +477,14 @@ pub struct ProbeInfo {
     pub claude_version: Option<String>,
     #[serde(default)]
     pub git_version: Option<String>,
-    pub credentials: CredentialStatus,
-}
-
-/// Presence only — never values.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct CredentialStatus {
-    pub claude: bool,
-    pub git_publish: bool,
+    /// Names (never values) of secret-looking variables visible in the exec
+    /// session that invoked the probe. Non-empty means the platform injects
+    /// ambient credentials that the run itself never receives.
+    #[serde(default)]
+    pub ambient_secret_names: Vec<String>,
+    /// Run ids whose per-run credential files are still on disk (live runs).
+    #[serde(default)]
+    pub pending_credentials: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -540,6 +556,7 @@ mod tests {
                 name: "unit".into(),
                 command: "true".into(),
             }],
+            context: ContextSpec { brief_markdown: "# Plan\n1. do it".into() },
             deadline_seconds: 900,
             created_at_ms: 1_789_849_454_000,
             predecessor_run_id: None,

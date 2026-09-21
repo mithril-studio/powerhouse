@@ -90,6 +90,7 @@ export interface CloudRunRecord {
     source: { commit_sha: string; source_branch: string | null; remote_url: string };
     output_branch: string;
     checks: { name: string; command: string }[];
+    context?: { brief_markdown: string };
     deadline_seconds: number;
     agent: { provider: "claude" | "fake"; model: string | null; permission_mode: string };
   };
@@ -125,7 +126,19 @@ export interface ProbeInfo {
   claude_version: string | null;
   agent_user_ready: boolean;
   store_ready: boolean;
-  credentials: { claude: boolean; git_publish: boolean };
+  /** Names only. Non-empty means boxd injects org secrets into exec sessions. */
+  ambient_secret_names: string[];
+  pending_credentials: number;
+}
+
+export interface SecretStatus {
+  claude: boolean;
+  github: boolean;
+}
+
+export interface HandoffDoc {
+  path: string;
+  content: string;
 }
 
 export interface SubmitRequest {
@@ -145,6 +158,8 @@ export interface SubmitRequest {
   model: string | null;
   provider: "claude" | "fake";
   fakeScript?: string | null;
+  /** Plan/context markdown handed to the agent as `.powerhouse/cloud-task.md`. */
+  brief: string;
 }
 
 // --- ipc -----------------------------------------------------------------------
@@ -164,6 +179,11 @@ export const cloudImport = (runId: string) =>
   invoke<{ worktree_path: string; branch: string; result_sha: string }>("cloud_import", { runId });
 export const cloudForget = (runId: string, force = false) =>
   invoke<void>("cloud_forget", { runId, force });
+export const cloudSecretStatus = () => invoke<SecretStatus>("cloud_secret_status");
+export const cloudSetSecret = (name: "claude_oauth_token" | "github_token", value: string) =>
+  invoke<SecretStatus>("cloud_set_secret", { name, value });
+export const cloudLatestHandoff = (sourcePath: string) =>
+  invoke<HandoffDoc | null>("cloud_latest_handoff", { sourcePath });
 
 // --- observation loop ------------------------------------------------------------
 

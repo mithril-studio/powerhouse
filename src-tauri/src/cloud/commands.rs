@@ -8,14 +8,16 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use powerhouse_cloud_protocol::{
-    AgentProvider, AgentSpec, CheckSpec, EventPage, ProbeInfo, Receipt, Response, ResultManifest,
-    RunManifest, RunSnapshot, RunnerError, SourceSpec, TaskSpec, WorkspaceSpec, PROTOCOL_VERSION,
+    AgentProvider, AgentSpec, CheckSpec, ContextSpec, EventPage, ProbeInfo, Receipt, Response,
+    ResultManifest, RunManifest, RunSnapshot, RunnerError, SourceSpec, TaskSpec, WorkspaceSpec,
+    MAX_BRIEF_BYTES, PROTOCOL_VERSION,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use super::secrets::{self, SecretStore};
 use super::store::{CloudRunRecord, CloudStore, Phase, VmRef};
 use super::transport::{Boxd, BoxdCli, MachineInfo, TransportError};
-use crate::git::git;
+use crate::git::{git, slugify};
 
 pub const RUNNER_BIN: &str = "/usr/local/bin/powerhouse-runner";
 const UPDATE_EVENT: &str = "cloud-run-update";
@@ -24,6 +26,7 @@ const VM_READY_TIMEOUT: Duration = Duration::from_secs(180);
 pub struct CloudManager {
     pub store: Mutex<CloudStore>,
     pub boxd: Arc<dyn Boxd>,
+    pub secrets: Arc<dyn SecretStore>,
 }
 
 impl Default for CloudManager {
@@ -31,13 +34,15 @@ impl Default for CloudManager {
         Self {
             store: Mutex::new(CloudStore::open(CloudStore::default_path())),
             boxd: Arc::new(BoxdCli::default()),
+            secrets: Arc::new(secrets::Keychain),
         }
     }
 }
 
 impl CloudManager {
-    pub fn with(store: CloudStore, boxd: Arc<dyn Boxd>) -> Self {
-        Self { store: Mutex::new(store), boxd }
+    #[allow(dead_code)]
+    pub fn with(store: CloudStore, boxd: Arc<dyn Boxd>, secrets: Arc<dyn SecretStore>) -> Self {
+        Self { store: Mutex::new(store), boxd, secrets }
     }
 }
 
@@ -52,8 +57,20 @@ fn short(run_id: &str) -> String {
     run_id.chars().take(8).collect()
 }
 
-pub fn task_vm_name(run_id: &str) -> String {
-    format!("ph-{}", short(run_id))
+/// Powerhouse machines are named `powerhouse-<branch>` so they stand apart
+/// from other machines in the same boxd org. One machine per branch; one live
+/// run per machine.
+pub fn task_vm_name(source_branch: Option<&str>, run_id: &str) -> String {
+    let base = source_branch
+        .map(slugify)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| short(run_id));
+    let mut name = format!("powerhouse-{base}");
+    if name.len() > 48 {
+        name.truncate(48);
+        name = name.trim_end_matches('-').to_string();
+    }
+    name
 }
 
 /// Parse boxd's idle values ("300s", "off") into seconds.
@@ -163,6 +180,9 @@ pub struct SubmitRequest {
     pub provider: String,
     #[serde(default)]
     pub fake_script: Option<String>,
+    /// Plan/context markdown rendered by Powerhouse (handoff doc, notes).
+    #[serde(default)]
+    pub brief: String,
 }
 
 fn default_permission_mode() -> String {
@@ -233,12 +253,41 @@ pub fn build_manifest(req: &SubmitRequest, run_id: &str, source: &SourceInfo, ba
             fake_script: req.fake_script.clone(),
         },
         checks: req.checks.iter().filter(|c| !c.command.trim().is_empty()).cloned().collect(),
+        context: ContextSpec { brief_markdown: req.brief.chars().take(MAX_BRIEF_BYTES).collect() },
         deadline_seconds: req.deadline_seconds,
         created_at_ms: now_ms(),
         predecessor_run_id: None,
     };
     manifest.validate()?;
     Ok(manifest)
+}
+
+fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|e| e.to_string())?;
+    f.write_all(bytes).map_err(|e| e.to_string())?;
+    f.sync_all().map_err(|e| e.to_string())
+}
+
+fn shred_local(path: &Path) {
+    if let Ok(meta) = std::fs::metadata(path) {
+        if let Ok(mut f) = std::fs::OpenOptions::new().write(true).open(path) {
+            use std::io::Write;
+            let _ = f.write_all(&vec![0u8; meta.len() as usize]);
+            let _ = f.sync_all();
+        }
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 fn manifest_temp_path(run_id: &str) -> PathBuf {
@@ -263,6 +312,11 @@ pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest
     let run_id = uuid::Uuid::new_v4().to_string();
     let manifest = build_manifest(&req, &run_id, &source, &base)?;
     let digest = manifest.digest();
+    // Credentials are Powerhouse's own, per run, and must exist before any
+    // machine is touched. Git publication needs a token only for HTTPS remotes.
+    let need_claude = manifest.agent.provider == AgentProvider::Claude;
+    let need_git = manifest.source.remote_url.starts_with("https://");
+    let credentials_text = secrets::render_run_credentials(mgr.secrets.as_ref(), need_claude, need_git)?;
     let idle_policy = (parse_idle(base.auto_suspend.as_deref()), parse_idle(base.auto_hibernate.as_deref()));
 
     let mut record = CloudRunRecord {
@@ -295,13 +349,27 @@ pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest
     let result = (|| -> Result<(), String> {
         // Provision an isolated task VM with a deterministic name so a lost
         // acknowledgement can be reconciled instead of forking twice.
-        let vm_name = task_vm_name(&run_id);
+        let vm_name = task_vm_name(source.branch.as_deref(), &run_id);
         record.phase = Phase::Provisioning;
         record.phase_detail = Some(format!("Preparing cloud environment: forking {} → {vm_name}", base.name));
         record.task_vm = Some(VmRef { name: vm_name.clone(), id: None });
         persist(mgr, app, &record)?;
         let vm = match boxd.machine_get(&vm_name) {
-            Ok(existing) => existing,
+            Ok(_existing) => {
+                // The branch already has a machine: reuse it, but never run two
+                // tasks on it at once.
+                let info = wait_running(boxd.as_ref(), &vm_name)?;
+                let live: Vec<RunSnapshot> = runner_call(boxd.as_ref(), &vm_name, &["list"], Duration::from_secs(60))
+                    .unwrap_or_default();
+                if let Some(active) = live.iter().find(|r| r.state.is_live()) {
+                    return Err(format!(
+                        "{vm_name} already has an active run ({}, {}). Wait for it or cancel it before starting another run from this branch.",
+                        short(&active.run_id),
+                        active.state.as_str()
+                    ));
+                }
+                info
+            }
             Err(TransportError::NotFound(_)) => {
                 if base.status == "stopped" {
                     record.phase_detail = Some(format!("Starting base {}", base.name));
@@ -342,32 +410,43 @@ pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest
         if !probe.agent_user_ready || !probe.store_ready {
             return Err(format!("runner on {vm_name} is not installed correctly (agent user or store missing); re-run the base setup"));
         }
-        if manifest.agent.provider == AgentProvider::Claude && !probe.credentials.claude {
-            return Err("the base VM has no Claude credential configured for the runner. Provision it on the base (see docs/boxd-cloud-agents-verification.md, credentials) before running Claude tasks.".into());
-        }
-        if manifest.source.remote_url.starts_with("https://") && !probe.credentials.git_publish {
-            return Err("the base VM has no Git publication credential for HTTPS remotes; results could not be published. Provision it on the base first.".into());
+        if !probe.ambient_secret_names.is_empty() {
+            record.phase_detail = Some(format!(
+                "Warning: the task VM's exec sessions carry ambient secrets ({}); the run itself never receives them. Remove them from boxd to keep the machine clean.",
+                probe.ambient_secret_names.join(", ")
+            ));
+            persist(mgr, app, &record)?;
         }
 
         // Transfer the manifest by file, then finalize with a digest check.
         let tmp = manifest_temp_path(&run_id);
         std::fs::create_dir_all(tmp.parent().unwrap()).map_err(|e| e.to_string())?;
         std::fs::write(&tmp, serde_json::to_vec(&manifest).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-        let remote = format!("/home/boxd/ph-{run_id}.json");
+        let remote = format!("/home/boxd/powerhouse-{run_id}.json");
+        let remote_creds = format!("/home/boxd/powerhouse-{run_id}.creds");
         record.phase_detail = Some("Uploading the run request".into());
         persist(mgr, app, &record)?;
         boxd.cp_to(&tmp, &vm_name, &remote).map_err(|e| e.to_string())?;
         let _ = std::fs::remove_file(&tmp);
+        // Per-run credentials travel next to the manifest and are taken into
+        // root-only custody by `submit`; the local copy is shredded right away.
+        let has_credentials = !credentials_text.trim().is_empty();
+        if has_credentials {
+            let creds_tmp = manifest_temp_path(&format!("{run_id}.creds"));
+            write_private(&creds_tmp, credentials_text.as_bytes())?;
+            let cp_result = boxd.cp_to(&creds_tmp, &vm_name, &remote_creds).map_err(|e| e.to_string());
+            shred_local(&creds_tmp);
+            cp_result?;
+        }
 
         record.phase = Phase::SubmissionUnknown;
         record.phase_detail = Some("Submitting to the runner".into());
         persist(mgr, app, &record)?;
-        let receipt: Receipt = match runner_call(
-            boxd.as_ref(),
-            &vm_name,
-            &["submit", "--manifest", &remote, "--expect-digest", &digest],
-            Duration::from_secs(90),
-        ) {
+        let mut submit_args: Vec<&str> = vec!["submit", "--manifest", &remote, "--expect-digest", &digest];
+        if has_credentials {
+            submit_args.extend(["--credentials", remote_creds.as_str()]);
+        }
+        let receipt: Receipt = match runner_call(boxd.as_ref(), &vm_name, &submit_args, Duration::from_secs(90)) {
             Ok(r) => r,
             Err(first) => {
                 // Absence of a response is not absence of a run.
@@ -616,6 +695,58 @@ pub async fn cloud_import(app: AppHandle, run_id: String) -> Result<ImportResult
     .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+pub fn cloud_secret_status(state: State<CloudManager>) -> Result<secrets::SecretStatus, String> {
+    secrets::status(state.secrets.as_ref())
+}
+
+#[tauri::command]
+pub fn cloud_set_secret(state: State<CloudManager>, name: String, value: String) -> Result<secrets::SecretStatus, String> {
+    if !secrets::KNOWN.contains(&name.as_str()) {
+        return Err(format!("unknown secret {name}"));
+    }
+    if value.trim().is_empty() {
+        state.secrets.clear(&name)?;
+    } else {
+        state.secrets.set(&name, value.trim())?;
+    }
+    secrets::status(state.secrets.as_ref())
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct HandoffDoc {
+    pub path: String,
+    pub content: String,
+}
+
+/// Newest `.powerhouse/handoff-*.md` in the source directory, if any. This is
+/// the plan artifact Powerhouse already produces; the cloud form offers it as
+/// the run's brief.
+#[tauri::command]
+pub fn cloud_latest_handoff(source_path: String) -> Result<Option<HandoffDoc>, String> {
+    let dir = Path::new(&source_path).join(".powerhouse");
+    let mut candidates: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.starts_with("handoff-") && n.ends_with(".md"))
+                        .unwrap_or(false)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    candidates.sort();
+    let Some(path) = candidates.pop() else {
+        return Ok(None);
+    };
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&bytes[..bytes.len().min(MAX_BRIEF_BYTES)]).to_string();
+    Ok(Some(HandoffDoc { path: path.to_string_lossy().to_string(), content: text }))
+}
+
 /// Drop the local record. Refuses while the run may still be active unless
 /// forced; never cancels or deletes anything remote.
 #[tauri::command]
@@ -699,8 +830,15 @@ mod tests {
         }
     }
 
-    fn probe_json(claude: bool) -> String {
-        serde_json::json!({"ok": {"protocol_version": PROTOCOL_VERSION, "runner_version": "0.1.0", "agents": ["claude","fake"], "os": "Linux", "arch": "x86_64", "systemd": true, "cgroup_v2": true, "agent_user_ready": true, "store_ready": true, "claude_version": null, "git_version": "git", "credentials": {"claude": claude, "git_publish": true}}}).to_string()
+    fn probe_json(_claude: bool) -> String {
+        serde_json::json!({"ok": {"protocol_version": PROTOCOL_VERSION, "runner_version": "0.1.0", "agents": ["claude","fake"], "os": "Linux", "arch": "x86_64", "systemd": true, "cgroup_v2": true, "agent_user_ready": true, "store_ready": true, "claude_version": null, "git_version": "git", "ambient_secret_names": [], "pending_credentials": 0}}).to_string()
+    }
+
+    fn mem_secrets(claude: bool, github: bool) -> Arc<secrets::MemoryStore> {
+        let m = secrets::MemoryStore::default();
+        if claude { m.set(secrets::CLAUDE_OAUTH, "sk-ant-oat-test").unwrap(); }
+        if github { m.set(secrets::GITHUB_TOKEN, "github_pat_test").unwrap(); }
+        Arc::new(m)
     }
 
     fn temp_repo() -> (tempfile::TempDir, String) {
@@ -728,11 +866,12 @@ mod tests {
             task: "do the thing".into(), acceptance_criteria: vec![], base_vm: base.into(), checks: vec![],
             deadline_seconds: 900, permission_mode: "dontAsk".into(), allowed_tools: vec![], max_turns: None,
             max_budget_usd: None, model: None, provider: "fake".into(), fake_script: Some("complete".into()),
+            brief: "# Plan\n1. add file".into(),
         }
     }
 
     fn manager(fake: Arc<Fake>, dir: &Path) -> CloudManager {
-        CloudManager::with(CloudStore::open(dir.join("cloud-runs.json")), fake)
+        CloudManager::with(CloudStore::open(dir.join("cloud-runs.json")), fake, mem_secrets(true, true))
     }
 
     #[test]
@@ -763,9 +902,9 @@ mod tests {
         let err = res.unwrap_err();
         assert!(err.contains("different manifest"), "{err}");
         let calls = fake.calls.lock().unwrap().clone();
-        assert!(calls.iter().any(|c| c.starts_with("fork base ph-")), "{calls:?}");
+        assert!(calls.iter().any(|c| c.starts_with("fork base powerhouse-main")), "{calls:?}");
         assert!(calls.iter().any(|c| c.contains("probe")));
-        assert!(calls.iter().any(|c| c.starts_with("cp ph-")));
+        assert!(calls.iter().any(|c| c.starts_with("cp powerhouse-main")), "{calls:?}");
         let rec = &mgr.store.lock().unwrap().list()[0];
         assert!(rec.task_vm.is_some());
         assert_eq!(rec.phase, Phase::SubmissionUnknown);
@@ -788,6 +927,7 @@ mod tests {
             fn cp_to(&self, l: &Path, vm: &str, r: &str) -> super::super::transport::TResult<()> { self.0.cp_to(l, vm, r) }
             fn exec(&self, vm: &str, argv: &[String], t: Duration) -> super::super::transport::TResult<super::super::transport::ExecOutput> {
                 if let Some(i) = argv.iter().position(|a| a == "--expect-digest") {
+                    self.0.calls.lock().unwrap().push(format!("exec {vm} {}", argv.join(" ")));
                     let digest = argv[i + 1].clone();
                     let run_id = argv[argv.iter().position(|a| a == "--manifest").unwrap() + 1].trim_start_matches("/home/boxd/ph-").trim_end_matches(".json").to_string();
                     return Ok(super::super::transport::ExecOutput { output: serde_json::json!({"ok": {"run_id": run_id, "manifest_digest": digest, "state": "accepted", "event_cursor": 1, "accepted_at_ms": 5, "duplicate": false}}).to_string(), exit_code: 0 });
@@ -795,9 +935,14 @@ mod tests {
                 self.0.exec(vm, argv, t)
             }
         }
-        let mgr = CloudManager::with(CloudStore::open(dir.path().join("cloud-runs.json")), Arc::new(Echo(fake.clone())));
+        let mgr = CloudManager::with(CloudStore::open(dir.path().join("cloud-runs.json")), Arc::new(Echo(fake.clone())), mem_secrets(true, true));
         let rec = do_submit(&mgr, None, request(&work, "base")).unwrap();
         assert_eq!(rec.phase, Phase::Accepted);
+        assert_eq!(rec.task_vm.as_ref().unwrap().name, "powerhouse-main");
+        assert_eq!(rec.manifest.context.brief_markdown, "# Plan\n1. add file");
+        let calls = fake.calls.lock().unwrap().clone();
+        assert!(calls.iter().any(|c| c.starts_with("cp powerhouse-main /home/boxd/powerhouse-") && c.ends_with(".creds")), "{calls:?}");
+        assert!(calls.iter().any(|c| c.contains("--credentials /home/boxd/powerhouse-")), "{calls:?}");
         assert_eq!(rec.receipt.as_ref().unwrap().manifest_digest, rec.manifest_digest);
         assert_eq!(rec.manifest.output_branch, format!("powerhouse/cloud/{}", rec.run_id));
         // Idle policies were disabled on the fork and the base's values kept for restoration.
@@ -808,21 +953,47 @@ mod tests {
     }
 
     #[test]
-    fn claude_without_credentials_is_refused_and_vm_is_kept() {
+    fn missing_powerhouse_credentials_refuse_before_any_cloud_call() {
         let (dir, work) = temp_repo();
         let fake = Arc::new(Fake::default());
         fake.machine("base", "running");
         fake.on_exec("probe", Ok(probe_json(false)));
-        let mgr = manager(fake.clone(), dir.path());
+        let mgr = CloudManager::with(CloudStore::open(dir.path().join("cloud-runs.json")), fake.clone(), mem_secrets(false, true));
         let mut req = request(&work, "base");
         req.provider = "claude".into();
         req.fake_script = None;
         let err = do_submit(&mgr, None, req).unwrap_err();
         assert!(err.contains("Claude credential"), "{err}");
-        let rec = &mgr.store.lock().unwrap().list()[0];
-        assert_eq!(rec.phase, Phase::SubmitFailed);
-        assert!(rec.task_vm.is_some(), "task VM identity must be retained for reconciliation");
-        assert!(!fake.calls.lock().unwrap().iter().any(|c| c.contains("submit")));
+        // Only the base lookup happened; no machine was forked or touched.
+        let calls = fake.calls.lock().unwrap().clone();
+        assert!(calls.iter().all(|c| c.starts_with("get base")), "{calls:?}");
+        assert!(mgr.store.lock().unwrap().list().is_empty());
+        // Fake provider over HTTPS still needs a Git token for publication.
+        let mgr2 = CloudManager::with(CloudStore::open(dir.path().join("cloud-runs2.json")), fake.clone(), mem_secrets(true, false));
+        let err = do_submit(&mgr2, None, request(&work, "base")).unwrap_err();
+        assert!(err.contains("GitHub token"), "{err}");
+    }
+
+    #[test]
+    fn vm_names_follow_the_powerhouse_branch_convention() {
+        assert_eq!(task_vm_name(Some("main"), "11111111-x"), "powerhouse-main");
+        assert_eq!(task_vm_name(Some("feature/Boxd Cloud_Runs"), "11111111-x"), "powerhouse-feature-boxd-cloud-runs");
+        assert_eq!(task_vm_name(None, "11111111-2222"), "powerhouse-11111111");
+        let long = task_vm_name(Some(&"a".repeat(80)), "x");
+        assert!(long.len() <= 48 && long.starts_with("powerhouse-"));
+    }
+
+    #[test]
+    fn a_branch_machine_with_a_live_run_is_not_reused() {
+        let (dir, work) = temp_repo();
+        let fake = Arc::new(Fake::default());
+        fake.machine("base", "running");
+        fake.machine("powerhouse-main", "running");
+        fake.on_exec("list", Ok(serde_json::json!({"ok": [{"run_id": "22222222-2222-4222-8222-222222222222", "manifest_digest": "d", "state": "running", "stage": "agent", "last_event_seq": 3, "accepted_at_ms": 1, "updated_at_ms": 1, "cancel_requested": false, "result_available": false, "unit_active": true}]}).to_string()));
+        let mgr = manager(fake.clone(), dir.path());
+        let err = do_submit(&mgr, None, request(&work, "base")).unwrap_err();
+        assert!(err.contains("already has an active run"), "{err}");
+        assert!(!fake.calls.lock().unwrap().iter().any(|c| c.starts_with("fork ")));
     }
 
     #[test]
@@ -838,7 +1009,7 @@ mod tests {
         impl Boxd for Existing {
             fn auth(&self) -> super::super::transport::TResult<serde_json::Value> { self.0.auth() }
             fn machine_get(&self, vm: &str) -> super::super::transport::TResult<MachineInfo> {
-                if vm.starts_with("ph-") {
+                if vm.starts_with("powerhouse-") && vm != "base" {
                     self.0.calls.lock().unwrap().push(format!("get {vm}"));
                     return Ok(MachineInfo { name: vm.into(), id: Some("existing".into()), status: "running".into(), isolated: Some("yes".into()), auto_suspend: Some("off".into()), auto_hibernate: Some("off".into()), source: None });
                 }
@@ -850,7 +1021,8 @@ mod tests {
             fn cp_to(&self, l: &Path, vm: &str, r: &str) -> super::super::transport::TResult<()> { self.0.cp_to(l, vm, r) }
             fn exec(&self, vm: &str, argv: &[String], t: Duration) -> super::super::transport::TResult<super::super::transport::ExecOutput> { self.0.exec(vm, argv, t) }
         }
-        let mgr2 = CloudManager::with(CloudStore::open(dir.path().join("cloud-runs2.json")), Arc::new(Existing(fake.clone())));
+        fake.on_exec("list", Ok(serde_json::json!({"ok": []}).to_string()));
+        let mgr2 = CloudManager::with(CloudStore::open(dir.path().join("cloud-runs2.json")), Arc::new(Existing(fake.clone())), mem_secrets(true, true));
         drop(mgr);
         let _ = do_submit(&mgr2, None, request(&work, "base"));
         let calls = fake.calls.lock().unwrap().clone();
@@ -935,7 +1107,7 @@ mod e2e {
         let source = std::env::var("POWERHOUSE_CLOUD_E2E_SOURCE").expect("POWERHOUSE_CLOUD_E2E_SOURCE");
         let dir = tempfile::tempdir().unwrap();
         let store_path = dir.path().join("cloud-runs.json");
-        let mgr = CloudManager::with(CloudStore::open(store_path.clone()), Arc::new(BoxdCli::default()));
+        let mgr = CloudManager::with(CloudStore::open(store_path.clone()), Arc::new(BoxdCli::default()), Arc::new(secrets::Keychain));
         let req = SubmitRequest {
             repo_id: "e2e".into(),
             repo_path: source.clone(),
@@ -953,6 +1125,7 @@ mod e2e {
             model: None,
             provider: "fake".into(),
             fake_script: Some("slow-complete".into()),
+            brief: "# E2E plan\nAdd CLOUD_RUN.md".into(),
         };
         let t0 = Instant::now();
         let rec = do_submit(&mgr, None, req).expect("submit");
@@ -963,7 +1136,7 @@ mod e2e {
 
         // "Close the app": a brand-new manager reloads the receipt from disk and
         // reconciles purely by run id.
-        let mgr2 = CloudManager::with(CloudStore::open(store_path), Arc::new(BoxdCli::default()));
+        let mgr2 = CloudManager::with(CloudStore::open(store_path), Arc::new(BoxdCli::default()), Arc::new(secrets::Keychain));
         let deadline = Instant::now() + Duration::from_secs(300);
         let mut last = None;
         while Instant::now() < deadline {

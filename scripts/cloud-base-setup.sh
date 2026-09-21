@@ -1,28 +1,26 @@
 #!/usr/bin/env bash
 # Prepare (or refresh) a boxd base VM for Powerhouse cloud runs.
 #
-#   scripts/cloud-base-setup.sh <base-vm> [--reset-store] [--credentials-from-env]
+#   scripts/cloud-base-setup.sh <base-vm> [--reset-store]
 #
 # What it does, from your laptop with the external `boxd` CLI:
 #   1. uploads cloud/ (protocol + runner sources) to the VM
 #   2. installs a Rust toolchain there if missing and builds the runner
 #   3. runs `powerhouse-runner install` (agent user, root-only store, boot reconcile unit)
 #   4. optionally wipes the runner store so the base is a clean fork source
-#   5. optionally copies the boxd-injected CLAUDE_CODE_OAUTH_TOKEN / GITHUB_PAT_TOKEN
-#      from the exec session into the runner's root-only credentials file
-#      (/etc/powerhouse-runner/credentials.env). Nothing from your laptop is copied.
 #
-# It never creates, deletes, or reconfigures machines. Forks are made per run.
+# Credentials are never placed on the base: Powerhouse sends each run its own
+# from the macOS Keychain and the runner destroys them when the run ends.
+# The script never creates, deletes, or reconfigures machines.
 set -euo pipefail
 
 VM=${1:-}
-[[ -n $VM ]] || { echo "usage: $0 <base-vm> [--reset-store] [--credentials-from-env]" >&2; exit 2; }
+[[ -n $VM ]] || { echo "usage: $0 <base-vm> [--reset-store]" >&2; exit 2; }
 shift
-RESET=0; CREDS=0
+RESET=0
 for a in "$@"; do
   case $a in
     --reset-store) RESET=1;;
-    --credentials-from-env) CREDS=1;;
     *) echo "unknown flag $a" >&2; exit 2;;
   esac
 done
@@ -71,11 +69,7 @@ if [[ $RESET == 1 ]]; then
 fi
 
 echo "→ installing"
-if [[ $CREDS == 1 ]]; then
-  x sudo --preserve-env=CLAUDE_CODE_OAUTH_TOKEN,GITHUB_PAT_TOKEN /home/boxd/powerhouse-cloud/cloud/target/release/powerhouse-runner install --credentials-from-env
-else
-  x sudo /home/boxd/powerhouse-cloud/cloud/target/release/powerhouse-runner install
-fi
+x sudo /home/boxd/powerhouse-cloud/cloud/target/release/powerhouse-runner install
 
 echo "→ probe"
 x sudo /usr/local/bin/powerhouse-runner probe

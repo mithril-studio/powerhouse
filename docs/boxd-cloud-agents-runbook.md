@@ -9,9 +9,10 @@ wrong.
 
 1. Powerhouse verifies the source is committed **and** on `origin`, records the
    run locally (`~/.powerhouse/cloud-runs.json`, written atomically before any
-   remote action), forks the base VM into `ph-<first 8 chars of run id>`,
-   disables both idle timers on the fork, probes the runner, uploads the
-   manifest by file, and calls `submit` with the manifest digest.
+   remote action), forks the base VM into `powerhouse-<branch>` (or reuses that
+   machine if it exists and has no live run), disables both idle timers on it,
+   probes the runner, uploads the manifest and the run's credentials by file,
+   and calls `submit` with the manifest digest.
 2. The runner (`powerhouse-runner`, `cloud/runner`) stores the run in SQLite,
    launches one transient systemd unit, claims ownership exactly once, checks out
    the exact commit into an agent-owned workspace, runs the agent as the
@@ -57,26 +58,56 @@ If a fresh isolated machine reports `boot: timeout` and stays `starting`, do
 not create another one. Wait, then `boxd machine stop` / `start` the same
 machine (see the verification doc for the 2026-09-18 incident and diagnosis).
 
-### Credentials (not yet provisioned — needs your approval)
+### Credentials: Powerhouse's own, per run, destroyed at the end
 
-The runner reads `/etc/powerhouse-runner/credentials.env` (root, 0600):
+Decision (2026-09-21): Powerhouse stays single-user for now; no separate boxd
+org. Ambient boxd org secrets are being removed by hand; Powerhouse machines are
+recognisable by name (`powerhouse-<branch>`, base `powerhouse-cloud-base`).
 
-- `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`): passed only into the
-  agent's environment.
-- `GIT_PUBLISH_TOKEN`: used only by the trusted publisher for HTTPS remotes,
-  via an in-memory `http.extraHeader`; never visible to the agent.
+How a run gets its credentials:
 
-boxd injects your org secrets into `exec` sessions on the base (names seen:
-`CLAUDE_CODE_OAUTH_TOKEN`, `GITHUB_PAT_TOKEN`). To copy exactly those two into
-the runner's file, run `scripts/cloud-base-setup.sh <base> --credentials-from-env`.
-Scope caveat: a GitHub PAT is not restricted to one branch by the platform;
-the runner enforces the `powerhouse/cloud/<run id>` destination in code and
-refuses to force-push, but the token itself could do more. Prefer a
-fine-grained PAT limited to the target repository with contents:write.
+1. You store two secrets once in the cloud form. They live in the macOS
+   Keychain under service `Powerhouse` (`claude_oauth_token`, `github_token`).
+   Claude: the token from `claude setup-token` on the account you want the
+   cloud agent to bill. GitHub: a fine-grained personal access token limited to
+   the target repository with *Contents: read and write* (needed to fetch a
+   private repo and to push the run branch). Nothing is read from boxd, from
+   the base VM, or from your other tools.
+2. On submit, Powerhouse renders a `KEY=VALUE` file with only what that run
+   needs (`CLAUDE_CODE_OAUTH_TOKEN` for Claude runs, `GIT_PUBLISH_TOKEN` for
+   HTTPS remotes), uploads it next to the manifest, and passes it to
+   `powerhouse-runner submit --credentials`. The runner moves it into
+   root-only storage (`/var/lib/powerhouse-runner/credentials/<run id>.env`,
+   mode 0600) and shreds the drop location. The laptop copy is shredded
+   immediately after upload.
+3. During the run the model token goes only into the agent's environment; the
+   Git token goes only into the trusted publisher's environment (an in-memory
+   `http.extraHeader`). The agent never sees the Git token; the fake agent's
+   isolation probe asserts this on every run.
+4. At any terminal state (completed, failed, blocked, cancelled, interrupted,
+   launch failure, boot reconcile) the runner overwrites and deletes the file.
+   `powerhouse-runner probe` reports `pending_credentials` so you can see when
+   a live run still holds one.
 
-Until credentials are provisioned, Powerhouse refuses Claude runs on that base
-with an actionable error. The fake agent (`provider: fake`) needs none and is
-used by the tests.
+The base image never contains a secret, so forks inherit none. If the exec
+session on a machine still carries boxd org secrets, the probe lists their
+names (`ambient_secret_names`) and the form shows a warning; runs never receive
+them because the runner and the agent do not inherit the exec environment.
+
+Scope caveat: a GitHub token is not branch-scoped by GitHub. The runner enforces
+the `powerhouse/cloud/<run id>` destination in code and never force-pushes,
+but the token itself could do whatever its permissions allow, so keep it
+fine-grained and repository-scoped.
+
+### Context the agent receives
+
+The manifest carries the task, acceptance criteria, checks, permission mode,
+tool allowlist, deadline and exact commit, plus a **brief**: markdown written by
+Powerhouse into `.powerhouse/cloud-task.md` in the workspace (excluded from the
+published tree). The cloud form prefills it from the newest
+`.powerhouse/handoff-*.md` in the source worktree, the plan artifact Powerhouse
+already produces, and you can edit it before submitting. The prompt tells the
+agent to read that file first.
 
 ## Idle policy and cost
 
@@ -87,10 +118,10 @@ and the runner has no boxd credential, so if the laptop never reconnects the
 fork stays running until you restore the policy or stop it by hand:
 
 ```sh
-boxd machine config set ph-xxxxxxxx auto-suspend.timeout 300
-boxd machine config set ph-xxxxxxxx auto-hibernate.timeout 900
+boxd machine config set powerhouse-<branch> auto-suspend.timeout 300
+boxd machine config set powerhouse-<branch> auto-hibernate.timeout 900
 # or
-boxd machine stop ph-xxxxxxxx
+boxd machine stop powerhouse-<branch>
 ```
 
 Cloud-owned restoration needs an org-fenced API key (`boxd auth keys create
@@ -99,7 +130,7 @@ gRPC call at run end. This is a deferred, approval-gated increment.
 
 ## Retention and cleanup
 
-Nothing is deleted automatically. Per run you keep: the fork VM (`ph-*`), the
+Nothing is deleted automatically. Per branch you keep the machine (`powerhouse-<branch>`); per run the
 remote branch `powerhouse/cloud/<run id>`, and on the fork
 `/var/lib/powerhouse-runner/results/<run id>/` (result.json, diff.patch,
 agent.jsonl, check logs) plus the workspace `/var/lib/powerhouse-runner-work/<run id>`.
@@ -107,7 +138,7 @@ agent.jsonl, check logs) plus the workspace `/var/lib/powerhouse-runner-work/<ru
 Cleanup, when you are done reviewing:
 
 ```sh
-boxd machine remove ph-xxxxxxxx --confirm
+boxd machine remove powerhouse-<branch> --confirm
 git push origin --delete powerhouse/cloud/<run id>
 ```
 
@@ -118,7 +149,7 @@ may still be active (unless you confirm).
 
 | Symptom | What happened | What to do |
 | --- | --- | --- |
-| Card says *Preparing cloud environment* after restart | Submission died before a receipt. | Powerhouse marks it *Not submitted* if no VM was created; if a `ph-*` VM exists it asks the runner by run id and either recovers the receipt or marks it *Not submitted*. The VM is retained. |
+| Card says *Preparing cloud environment* after restart | Submission died before a receipt. | Powerhouse marks it *Not submitted* if no VM was created; if a `powerhouse-<branch>` VM exists it asks the runner by run id and either recovers the receipt or marks it *Not submitted*. The VM is retained. |
 | *Submission outcome unknown* | `submit` did not answer. | Each sync calls `inspect <run id>`; a found run becomes accepted, a missing one becomes *Not submitted*. Nothing is re-sent. |
 | *Interrupted* | Executor lost (VM reboot, `SIGKILL`, supervisor gone). | Partial work stays in the workspace on the fork; the run is never rerun automatically. Start a new run if needed. |
 | *Blocked* | Provider hit a turn/budget limit or asked for input. | Read the activity; raise limits or clarify the task; start a new run. |
@@ -130,10 +161,10 @@ may still be active (unless you confirm).
 Manual inspection on a fork:
 
 ```sh
-boxd machine exec ph-xxxxxxxx -- sudo powerhouse-runner list
-boxd machine exec ph-xxxxxxxx -- sudo powerhouse-runner inspect <run id>
-boxd machine exec ph-xxxxxxxx -- sudo powerhouse-runner events <run id> --after 0 --limit 200
-boxd machine exec ph-xxxxxxxx -- sudo powerhouse-runner result <run id>
+boxd machine exec powerhouse-<branch> -- sudo powerhouse-runner list
+boxd machine exec powerhouse-<branch> -- sudo powerhouse-runner inspect <run id>
+boxd machine exec powerhouse-<branch> -- sudo powerhouse-runner events <run id> --after 0 --limit 200
+boxd machine exec powerhouse-<branch> -- sudo powerhouse-runner result <run id>
 ```
 
 ## Tests

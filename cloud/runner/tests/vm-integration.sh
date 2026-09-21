@@ -213,6 +213,33 @@ echo; echo "## 17. write-outside attempt fails under agent identity"
 ID=$(newid); submit "$(manifest "$ID" write-outside 300 '[]')" >/dev/null
 S=$(wait_terminal "$ID"); check "completed, escape failed ($S)" '[[ $S == completed && $(events "$ID" | jq -r "select(.payload.subtype==\"escape_attempt\") | .payload.succeeded") == false ]]'
 
+echo; echo "## 18. per-run credentials: custody, delivery, and destruction"
+ID=$(newid); M=$(manifest "$ID" complete 300 '[]'); f=$(mktemp /tmp/manifest.XXXXXX.json); echo "$M" > "$f"
+CF=/home/boxd/powerhouse-$ID.creds; printf 'CLAUDE_CODE_OAUTH_TOKEN=fake-oauth-token-value\nGIT_PUBLISH_TOKEN=fake-git-token\n' > "$CF"
+D=$("$RUNNER" digest --manifest "$f" | jq -r .ok.digest)
+R=$("$RUNNER" submit --manifest "$f" --expect-digest "$D" --credentials "$CF")
+check "accepted with credentials" '[[ $(echo "$R" | j .ok.state) == accepted ]]'
+check "drop location shredded" '[[ ! -e $CF ]]'
+check "root-only custody while live" '[[ $(stat -c %a:%U "$POWERHOUSE_RUNNER_ROOT/credentials/$ID.env") == 600:root ]]'
+S=$(wait_terminal "$ID"); check "completed ($S)" '[[ $S == completed ]]'
+ISO=$(events "$ID" | jq -c 'select(.kind=="agent.fake" and .payload.subtype=="isolation") | .payload')
+check "agent received the model token but not the git token" '[[ $(echo "$ISO" | jq -r .has_model_token) == true && $(echo "$ISO" | jq -r .has_git_token) == false ]]'
+check "brief present in workspace" '[[ $(echo "$ISO" | jq -r .brief_present) == true ]]'
+check "credentials destroyed at terminal state" '[[ ! -e $POWERHOUSE_RUNNER_ROOT/credentials/$ID.env ]]'
+check "brief not published" '! git -C "$SRV/test.git" ls-tree -r --name-only "$("$RUNNER" result "$ID" | j .ok.result_sha)" | grep -q "^.powerhouse/"'
+check "token value absent from events" '! events "$ID" | grep -q fake-oauth-token-value'
+echo '{"protocol_version": 1}' > /tmp/empty.creds
+ID2=$(newid); M2=$(manifest "$ID2" complete 300 '[]'); echo "$M2" > /tmp/m3.json
+check "empty credentials rejected" '[[ $("$RUNNER" submit --manifest /tmp/m3.json --credentials /tmp/empty.creds | j .error.code) == credentials_empty ]]'
+echo; echo "## 19. cancelled run also destroys credentials"
+ID=$(newid); M=$(manifest "$ID" hang 600 '[]'); f=$(mktemp /tmp/manifest.XXXXXX.json); echo "$M" > "$f"
+CF=/home/boxd/powerhouse-$ID.creds; printf 'CLAUDE_CODE_OAUTH_TOKEN=x\n' > "$CF"
+"$RUNNER" submit --manifest "$f" --credentials "$CF" >/dev/null
+for _ in $(seq 1 30); do [[ $("$RUNNER" inspect "$ID" | j .ok.state) == running ]] && break; sleep 1; done
+check "credentials present during run" '[[ -e $POWERHOUSE_RUNNER_ROOT/credentials/$ID.env ]]'
+"$RUNNER" cancel "$ID" >/dev/null; S=$(wait_terminal "$ID" 40)
+check "cancelled ($S) and credentials gone" '[[ $S == cancelled && ! -e $POWERHOUSE_RUNNER_ROOT/credentials/$ID.env ]]'
+
 echo; echo "## summary: $pass passed, $fail failed"
 pkill -f "git daemon --base-path=$SRV" || true
 [[ $fail == 0 ]]

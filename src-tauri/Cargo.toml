@@ -27,6 +27,7 @@ tauri-plugin-dialog = "2.7.3"
 tauri-plugin-store = "2.4.5"
 uuid = { version = "1.26.1", features = ["v4"] }
 powerhouse-cloud-protocol = { path = "../cloud/protocol" }
+keyring = { version = "3", features = ["apple-native"] }
 dirs = "7.0.0"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"

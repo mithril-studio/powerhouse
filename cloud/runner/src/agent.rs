@@ -138,7 +138,7 @@ pub fn build_prompt(m: &RunManifest) -> String {
     p.push_str(&m.source.commit_sha);
     p.push_str(" of ");
     p.push_str(&m.source.repo_name);
-    p.push_str(".\n\nTask:\n");
+    p.push_str(".\n\nRead `.powerhouse/cloud-task.md` first: it holds the task, the acceptance criteria, the checks that will run, and the plan and context prepared in Powerhouse.\n\nTask:\n");
     p.push_str(&m.task.text);
     if !m.task.acceptance_criteria.is_empty() {
         p.push_str("\n\nAcceptance criteria:\n");

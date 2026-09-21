@@ -12,8 +12,7 @@ mod util;
 
 use clap::{Parser, Subcommand};
 use powerhouse_cloud_protocol::{
-    AgentProvider, CredentialStatus, ProbeInfo, RunManifest, RunSnapshot, RunState, RunnerError,
-    PROTOCOL_VERSION,
+    AgentProvider, ProbeInfo, RunManifest, RunSnapshot, RunState, RunnerError, PROTOCOL_VERSION,
 };
 use store::{Store, StoreError};
 
@@ -35,10 +34,6 @@ enum Cmd {
         /// Also install this binary to /usr/local/bin.
         #[arg(long, default_value_t = true)]
         install_binary: bool,
-        /// Copy CLAUDE_CODE_OAUTH_TOKEN / GITHUB_PAT_TOKEN from the calling
-        /// environment into the root-only credentials file.
-        #[arg(long)]
-        credentials_from_env: bool,
     },
     /// Print the canonical digest of a manifest (what `submit` will compute).
     Digest {
@@ -52,6 +47,10 @@ enum Cmd {
         /// SHA-256 the client computed; mismatch means a damaged upload.
         #[arg(long)]
         expect_digest: Option<String>,
+        /// KEY=VALUE file with this run's credentials. Moved into root-only
+        /// storage (the original is shredded) and destroyed when the run ends.
+        #[arg(long)]
+        credentials: Option<std::path::PathBuf>,
     },
     /// Authoritative snapshot of one run.
     Inspect { run_id: String },
@@ -94,11 +93,11 @@ fn main() {
         .unwrap_or_else(|_| paths::DEFAULT_BIN.to_string());
     let code = match cli.cmd {
         Cmd::Probe => respond(probe()),
-        Cmd::Install { install_binary, credentials_from_env } => {
-            respond(install(&self_bin, install_binary, credentials_from_env))
-        }
+        Cmd::Install { install_binary } => respond(install(&self_bin, install_binary)),
         Cmd::Digest { manifest } => respond(digest_of(&manifest)),
-        Cmd::Submit { manifest, expect_digest } => respond(submit(&manifest, expect_digest.as_deref())),
+        Cmd::Submit { manifest, expect_digest, credentials } => {
+            respond(submit(&manifest, expect_digest.as_deref(), credentials.as_deref()))
+        }
         Cmd::Inspect { run_id } => respond(inspect(&run_id)),
         Cmd::List => respond(list()),
         Cmd::Events { run_id, after, limit } => respond(
@@ -183,7 +182,17 @@ fn probe() -> Result<ProbeInfo, RunnerError> {
         .output()
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
-    let secrets = exec::load_secrets();
+    let ambient_secret_names: Vec<String> = std::env::vars_os()
+        .filter_map(|(k, _)| k.into_string().ok())
+        .filter(|k| {
+            let u = k.to_uppercase();
+            (u.contains("TOKEN") || u.contains("SECRET") || u.contains("API_KEY") || u.ends_with("_KEY") || u.contains("PASSWORD"))
+                && !u.starts_with("POWERHOUSE_")
+        })
+        .collect();
+    let pending_credentials = std::fs::read_dir(paths::credentials_dir())
+        .map(|rd| rd.flatten().count() as u32)
+        .unwrap_or(0);
     Ok(ProbeInfo {
         protocol_version: PROTOCOL_VERSION,
         runner_version: RUNNER_VERSION.to_string(),
@@ -196,14 +205,12 @@ fn probe() -> Result<ProbeInfo, RunnerError> {
         store_ready: paths::db_path().exists(),
         claude_version,
         git_version,
-        credentials: CredentialStatus {
-            claude: !secrets.claude.is_empty(),
-            git_publish: secrets.git_publish_token.is_some(),
-        },
+        ambient_secret_names,
+        pending_credentials,
     })
 }
 
-fn install(self_bin: &str, install_binary: bool, credentials_from_env: bool) -> Result<serde_json::Value, RunnerError> {
+fn install(self_bin: &str, install_binary: bool) -> Result<serde_json::Value, RunnerError> {
     if !is_root() {
         return Err(RunnerError::new("not_root", "install must run as root"));
     }
@@ -224,6 +231,7 @@ fn install(self_bin: &str, install_binary: bool, credentials_from_env: bool) -> 
         (paths::manifests_dir(), 0o700),
         (paths::root().join("results"), 0o700),
         (paths::root().join("publish"), 0o700),
+        (paths::credentials_dir(), 0o700),
         (paths::trusted_home(), 0o700),
         (paths::work_root(), 0o711),
     ] {
@@ -245,26 +253,6 @@ fn install(self_bin: &str, install_binary: bool, credentials_from_env: bool) -> 
         systemd::write_reconcile_unit(paths::DEFAULT_BIN).map_err(|e| RunnerError::new("reconcile_unit", e))?;
         steps.push("reconcile unit enabled");
     }
-    if credentials_from_env {
-        let mut lines = vec![];
-        for (from, to) in [
-            ("CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"),
-            ("GITHUB_PAT_TOKEN", "GIT_PUBLISH_TOKEN"),
-        ] {
-            if let Ok(v) = std::env::var(from) {
-                if !v.trim().is_empty() {
-                    lines.push(format!("{to}={}", v.trim()));
-                }
-            }
-        }
-        if lines.is_empty() {
-            return Err(RunnerError::new("no_credentials", "no credential variables present in the calling environment"));
-        }
-        let path = std::path::Path::new(paths::CREDENTIALS_FILE);
-        util::write_atomic(path, format!("{}\n", lines.join("\n")).as_bytes(), 0o600)
-            .map_err(|e| RunnerError::new("credentials", e.to_string()))?;
-        steps.push("credentials stored (root-only)");
-    }
     Ok(serde_json::json!({ "steps": steps, "probe": probe()? }))
 }
 
@@ -276,7 +264,11 @@ fn digest_of(path: &std::path::Path) -> Result<serde_json::Value, RunnerError> {
     Ok(serde_json::json!({ "run_id": manifest.run_id, "digest": manifest.digest() }))
 }
 
-fn submit(manifest_path: &std::path::Path, expect_digest: Option<&str>) -> Result<powerhouse_cloud_protocol::Receipt, RunnerError> {
+fn submit(
+    manifest_path: &std::path::Path,
+    expect_digest: Option<&str>,
+    credentials: Option<&std::path::Path>,
+) -> Result<powerhouse_cloud_protocol::Receipt, RunnerError> {
     let bytes = std::fs::read(manifest_path).map_err(|e| RunnerError::new("manifest_unreadable", e.to_string()))?;
     if bytes.len() > 1024 * 1024 {
         return Err(RunnerError::new("manifest_too_large", "manifest exceeds 1 MiB"));
@@ -293,8 +285,30 @@ fn submit(manifest_path: &std::path::Path, expect_digest: Option<&str>) -> Resul
             ));
         }
     }
+    // Take custody of the run's credentials before anything is durable, so a
+    // launched run always finds them and the drop location holds nothing.
+    if let Some(src) = credentials {
+        let bytes = std::fs::read(src).map_err(|e| RunnerError::new("credentials_unreadable", e.to_string()))?;
+        if bytes.len() > 64 * 1024 {
+            exec::shred(src);
+            return Err(RunnerError::new("credentials_too_large", "credentials file exceeds 64 KiB"));
+        }
+        let text = String::from_utf8_lossy(&bytes).to_string();
+        let parsed = exec::parse_secrets(&text);
+        if parsed.claude.is_empty() && parsed.git_publish_token.is_none() {
+            exec::shred(src);
+            return Err(RunnerError::new("credentials_empty", "credentials file has no recognised keys"));
+        }
+        std::fs::create_dir_all(paths::credentials_dir()).map_err(|e| RunnerError::new("credentials", e.to_string()))?;
+        util::write_atomic(&paths::credentials_file(&manifest.run_id), text.as_bytes(), 0o600)
+            .map_err(|e| RunnerError::new("credentials", e.to_string()))?;
+        exec::shred(src);
+    }
     let mut store = open_store()?;
     let receipt = store.submit(&manifest).map_err(store_err)?;
+    if receipt.state.is_terminal() {
+        exec::shred_run_credentials(&manifest.run_id);
+    }
     // Keep the accepted manifest in root-only storage (idempotent rewrite).
     let _ = util::write_atomic(
         &paths::manifests_dir().join(format!("{}.json", manifest.run_id)),
@@ -315,6 +329,7 @@ fn submit(manifest_path: &std::path::Path, expect_digest: Option<&str>) -> Resul
         }
         Err(e) => {
             // Definite launch failure: nothing is running, say so durably.
+            exec::shred_run_credentials(&manifest.run_id);
             let _ = store.finish(
                 &manifest.run_id,
                 RunState::Failed,

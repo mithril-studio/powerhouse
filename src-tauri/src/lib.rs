@@ -61,6 +61,9 @@ pub fn run() {
             cloud::commands::cloud_diff,
             cloud::commands::cloud_import,
             cloud::commands::cloud_forget,
+            cloud::commands::cloud_secret_status,
+            cloud::commands::cloud_set_secret,
+            cloud::commands::cloud_latest_handoff,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
