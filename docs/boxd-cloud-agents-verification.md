@@ -2,13 +2,47 @@
 
 ## Status
 
-2026-09-20: slices 0–3 and 5 are implemented and verified with the fake agent
-against real boxd machines; slice 4 (headless Claude) and the laptop-off
-acceptance test are **implemented but not cloud-verified** because no
-credential has been provisioned into the runner (approval-gated, see the
-runbook). Everything lives on `feature/boxd-cloud-runs`. The 2026-09-18 boot
-failure is diagnosed below; it was platform-side and never involved Powerhouse
-code. Operational guidance: `docs/boxd-cloud-agents-runbook.md`.
+2026-09-21: all six slices are implemented; slices 0–5 are verified against
+real boxd machines, including one **real headless Claude run** that finished
+and published while no desktop process was attached (details below). The one
+step not performed is the physical laptop-off/sleep during a run, which only
+the user can do; the software equivalent (submitting process gone, recovery by
+run id from a fresh store) passed. Everything lives on
+`feature/boxd-cloud-runs`. The 2026-09-18 boot failure is diagnosed below; it
+was platform-side and never involved Powerhouse code. Operational guidance:
+`docs/boxd-cloud-agents-runbook.md`.
+
+### Real Claude run (2026-09-21 11:38 UTC)
+
+Credentials came from the macOS Keychain (`claude_oauth_token`,
+`github_token:mithril-studio`; both verified beforehand: GitHub `/user` 200 as
+`mithril-studio`, scopes `repo, project, user`, expiry 2026-12-20; one Claude
+call returned `OK` for $0.026). The first attempt
+(`01f1f9fb-aa9b-484b-a558-5d71f3c70778`) ended `interrupted` in 1.5 s: the
+image keeps the native Claude binary under `/home/boxd`, which
+`powerhouse-agent` cannot traverse (`could not start agent: Permission
+denied`). Fixed by staging the binary at `/opt/powerhouse/bin/claude` in the
+base setup, probing it as the agent user, and recording internal executor
+errors as `failed` at the current stage. The stale fork was destroyed and the
+base rebuilt.
+
+Second attempt, through the desktop backend (`cargo test cloud_e2e` with
+`POWERHOUSE_CLOUD_E2E_PROVIDER=claude`):
+
+| Item | Value |
+| --- | --- |
+| Run / VM | `49c6291e-290c-49e5-a2d0-4e17f8f8dba9` on `powerhouse-main` (`9801a5f9-d3a7-4b14-b9c8-0fa7e49f5a73`, fork of the base) |
+| Source | `mithril-studio/powerhouse` `main` @ `db2b7c51` (pushed) |
+| Task | create `docs/cloud-smoke.md` (<20 lines) from README and layout; check `test -f docs/cloud-smoke.md && grep -qi powerhouse docs/cloud-smoke.md` |
+| Acceptance | receipt after 84 s; the submitting process exited; a fresh store instance recovered the run by id |
+| Agent | Claude Code 2.1.263, `acceptEdits`, session `fab43d69…`, 6 turns, tools Read/Read/Bash/Write/Bash, $0.092 |
+| Outcome | `completed`; check passed (exit 0); tree unchanged after checks; result `745df20b…`; 1 file changed (+17); published to `powerhouse/cloud/49c6291e…` on GitHub (ref verified via API) |
+| Hygiene | 0 credential files left on the VM, 0 agent processes left, idle policy back to 300/900 s, brief present at `.powerhouse/cloud-task.md`, not in the published tree |
+| Import | `Fetch changes` (backend `do_import`, authenticated with the Keychain token) created a new worktree on `cloud/49c6291e` at `745df20b`, diff `docs/cloud-smoke.md | 17 +` |
+
+Total model spend this session: about $0.12. The remote branch
+`powerhouse/cloud/49c6291e-290c-49e5-a2d0-4e17f8f8dba9` and the local branch
+`cloud/49c6291e` are retained for review; delete them when done.
 
 ### Credential model (2026-09-21)
 
@@ -71,17 +105,20 @@ was destroyed to keep the two-machine footprint.
 
 ### Decisive real-world acceptance test
 
-**Not run.** It requires a real Claude task, which requires provisioning
-credentials into the base runner (approval pending). With the fake agent, the
-equivalent sequence (submit → receipt → submitting process gone → recover by id
-→ Ready for review → branch present → one execution → idle policy restored) is
-the e2e above. Report the milestone as **implemented but not cloud-verified for
-Claude**.
+Steps 1, 2, 4, 5, 6, 7 and 8 were performed with the real Claude run above
+(submit with a deterministic check, durable receipt, run finished while no
+desktop process was attached, recovered by run id from a fresh store, `Ready
+for review` with history/checks/summary/result revision, fetched into a new
+worktree with the expected modification, exactly one `run.claimed`, idle
+policy restored by the reconnecting desktop). Step 3, physically quitting the
+app and sleeping the laptop, was not performed in this session and is the
+user's to do; nothing in the runner depends on the laptop once the receipt is
+durable. The Claude path is now **cloud-verified**.
 
 ### Retained resources after this session
 
-`powerhouse-cloud-base` (stopped) and `powerhouse-main` (stopped, holds the
-2026-09-21 e2e evidence and its workspace). `powerhouse-cloud-spike`,
+`powerhouse-cloud-base` (stopped; runner + staged Claude, no secrets) and
+`powerhouse-main` (stopped; holds the real Claude run's workspace and result). `powerhouse-cloud-spike`,
 `powerhouse-cloud-probe-iso`, `powerhouse-cloud-fork-probe` and `ph-d3408a6f`
 were destroyed after their tests. No model call was made; no credential was
 copied anywhere.
