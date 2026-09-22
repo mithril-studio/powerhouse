@@ -24,26 +24,30 @@ export function buildQuickSubmitRequest(repo: Repo, sourcePath: string, settings
 }
 
 /**
- * One-click "Send to cloud" for a branch. Accepted → the run appears in the
- * Cloud tab; anything needing the user opens the advanced form with the
- * reason. The backend announces checkpoint/push/submit stages by event.
+ * One-click "Send to cloud". Accepted → the run appears in the Cloud tab;
+ * anything needing the user shows up there as a dismissible reason card
+ * (credentials and run defaults live in Settings, env vars in the repo's
+ * workflow modal). The backend announces checkpoint/push/submit stages.
  */
-export async function quickSubmitBranch(repo: Repo, branch: Branch): Promise<void> {
+export async function quickSubmit(repo: Repo, sourcePath: string, branchLabel: string): Promise<void> {
   const s = useAppStore.getState();
-  if (s.cloudQuickStages[`${repo.id}:${branch.name}`]) return;
-  s.setCloudQuickStage(repo.id, branch.name, "starting");
+  if (s.cloudQuickStages[`${repo.id}:${branchLabel}`]) return;
+  s.setCloudQuickStage(repo.id, branchLabel, "starting");
+  s.setCloudQuickError(repo.id, branchLabel, null);
+  s.openRightTab("cloud");
   try {
-    const out = await cloudQuickSubmit(buildQuickSubmitRequest(repo, branch.worktreePath, s.settings));
+    const out = await cloudQuickSubmit(buildQuickSubmitRequest(repo, sourcePath, s.settings));
     const st = useAppStore.getState();
     if (out.kind === "accepted") {
       st.setCloudRun(out.record);
-      st.openRightTab("cloud");
     } else {
-      st.openCloudModal(repo.id, branch.worktreePath, branch.name, out.reason);
+      st.setCloudQuickError(repo.id, branchLabel, out.reason);
     }
   } catch (e) {
-    useAppStore.getState().openCloudModal(repo.id, branch.worktreePath, branch.name, String(e));
+    useAppStore.getState().setCloudQuickError(repo.id, branchLabel, String(e));
   } finally {
-    useAppStore.getState().setCloudQuickStage(repo.id, branch.name, null);
+    useAppStore.getState().setCloudQuickStage(repo.id, branchLabel, null);
   }
 }
+
+export const quickSubmitBranch = (repo: Repo, branch: Branch) => quickSubmit(repo, branch.worktreePath, branch.name);

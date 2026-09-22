@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAppStore, type WorkflowStep } from "../store/appStore";
+import { RepoEnvEditor } from "./RepoEnvEditor";
 
 const newStep = (): WorkflowStep => ({
   id: crypto.randomUUID(),
@@ -133,6 +134,11 @@ export function WorkflowModal() {
           />
           Push to origin after merge (no-op without a remote)
         </label>
+
+        <div className="mt-4 border-t border-border pt-3">
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Cloud env vars</p>
+          <RepoEnvEditor repo={repo} />
+        </div>
 
         <div className="mt-3 flex justify-end gap-2">
           <button

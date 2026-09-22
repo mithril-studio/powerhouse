@@ -17,6 +17,7 @@ import {
 } from "../lib/cloud";
 import { describeEvent, fmtAgo, latestActivity, presentMachine, presentRun, shortSha, type Tone } from "../lib/cloudView";
 import { importCloudResult } from "../lib/actions";
+import { quickSubmit } from "../lib/quickSubmit";
 import { DiffView } from "./DiffView";
 
 function dot(tone: Tone) {
@@ -68,14 +69,22 @@ function QuickSubmitCard({ branch, stage }: { branch: string; stage: string }) {
 
 export function CloudPane({ repo, branch }: { repo: Repo; branch?: Branch | null }) {
   const runs = useAppStore((s) => s.cloudRuns);
-  const openCloudModal = useAppStore((s) => s.openCloudModal);
   const quickStages = useAppStore((s) => s.cloudQuickStages);
+  const quickErrors = useAppStore((s) => s.cloudQuickErrors);
+  const setCloudQuickError = useAppStore((s) => s.setCloudQuickError);
   const pending = useMemo(
     () =>
       Object.entries(quickStages)
         .filter(([k]) => k.startsWith(`${repo.id}:`))
         .map(([k, stage]) => ({ branch: k.slice(repo.id.length + 1), stage })),
     [quickStages, repo.id],
+  );
+  const failures = useMemo(
+    () =>
+      Object.entries(quickErrors)
+        .filter(([k]) => k.startsWith(`${repo.id}:`))
+        .map(([k, reason]) => ({ branch: k.slice(repo.id.length + 1), reason })),
+    [quickErrors, repo.id],
   );
   const list = useMemo(
     () =>
@@ -114,13 +123,32 @@ export function CloudPane({ repo, branch }: { repo: Repo; branch?: Branch | null
         <div className="mb-4 flex items-center gap-2">
           <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{repo.name}</span>
           <button
-            onClick={() => openCloudModal(repo.id, sourcePath, sourceLabel)}
-            title={`Run a task in the cloud from ${sourceLabel}`}
+            onClick={() => void quickSubmit(repo, sourcePath, sourceLabel)}
+            title={`Send ${sourceLabel} to the cloud: checkpoint, push, and run the plan doc on a boxd VM`}
             className="h-7 shrink-0 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-all active:translate-y-px focus-visible:ring-3 focus-visible:ring-ring/50"
           >
-            Run in cloud
+            Send to cloud
           </button>
         </div>
+        {failures.map((f) => (
+          <div key={f.branch} className="mb-2 rounded-lg border border-destructive/40 bg-destructive/5 p-2.5 text-xs">
+            <div className="flex items-start gap-2">
+              <p className="min-w-0 flex-1 text-destructive">
+                <span className="font-mono">{f.branch}</span> was not sent: {f.reason}
+              </p>
+              <button
+                onClick={() => setCloudQuickError(repo.id, f.branch, null)}
+                title="Dismiss"
+                className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-input hover:text-foreground"
+              >
+                ×
+              </button>
+            </div>
+            <p className="mt-1 text-muted-foreground">
+              Credentials and run defaults live in Settings; per-repo env vars in the repo's workflow settings.
+            </p>
+          </div>
+        ))}
         {pending.length > 0 && (
           <div className="mb-2 space-y-2">
             {pending.map((p) => (

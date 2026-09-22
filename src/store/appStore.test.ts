@@ -103,7 +103,7 @@ const LEGACY_TREE = {
 };
 
 beforeEach(() => {
-  useAppStore.setState({ cloudRuns: {}, cloudModal: null, hydrated: false });
+  useAppStore.setState({ cloudRuns: {}, cloudQuickStages: {}, cloudQuickErrors: {}, hydrated: false });
 });
 
 describe("hydrate with a pre-cloud powerhouse.json", () => {

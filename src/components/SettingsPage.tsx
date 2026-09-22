@@ -3,10 +3,13 @@ import { getVersion } from "@tauri-apps/api/app";
 import { homeDir } from "@tauri-apps/api/path";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
+  cloudSettingsOf,
   useAppStore,
   type AgentProfile,
+  type CloudSettings,
   type Theme,
 } from "../store/appStore";
+import { cloudSecretStatus, cloudSetSecret, type SecretStatus } from "../lib/cloud";
 import {
   disposeTerminal,
   fitTerminal,
@@ -388,6 +391,155 @@ function AgentsSection() {
   );
 }
 
+const cloudInput =
+  "h-8 w-full rounded-lg border border-input bg-background px-2.5 text-xs outline-none focus-visible:ring-3 focus-visible:ring-ring/50";
+
+/** Credentials and defaults for one-click cloud runs (the only editor now
+ * that submission itself is a single click). */
+function CloudSection() {
+  const settings = useAppStore((s) => s.settings);
+  const setCloudSettings = useAppStore((s) => s.setCloudSettings);
+  const cloud = cloudSettingsOf(settings);
+  const [secrets, setSecrets] = useState<SecretStatus | null>(null);
+  const [claudeInput, setClaudeInput] = useState("");
+  const [githubInput, setGithubInput] = useState("");
+  const [githubScope, setGithubScope] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void cloudSecretStatus()
+      .then(setSecrets)
+      .catch((e) => setError(String(e)));
+  }, []);
+
+  const saveSecret = async (name: string, value: string, clearInput: () => void) => {
+    setError(null);
+    try {
+      setSecrets(await cloudSetSecret(name, value));
+      clearInput();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const githubSlot = githubScope.trim() ? `github_token:${githubScope.trim()}` : "github_token";
+  const patch = (p: Partial<CloudSettings>) => setCloudSettings({ ...cloud, ...p });
+
+  return (
+    <div className="space-y-3 text-xs">
+      <div className="rounded-xl border border-border bg-card p-3">
+        <p className="mb-2 font-semibold uppercase tracking-wider text-[11px] text-muted-foreground">
+          Credentials · Claude {secrets?.claude ? "✓" : "missing"} · GitHub {secrets?.github ? "✓" : "missing"}
+        </p>
+        <div className="space-y-2">
+          <div className="flex gap-1.5">
+            <input
+              type="password"
+              value={claudeInput}
+              onChange={(e) => setClaudeInput(e.target.value)}
+              placeholder={secrets?.claude ? "Claude OAuth token (stored) — paste to replace" : "Claude OAuth token from `claude setup-token`"}
+              spellCheck={false}
+              className={`${cloudInput} font-mono`}
+            />
+            <button
+              onClick={() => void saveSecret("claude_oauth_token", claudeInput, () => setClaudeInput(""))}
+              disabled={!claudeInput.trim() && !secrets?.claude}
+              className="h-8 shrink-0 rounded-lg border border-border px-2 text-muted-foreground hover:text-foreground disabled:opacity-50"
+            >
+              {claudeInput.trim() ? "Save" : "Clear"}
+            </button>
+          </div>
+          <div className="flex gap-1.5">
+            <input
+              type="password"
+              value={githubInput}
+              onChange={(e) => setGithubInput(e.target.value)}
+              placeholder="GitHub fine-grained token, Contents: read & write"
+              spellCheck={false}
+              className={`${cloudInput} font-mono`}
+            />
+            <input
+              value={githubScope}
+              onChange={(e) => setGithubScope(e.target.value)}
+              placeholder="owner or owner/repo (blank = any)"
+              spellCheck={false}
+              title={`Saves to Keychain slot ${githubSlot}; the most specific slot wins per remote.`}
+              className={`${cloudInput} w-48 shrink-0 grow-0 font-mono`}
+            />
+            <button
+              onClick={() => void saveSecret(githubSlot, githubInput, () => setGithubInput(""))}
+              disabled={!githubInput.trim()}
+              className="h-8 shrink-0 rounded-lg border border-border px-2 text-muted-foreground hover:text-foreground disabled:opacity-50"
+            >
+              Save
+            </button>
+          </div>
+          <p className="text-muted-foreground">
+            Kept in your macOS Keychain; sent to a task VM only for the duration of a run and shredded when it ends.
+          </p>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-border bg-card p-3">
+        <p className="mb-2 font-semibold uppercase tracking-wider text-[11px] text-muted-foreground">Run defaults</p>
+        <div className="grid grid-cols-2 gap-2">
+          <label className="space-y-1">
+            <span className="text-muted-foreground">Base snapshot</span>
+            <input value={cloud.baseSnapshot} onChange={(e) => patch({ baseSnapshot: e.target.value })} spellCheck={false} className={`${cloudInput} font-mono`} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-muted-foreground">Deadline (minutes)</span>
+            <input type="number" min={1} value={cloud.deadlineMinutes} onChange={(e) => patch({ deadlineMinutes: Number(e.target.value) || 1 })} className={cloudInput} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-muted-foreground">Permission mode</span>
+            <select value={cloud.permissionMode} onChange={(e) => patch({ permissionMode: e.target.value })} className={cloudInput}>
+              <option value="acceptEdits">acceptEdits</option>
+              <option value="dontAsk">dontAsk</option>
+              <option value="plan">plan</option>
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-muted-foreground">Model (blank = default)</span>
+            <input value={cloud.model} onChange={(e) => patch({ model: e.target.value })} spellCheck={false} className={`${cloudInput} font-mono`} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-muted-foreground">Max turns</span>
+            <input
+              type="number"
+              min={1}
+              value={cloud.maxTurns ?? ""}
+              onChange={(e) => patch({ maxTurns: e.target.value === "" ? null : Number(e.target.value) })}
+              placeholder="unlimited"
+              className={cloudInput}
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="text-muted-foreground">Max budget (USD)</span>
+            <input
+              type="number"
+              min={0}
+              step={0.5}
+              value={cloud.maxBudgetUsd ?? ""}
+              onChange={(e) => patch({ maxBudgetUsd: e.target.value === "" ? null : Number(e.target.value) })}
+              placeholder="unlimited"
+              className={cloudInput}
+            />
+          </label>
+          <label className="col-span-2 space-y-1">
+            <span className="text-muted-foreground">Allowed tools (comma-separated)</span>
+            <input value={cloud.allowedTools} onChange={(e) => patch({ allowedTools: e.target.value })} spellCheck={false} className={`${cloudInput} font-mono`} />
+          </label>
+        </div>
+        <p className="mt-2 text-muted-foreground">
+          Applied to every "Send to cloud" click. Per-repo env vars live in each repo's workflow settings.
+        </p>
+      </div>
+      {error && <p className="text-destructive">{error}</p>}
+    </div>
+  );
+}
+
 export function SettingsPage() {
   const open = useAppStore((s) => s.settingsOpen);
   const closeSettings = useAppStore((s) => s.closeSettings);
@@ -440,6 +592,13 @@ export function SettingsPage() {
             description="Link external services to Powerhouse."
           >
             <ConnectionsSection />
+          </Section>
+
+          <Section
+            title="Cloud"
+            description="Credentials and defaults for one-click cloud runs."
+          >
+            <CloudSection />
           </Section>
 
           <Section

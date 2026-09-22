@@ -18,7 +18,6 @@ interface Props {
 export function BranchItem({ repo, branch }: Props) {
   const select = useAppStore((s) => s.select);
   const setActiveChat = useAppStore((s) => s.setActiveChat);
-  const openCloudModal = useAppStore((s) => s.openCloudModal);
   // "In cloud" while a run from this branch still holds a VM or park
   // snapshot; clears on release/discard.
   const inCloud = useAppStore((s) =>
@@ -86,12 +85,7 @@ export function BranchItem({ repo, branch }: Props) {
           e.stopPropagation();
           void quickSubmitBranch(repo, branch);
         }}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          openCloudModal(repo.id, branch.worktreePath, branch.name);
-        }}
-        title="Send to cloud (right-click: Run in cloud (advanced)…)"
+        title="Send to cloud"
         aria-label={`Send ${branch.name} to cloud`}
         disabled={!!quickStage}
         className="hidden size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-input hover:text-foreground group-hover:flex disabled:opacity-40"
