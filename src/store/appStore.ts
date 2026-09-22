@@ -215,6 +215,7 @@ interface AppState extends PersistedTree {
   cloudQuickErrors: Record<string, string>;
 
   settingsOpen: boolean;
+  telemetryOpen: boolean;
 
   hydrate: (tree: (Partial<PersistedTree> & LegacyTree) | null) => void;
   setDefaultAgent: (agentId: string) => void;
@@ -222,6 +223,8 @@ interface AppState extends PersistedTree {
   setGithubConnection: (github: GithubConnection) => void;
   openSettings: () => void;
   closeSettings: () => void;
+  openTelemetry: () => void;
+  closeTelemetry: () => void;
   addRepo: (repo: Omit<Repo, "id" | "branches" | "workflow" | "pushOnMerge">) => Repo;
   addBranch: (repoId: string, branch: Branch) => void;
   removeBranch: (repoId: string, branchId: string) => void;
@@ -472,6 +475,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   shellStatus: {},
   pendingHandoff: {},
   settingsOpen: false,
+  telemetryOpen: false,
   cloudRuns: {},
   cloudQuickStages: {},
   cloudQuickErrors: {},
@@ -521,6 +525,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   openSettings: () => set({ settingsOpen: true }),
   closeSettings: () => set({ settingsOpen: false }),
+
+  openTelemetry: () => set({ telemetryOpen: true }),
+  closeTelemetry: () => set({ telemetryOpen: false }),
 
   addRepo: (repo) => {
     const existing = get().repos.find((r) => r.path === repo.path);

@@ -26,7 +26,7 @@ import {
   applyAcpUpdate,
 } from "../lib/acpTranscript";
 import { consumeAutoSpawn } from "../lib/terminalRegistry";
-import { handoffWatchStart } from "../lib/ipc";
+import { handoffWatchStart, telemetryAnnotateRun } from "../lib/ipc";
 import type { AgentControlState, ApplyOp } from "../lib/agentControls";
 import type { AcpConnectionState } from "../components/acp/AcpConnectionPanel";
 import type { PendingPermission } from "../components/acp/AcpPermissionCard";
@@ -162,6 +162,21 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
         });
 
         setChatAgentSession(repoId, branch.id, chat.id, result.sessionId);
+        // Cosmetic run labels; losing this call loses labels, never evidence.
+        const modelOption = (result.configOptions ?? []).find(
+          (option) => option.category === "model",
+        );
+        void telemetryAnnotateRun(chat.id, {
+          agentName: result.agentInfo?.name,
+          agentVersion: result.agentInfo?.version,
+          repoId,
+          repoLabel: useAppStore.getState().repos.find((r) => r.id === repoId)?.name,
+          branchLabel: branch.name,
+          model:
+            typeof modelOption?.currentValue === "string"
+              ? modelOption.currentValue
+              : undefined,
+        }).catch(() => {});
         if (!result.resumed) mutateTranscript(() => []);
         setModes(result.modes ?? null);
         setConfigOptions(result.configOptions ?? []);

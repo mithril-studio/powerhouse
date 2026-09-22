@@ -125,6 +125,293 @@ export const handoffWatchStart = (branchId: string, worktreePath: string) =>
 export const handoffWatchStop = (branchId: string) =>
   invoke<void>("handoff_watch_stop", { branchId });
 
+// --- telemetry ---
+export interface RunSummary {
+  runId: string;
+  source: "acp" | "pty" | "queue";
+  coverage: "instrumented" | "uninstrumented" | "process-only";
+  chatId: string | null;
+  providerSessionId: string | null;
+  resumed: boolean;
+  agentName: string | null;
+  repoLabel: string | null;
+  branchLabel: string | null;
+  startedAt: number;
+  endedAt: number | null;
+  exitCode: number | null;
+  endReason: "exit" | "killed" | "app-shutdown" | "interrupted" | null;
+  droppedEvents: number;
+  parseErrors: number;
+  usageEvents: number;
+  /** null = unknown (no usage evidence), never zero. */
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cachedTokens: number | null;
+  costUsd: number | null;
+  turnCount: number;
+  toolCallCount: number;
+  repoId: string | null;
+  sourceSha: string | null;
+  model: string | null;
+  mode: string | null;
+}
+
+export interface TurnRow {
+  turnIdx: number;
+  promptSeq: number;
+  promptPreview: string | null;
+  startedAt: number;
+  endedAt: number | null;
+  stopReason: string | null;
+}
+
+export interface ToolCallRow {
+  toolCallId: string;
+  turnIdx: number | null;
+  title: string | null;
+  kind: string | null;
+  status: string | null;
+  startedAt: number;
+  endedAt: number | null;
+}
+
+export interface RunDetail {
+  run: RunSummary;
+  turns: TurnRow[];
+  toolCalls: ToolCallRow[];
+  eventCount: number;
+}
+
+export interface TelemetryEventRow {
+  seq: number;
+  direction: "in" | "out" | "err" | "sys";
+  ingestTime: number;
+  method: string | null;
+  updateKind: string | null;
+  parseStatus: "ok" | "invalid-json" | "non-jsonrpc";
+  replayed: boolean;
+  truncated: boolean;
+  rawPreview: string;
+}
+
+export interface TelemetryStats {
+  totalRuns: number;
+  activeRuns: number;
+  failedRuns: number;
+  interruptedRuns: number;
+  uninstrumentedRuns: number;
+  totalTurns: number;
+  totalToolCalls: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  costUsd: number | null;
+  instrumentedRuns: number;
+  runsWithUsage: number;
+  droppedEvents: number;
+  parseErrors: number;
+}
+
+export interface RebuildReport {
+  runs: number;
+  events: number;
+}
+
+export const telemetryListRuns = (
+  limit: number,
+  before?: number,
+  source?: RunSummary["source"],
+) =>
+  invoke<RunSummary[]>("telemetry_list_runs", {
+    limit,
+    before: before ?? null,
+    source: source ?? null,
+  });
+
+export const telemetryRunDetail = (runId: string) =>
+  invoke<RunDetail>("telemetry_run_detail", { runId });
+
+export const telemetryRunEvents = (runId: string, offset: number, limit: number) =>
+  invoke<TelemetryEventRow[]>("telemetry_run_events", { runId, offset, limit });
+
+export const telemetryStats = () => invoke<TelemetryStats>("telemetry_stats");
+
+export const telemetryRebuild = () =>
+  invoke<RebuildReport>("telemetry_rebuild");
+
+export interface CheckResult {
+  id: string;
+  label: string;
+  status: "pass" | "fail" | "info";
+  detail: string;
+}
+
+/** Live invariant battery — read-only, safe to poll while using the app. */
+export const telemetrySelfcheck = () =>
+  invoke<CheckResult[]>("telemetry_selfcheck");
+
+export const telemetryAnnotateRun = (
+  chatId: string,
+  labels: {
+    agentName?: string;
+    agentVersion?: string;
+    repoId?: string;
+    repoLabel?: string;
+    branchLabel?: string;
+    model?: string;
+  },
+) =>
+  invoke<void>("telemetry_annotate_run", {
+    chatId,
+    agentName: labels.agentName ?? null,
+    agentVersion: labels.agentVersion ?? null,
+    repoId: labels.repoId ?? null,
+    repoLabel: labels.repoLabel ?? null,
+    branchLabel: labels.branchLabel ?? null,
+    model: labels.model ?? null,
+  });
+
+// --- telemetry: tasks & digest (milestone 2) ---
+export interface TaskRow {
+  repoKey: string;
+  repoLabel: string | null;
+  branch: string;
+  agentRuns: number;
+  turns: number;
+  toolCalls: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  costUsd: number | null;
+  instrumentedRuns: number;
+  runsWithUsage: number;
+  models: string | null;
+  lastAgentAt: number | null;
+  queueAttempts: number;
+  delivered: boolean;
+  firstPassMerged: boolean | null;
+  lastOutcome: "merged" | "failed" | "canceled" | null;
+  lastQueueAt: number | null;
+}
+
+export interface FailureItem {
+  kind: "queue-failure" | "error-turn";
+  repoLabel: string | null;
+  branch: string | null;
+  detail: string;
+  runId: string;
+  at: number;
+}
+
+export interface DigestReport {
+  windowDays: number;
+  generatedAt: number;
+  tasksTotal: number;
+  tasksDelivered: number;
+  tasksFailed: number;
+  tasksUnattempted: number;
+  agentRuns: number;
+  interruptedRuns: number;
+  closedTurns: number;
+  errorTurns: number;
+  toolCalls: number;
+  toolFailures: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  costUsd: number | null;
+  instrumentedRuns: number;
+  runsWithUsage: number;
+  uninstrumentedRuns: number;
+  droppedEvents: number;
+  parseErrors: number;
+  failures: FailureItem[];
+}
+
+export const telemetryTasks = (windowDays: number) =>
+  invoke<TaskRow[]>("telemetry_tasks", { windowDays });
+
+export const telemetryDigest = (windowDays: number) =>
+  invoke<DigestReport>("telemetry_digest", { windowDays });
+
+// --- telemetry: proposal ledger (milestone 3) ---
+export const PROPOSAL_METRICS = [
+  { key: "merge_rate", label: "Merge rate", higherIsBetter: true },
+  { key: "first_pass_merge_rate", label: "First-pass merge rate", higherIsBetter: true },
+  { key: "error_turn_rate", label: "Error turn rate", higherIsBetter: false },
+  { key: "tool_failure_rate", label: "Tool failure rate", higherIsBetter: false },
+] as const;
+
+export type ProposalMetric = (typeof PROPOSAL_METRICS)[number]["key"];
+
+export interface MetricSample {
+  /** Denominator: how many observations the value rests on. */
+  n: number;
+  value: number | null;
+}
+
+export interface Evaluation {
+  baseline: MetricSample;
+  evaluation: MetricSample;
+  verdict: "improved" | "regressed" | "unchanged" | "insufficient-evidence";
+  computedAt: number;
+}
+
+export type ProposalStatus = "proposed" | "adopted" | "kept" | "reverted" | "retired";
+
+export interface Proposal {
+  proposalId: string;
+  createdAt: number;
+  title: string;
+  hypothesis: string;
+  target: string;
+  metric: ProposalMetric;
+  repoId: string | null;
+  evidenceRunIds: string[];
+  minSamples: number;
+  status: ProposalStatus;
+  adoptedAt: number | null;
+  decidedAt: number | null;
+  decisionNote: string | null;
+  baseline: MetricSample | null;
+  evaluation: Evaluation | null;
+}
+
+export const proposalCreate = (input: {
+  title: string;
+  hypothesis: string;
+  target: string;
+  metric: ProposalMetric;
+  repoId?: string;
+  evidenceRunIds?: string[];
+  minSamples?: number;
+}) =>
+  invoke<Proposal>("telemetry_proposal_create", {
+    title: input.title,
+    hypothesis: input.hypothesis,
+    target: input.target,
+    metric: input.metric,
+    repoId: input.repoId ?? null,
+    evidenceRunIds: input.evidenceRunIds ?? [],
+    minSamples: input.minSamples ?? 5,
+  });
+
+export const proposalList = () => invoke<Proposal[]>("telemetry_proposal_list");
+
+export const proposalAdopt = (proposalId: string) =>
+  invoke<Proposal>("telemetry_proposal_adopt", { proposalId });
+
+export const proposalEvaluate = (proposalId: string) =>
+  invoke<Proposal>("telemetry_proposal_evaluate", { proposalId });
+
+export const proposalDecide = (
+  proposalId: string,
+  decision: "kept" | "reverted" | "retired",
+  note?: string,
+) =>
+  invoke<Proposal>("telemetry_proposal_decide", {
+    proposalId,
+    decision,
+    note: note ?? null,
+  });
+
 // --- GitHub OAuth (device flow) ---
 export interface DeviceStart {
   user_code: string;

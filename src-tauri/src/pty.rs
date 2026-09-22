@@ -1,3 +1,4 @@
+use crate::telemetry::{RunSpec, Telemetry};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
@@ -58,6 +59,7 @@ fn kill_session(session: &mut PtySession) {
 pub fn pty_spawn(
     app: AppHandle,
     state: State<PtyManager>,
+    telemetry: State<Telemetry>,
     session_id: String,
     cwd: String,
     cols: u16,
@@ -102,6 +104,21 @@ pub fn pty_spawn(
             child,
         },
     );
+
+    // PTY sessions are opaque display bytes: telemetry records the run's
+    // existence as 'uninstrumented' so it shows as unmeasured, never as zero
+    // usage. Raw bytes already land in the transcript file.
+    telemetry.run_start(RunSpec {
+        source: "pty",
+        coverage: "uninstrumented",
+        chat_id: Some(session_id.clone()),
+        agent_command: agent_cmd.clone(),
+        source_sha: crate::telemetry::head_sha(&cwd),
+        cwd: Some(cwd.clone()),
+        repo_id: None,
+        repo_label: None,
+        branch_label: None,
+    });
 
     // Signals the agent launcher once the shell has produced its first output.
     let (first_out_tx, first_out_rx) = mpsc::channel::<()>();
@@ -151,6 +168,7 @@ pub fn pty_spawn(
                     }
                 }
             }
+            app.state::<Telemetry>().run_end_by_chat(&id, None, "exit");
             let _ = app.emit(&format!("pty-exit-{id}"), ());
             let manager = app.state::<PtyManager>();
             let removed = manager.0.lock().unwrap().remove(&id);
@@ -214,15 +232,24 @@ pub fn pty_resize(
 }
 
 #[tauri::command]
-pub fn pty_kill(state: State<PtyManager>, session_id: String) -> Result<(), String> {
+pub fn pty_kill(
+    state: State<PtyManager>,
+    telemetry: State<Telemetry>,
+    session_id: String,
+) -> Result<(), String> {
     if let Some(mut session) = state.0.lock().unwrap().remove(&session_id) {
+        telemetry.run_end_by_chat(&session_id, None, "killed");
         kill_session(&mut session);
     }
     Ok(())
 }
 
 #[tauri::command]
-pub fn pty_kill_all(state: State<PtyManager>) -> Result<(), String> {
+pub fn pty_kill_all(state: State<PtyManager>, telemetry: State<Telemetry>) -> Result<(), String> {
+    let session_ids: Vec<String> = state.0.lock().unwrap().keys().cloned().collect();
+    for session_id in session_ids {
+        telemetry.run_end_by_chat(&session_id, None, "killed");
+    }
     state.kill_all();
     Ok(())
 }

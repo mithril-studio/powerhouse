@@ -18,6 +18,7 @@ import { WorkflowModal } from "./components/WorkflowModal";
 import { RightSidebar } from "./components/RightSidebar";
 import { NewChatPicker } from "./components/NewChatPicker";
 import { SettingsPage } from "./components/SettingsPage";
+import { TelemetryPage } from "./components/telemetry/TelemetryPage";
 
 let booted = false;
 
@@ -136,6 +137,7 @@ export default function App() {
       <WorkflowModal />
       <NewChatPicker />
       <SettingsPage />
+      <TelemetryPage />
     </div>
   );
 }

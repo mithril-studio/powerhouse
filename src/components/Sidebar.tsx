@@ -12,6 +12,11 @@ const NAV_ITEMS = [
 export function Sidebar() {
   const repos = useAppStore((s) => s.repos);
   const openSettings = useAppStore((s) => s.openSettings);
+  const openTelemetry = useAppStore((s) => s.openTelemetry);
+
+  const navAction: Partial<Record<(typeof NAV_ITEMS)[number]["label"], () => void>> = {
+    Telemetry: openTelemetry,
+  };
 
   return (
     <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-background">
@@ -22,6 +27,7 @@ export function Sidebar() {
           <button
             key={item.label}
             type="button"
+            onClick={navAction[item.label]}
             className="flex items-center rounded-md px-2 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             {item.label}

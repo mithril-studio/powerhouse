@@ -5,6 +5,7 @@ mod github;
 mod handoff;
 mod pty;
 mod queue;
+mod telemetry;
 
 use acp::AcpManager;
 use cloud::commands::CloudManager;
@@ -12,6 +13,7 @@ use handoff::HandoffWatchers;
 use pty::PtyManager;
 use queue::QueueManager;
 use tauri::Manager;
+use telemetry::Telemetry;
 
 /// Dev aid: surfaces webview console errors in the `tauri dev` terminal.
 #[tauri::command]
@@ -32,6 +34,10 @@ pub fn run() {
         .manage(QueueManager::default())
         .manage(HandoffWatchers::default())
         .manage(CloudManager::default())
+        .setup(|app| {
+            app.manage(Telemetry::init(app.handle().clone()));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             js_log,
             acp::acp_spawn,
@@ -82,16 +88,34 @@ pub fn run() {
             cloud::commands::cloud_set_secret,
             cloud::commands::cloud_project_env_status,
             cloud::commands::cloud_latest_handoff,
+            telemetry::commands::telemetry_list_runs,
+            telemetry::commands::telemetry_run_detail,
+            telemetry::commands::telemetry_run_events,
+            telemetry::commands::telemetry_stats,
+            telemetry::commands::telemetry_rebuild,
+            telemetry::commands::telemetry_annotate_run,
+            telemetry::commands::telemetry_tasks,
+            telemetry::commands::telemetry_digest,
+            telemetry::commands::telemetry_proposal_create,
+            telemetry::commands::telemetry_proposal_list,
+            telemetry::commands::telemetry_proposal_adopt,
+            telemetry::commands::telemetry_proposal_evaluate,
+            telemetry::commands::telemetry_proposal_decide,
+            telemetry::commands::telemetry_selfcheck,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
-                app.state::<AcpManager>().kill_all();
+                app.state::<AcpManager>().kill_all_with_reason("app-shutdown");
+                app.state::<Telemetry>().end_all("app-shutdown");
                 // Local processes only. Cloud runs are owned by their VM runner
                 // and deliberately untouched here.
                 app.state::<PtyManager>().kill_all();
                 app.state::<QueueManager>().kill_running();
+                if let Err(error) = app.state::<Telemetry>().shutdown() {
+                    eprintln!("[telemetry] shutdown flush failed: {error}");
+                }
             }
         });
 }

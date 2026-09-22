@@ -480,6 +480,8 @@ fn spawn_worker(app: AppHandle, repo_id: String) {
                 e.finished_at = Some(now);
             });
 
+            record_run(&app, &repo_id, &job, &outcome, now);
+
             let mgr = app.state::<QueueManager>();
             let mut map = mgr.0.lock().unwrap();
             if let Some(q) = map.get_mut(&repo_id) {
@@ -488,6 +490,46 @@ fn spawn_worker(app: AppHandle, repo_id: String) {
             }
         }
     });
+}
+
+/// Queue entries have real, known outcomes (exit codes, step durations), so
+/// each finished entry lands in telemetry as a completed 'process-only' run,
+/// with the entry snapshot as its raw evidence row.
+fn record_run(app: &AppHandle, repo_id: &str, job: &Job, outcome: &Outcome, finished_at: u64) {
+    let (exit_code, reason) = match outcome {
+        Outcome::Merged(_) => (Some(0), "exit"),
+        Outcome::Failed(_) => (Some(1), "exit"),
+        Outcome::Canceled => (None, "killed"),
+    };
+    let entry = {
+        let mgr = app.state::<QueueManager>();
+        let map = mgr.0.lock().unwrap();
+        map.get(repo_id)
+            .and_then(|q| q.entries.iter().find(|e| e.id == job.entry_id).cloned())
+    };
+    let Some(entry) = entry else { return };
+    let repo_label = Path::new(&job.repo_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned());
+    let sys_raw = serde_json::to_string(&entry).unwrap_or_else(|_| "{}".into());
+    app.state::<crate::telemetry::Telemetry>().record_completed_run(
+        crate::telemetry::RunSpec {
+            source: "queue",
+            coverage: "process-only",
+            chat_id: None,
+            agent_command: None,
+            cwd: Some(job.repo_path.clone()),
+            repo_id: Some(repo_id.to_string()),
+            source_sha: entry.merge_commit.clone(),
+            repo_label,
+            branch_label: Some(job.branch.clone()),
+        },
+        entry.created_at as i64,
+        finished_at as i64,
+        exit_code,
+        reason,
+        sys_raw,
+    );
 }
 
 /// Runs a git subcommand against `origin`, injecting a transient GitHub-token
