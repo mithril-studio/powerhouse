@@ -209,6 +209,8 @@ export interface SubmitRequest {
   fakeScript?: string | null;
   /** Plan/context markdown handed to the agent as `.powerhouse/cloud-task.md`. */
   brief: string;
+  /** Per-project env var names; values come from the Keychain per repo. */
+  envNames: string[];
 }
 
 /** One-click submission: the brief is auto-picked, the task text is fixed. */
@@ -228,6 +230,7 @@ export interface QuickSubmitRequest {
   model: string | null;
   provider: "claude" | "fake";
   fakeScript?: string | null;
+  envNames: string[];
 }
 
 export type QuickSubmitOutcome =
@@ -280,6 +283,9 @@ export const remoteOwner = (remoteUrl: string | null | undefined): string | null
 };
 export const cloudLatestHandoff = (sourcePath: string) =>
   invoke<HandoffDoc | null>("cloud_latest_handoff", { sourcePath });
+/** Which of a repo's configured env names have a stored value (values never cross). */
+export const cloudProjectEnvStatus = (repoId: string, names: string[]) =>
+  invoke<{ name: string; set: boolean }[]>("cloud_project_env_status", { repoId, names });
 
 // --- observation loop ------------------------------------------------------------
 

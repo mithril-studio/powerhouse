@@ -300,7 +300,7 @@ fn submit(
         }
         let text = String::from_utf8_lossy(&bytes).to_string();
         let parsed = exec::parse_secrets(&text);
-        if parsed.claude.is_empty() && parsed.git_publish_token.is_none() {
+        if parsed.claude.is_empty() && parsed.git_publish_token.is_none() && parsed.project_env.is_empty() {
             exec::shred(src);
             return Err(RunnerError::new("credentials_empty", "credentials file has no recognised keys"));
         }

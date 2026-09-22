@@ -36,6 +36,12 @@ describe("buildQuickSubmitRequest", () => {
     expect(req.allowedTools).toEqual(["Read", "Edit", "Bash"]);
     expect(req.model).toBeNull();
     expect(req.provider).toBe("claude");
+    expect(req.envNames).toEqual([]);
+  });
+
+  it("passes the repo's configured env names", () => {
+    const req = buildQuickSubmitRequest({ ...repo, cloudEnvNames: ["FOO_API_KEY"] }, repo.path, settings);
+    expect(req.envNames).toEqual(["FOO_API_KEY"]);
   });
 
   it("falls back to defaults when no cloud settings were ever saved", () => {

@@ -37,12 +37,18 @@ pub enum Stop {
 pub struct Secrets {
     pub claude: Vec<(String, String)>,
     pub git_publish_token: Option<String>,
+    /// Per-project env vars (`ENV.<NAME>=<value>` lines): exported into the
+    /// agent's environment and written to `<workspace>/.env`. Never handed to
+    /// trusted git operations.
+    pub project_env: Vec<(String, String)>,
 }
 
-/// Parse `KEY=VALUE` lines. Only known keys are accepted.
+/// Parse `KEY=VALUE` lines. Only known keys are accepted; `ENV.<NAME>` marks
+/// a per-project env var (a real variable name can never contain `.`).
 pub fn parse_secrets(text: &str) -> Secrets {
     let mut claude = vec![];
     let mut git = None;
+    let mut project_env = vec![];
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -56,11 +62,17 @@ pub fn parse_secrets(text: &str) -> Secrets {
             match k.trim() {
                 "CLAUDE_CODE_OAUTH_TOKEN" | "ANTHROPIC_API_KEY" => claude.push((k.trim().to_string(), v)),
                 "GIT_PUBLISH_TOKEN" => git = Some(v),
-                _ => {}
+                key => {
+                    if let Some(name) = key.strip_prefix("ENV.") {
+                        if !name.is_empty() && !name.contains(|c: char| c.is_whitespace() || c == '=') {
+                            project_env.push((name.to_string(), v));
+                        }
+                    }
+                }
             }
         }
     }
-    Secrets { claude, git_publish_token: git }
+    Secrets { claude, git_publish_token: git, project_env }
 }
 
 /// The run's own credentials, delivered with its submission. Nothing ambient
@@ -68,7 +80,7 @@ pub fn parse_secrets(text: &str) -> Secrets {
 pub fn load_secrets(run_id: &str) -> Secrets {
     match std::fs::read_to_string(paths::credentials_file(run_id)) {
         Ok(text) => parse_secrets(&text),
-        Err(_) => Secrets { claude: vec![], git_publish_token: None },
+        Err(_) => Secrets { claude: vec![], git_publish_token: None, project_env: vec![] },
     }
 }
 
@@ -312,7 +324,7 @@ fn persist_result(ctx: &mut Ctx, result: &ResultManifest) {
 fn finish(ctx: &mut Ctx, state: RunState, error: Option<RunError>, result: &ResultManifest) -> Result<(), String> {
     // Credentials live exactly as long as the run.
     shred_run_credentials(&ctx.row.run_id);
-    ctx.secrets = Secrets { claude: vec![], git_publish_token: None };
+    ctx.secrets = Secrets { claude: vec![], git_publish_token: None, project_env: vec![] };
     persist_result(ctx, result);
     let first = ctx
         .store
@@ -449,6 +461,12 @@ fn prepare_workspace(ctx: &mut Ctx) -> Result<(), String> {
     std::fs::create_dir_all(&ph_dir).map_err(|e| e.to_string())?;
     let brief = render_brief(&m);
     std::fs::write(ph_dir.join("cloud-task.md"), brief).map_err(|e| e.to_string())?;
+    // Per-project env vars: also on disk, so build/test tooling that reads
+    // `.env` works. Excluded from snapshots below, like the brief.
+    if !ctx.secrets.project_env.is_empty() {
+        let env_text: String = ctx.secrets.project_env.iter().map(|(k, v)| format!("{k}={v}\n")).collect();
+        std::fs::write(ctx.workspace.join(".env"), env_text).map_err(|e| e.to_string())?;
+    }
     let exclude = ctx.trusted.join(".git").join("info").join("exclude");
     if let Some(parent) = exclude.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -457,6 +475,7 @@ fn prepare_workspace(ctx: &mut Ctx) -> Result<(), String> {
         use std::io::Write;
         let mut f = std::fs::OpenOptions::new().append(true).create(true).open(&exclude).map_err(|e| e.to_string())?;
         writeln!(f, ".powerhouse/").map_err(|e| e.to_string())?;
+        writeln!(f, ".env").map_err(|e| e.to_string())?;
     }
     let home = paths::agent_home(&m.run_id);
     std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
@@ -502,7 +521,7 @@ fn run_agent(ctx: &mut Ctx) -> Result<(AgentOutcome, Option<i32>, Option<Stop>),
     let m = ctx.row.manifest.clone();
     // The fake provider walks the same delivery path as the real one, so tests
     // prove what the agent process can and cannot see.
-    let secrets: Vec<(String, String)> = ctx.secrets.claude.clone();
+    let mut secrets: Vec<(String, String)> = ctx.secrets.claude.clone();
     if m.agent.provider == AgentProvider::Claude && secrets.is_empty() {
         return Ok((
             AgentOutcome::default(),
@@ -514,6 +533,7 @@ fn run_agent(ctx: &mut Ctx) -> Result<(AgentOutcome, Option<i32>, Option<Stop>),
             (o, c, s)
         });
     }
+    secrets.extend(ctx.secrets.project_env.iter().cloned());
     let home = paths::agent_home(&m.run_id);
     let mut cmd = agent::build_command(&m, &ctx.self_bin, &ctx.workspace, &home, &secrets);
     cmd.env("POWERHOUSE_RUNNER_ROOT", paths::root());
@@ -716,8 +736,13 @@ fn run_check_command(ctx: &mut Ctx, command: &str, log_path: &Path) -> (Option<i
         .env("USER", paths::AGENT_USER)
         .env("LANG", "C.UTF-8")
         .env("TERM", "dumb")
-        .env("CI", "1")
-        .current_dir(&ctx.workspace)
+        .env("CI", "1");
+    // Checks see the project env (build/test commands need the same keys the
+    // agent had), never the model or git credentials.
+    for (k, v) in &ctx.secrets.project_env {
+        cmd.env(k, v);
+    }
+    cmd.current_dir(&ctx.workspace)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log_err));
@@ -915,4 +940,30 @@ pub fn reconcile(reason: &str) -> Result<Vec<String>, String> {
         }
     }
     Ok(touched)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_secrets_accepts_known_keys_and_project_env_lines() {
+        let s = parse_secrets(
+            "CLAUDE_CODE_OAUTH_TOKEN=tok\nGIT_PUBLISH_TOKEN=git\nENV.FOO_API_KEY=abc\nENV.BAR=\"quoted\"\n# comment\nUNKNOWN=x\nENV.=bad\nENV.BAD NAME=x\n",
+        );
+        assert_eq!(s.claude, vec![("CLAUDE_CODE_OAUTH_TOKEN".to_string(), "tok".to_string())]);
+        assert_eq!(s.git_publish_token.as_deref(), Some("git"));
+        assert_eq!(
+            s.project_env,
+            vec![("FOO_API_KEY".to_string(), "abc".to_string()), ("BAR".to_string(), "quoted".to_string())],
+            "ENV.-prefixed lines become project env; malformed names are dropped"
+        );
+    }
+
+    #[test]
+    fn a_project_env_var_named_like_a_credential_stays_a_plain_env_var() {
+        let s = parse_secrets("ENV.GIT_PUBLISH_TOKEN=nope\n");
+        assert!(s.git_publish_token.is_none(), "trusted git never sees a project env value");
+        assert_eq!(s.project_env, vec![("GIT_PUBLISH_TOKEN".to_string(), "nope".to_string())]);
+    }
 }

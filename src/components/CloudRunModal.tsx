@@ -5,6 +5,7 @@ import {
   cloudInspectSource,
   cloudLatestHandoff,
   cloudListSnapshots,
+  cloudProjectEnvStatus,
   cloudSecretStatus,
   cloudSetSecret,
   cloudSubmit,
@@ -46,6 +47,11 @@ export function CloudRunModal() {
   const [githubInput, setGithubInput] = useState("");
   const [githubScope, setGithubScope] = useState<"owner" | "all" | "repo">("owner");
   const [secretError, setSecretError] = useState<string | null>(null);
+  const setRepoEnvNames = useAppStore((s) => s.setRepoEnvNames);
+  const [envStatus, setEnvStatus] = useState<Record<string, boolean>>({});
+  const [envNameInput, setEnvNameInput] = useState("");
+  const [envValueInputs, setEnvValueInputs] = useState<Record<string, string>>({});
+  const [envError, setEnvError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!modal) return;
@@ -62,6 +68,17 @@ export function CloudRunModal() {
     setSecretError(null);
     setClaudeInput("");
     setGithubInput("");
+    setEnvError(null);
+    setEnvNameInput("");
+    setEnvValueInputs({});
+    setEnvStatus({});
+    const envRepo = useAppStore.getState().repos.find((r) => r.id === modal.repoId);
+    const envNames = envRepo?.cloudEnvNames ?? [];
+    if (envNames.length > 0) {
+      void cloudProjectEnvStatus(envRepo!.id, envNames)
+        .then((rows) => setEnvStatus(Object.fromEntries(rows.map((r) => [r.name, r.set]))))
+        .catch((e) => setEnvError(String(e)));
+    }
     requestAnimationFrame(() => taskRef.current?.focus());
     void lookupSnapshot(cloudSettingsOf(useAppStore.getState().settings).baseSnapshot);
     void cloudInspectSource(modal.sourcePath)
@@ -91,7 +108,9 @@ export function CloudRunModal() {
   const problems = source?.problems ?? [];
   const needsGit = !!source?.remote_url?.startsWith("https://");
   const credsReady = !!secrets && secrets.claude && (!needsGit || secrets.github);
-  const canSubmit = !!task.trim() && !!source && problems.length === 0 && !busy && !!snapshot && credsReady;
+  const envNames = repo.cloudEnvNames ?? [];
+  const envReady = envNames.every((n) => envStatus[n]);
+  const canSubmit = !!task.trim() && !!source && problems.length === 0 && !busy && !!snapshot && credsReady && envReady;
 
   const owner = remoteOwner(source?.remote_url);
   const repoSlug = source?.remote_url ? /\/([^/]+?)(?:\.git)?$/.exec(source.remote_url)?.[1] ?? null : null;
@@ -110,6 +129,38 @@ export function CloudRunModal() {
       else setGithubInput("");
     } catch (e) {
       setSecretError(String(e));
+    }
+  };
+
+  const saveEnvValue = async (name: string) => {
+    const value = (envValueInputs[name] ?? "").trim();
+    setEnvError(null);
+    try {
+      await cloudSetSecret(`project_env:${repo.id}:${name}`, value, source?.remote_url);
+      setEnvStatus((s) => ({ ...s, [name]: !!value }));
+      setEnvValueInputs((s) => ({ ...s, [name]: "" }));
+    } catch (e) {
+      setEnvError(String(e));
+    }
+  };
+
+  const addEnvName = () => {
+    const name = envNameInput.trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+      setEnvError(`\`${name}\` is not a valid environment variable name`);
+      return;
+    }
+    if (!envNames.includes(name)) setRepoEnvNames(repo.id, [...envNames, name]);
+    setEnvNameInput("");
+    setEnvError(null);
+  };
+
+  const removeEnvName = async (name: string) => {
+    setRepoEnvNames(repo.id, envNames.filter((n) => n !== name));
+    try {
+      await cloudSetSecret(`project_env:${repo.id}:${name}`, "", source?.remote_url);
+    } catch {
+      // Nothing stored for the name is fine; the config entry is gone either way.
     }
   };
 
@@ -162,6 +213,7 @@ export function CloudRunModal() {
         model: cloud.model.trim() || null,
         provider: "claude",
         brief,
+        envNames,
       });
       setCloudRun(rec);
       close();
@@ -417,6 +469,67 @@ export function CloudRunModal() {
               {secretError && <Problem>{secretError}</Problem>}
             </div>
           )}
+        </div>
+
+        <div className="rounded-lg border border-border p-2.5 text-xs">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold uppercase tracking-wider text-[11px] text-muted-foreground">Project env vars</span>
+            <span className="text-muted-foreground">
+              {envNames.length === 0 ? "none — the run gets no project secrets" : envReady ? "all values stored" : "values missing"}
+            </span>
+          </div>
+          <div className="mt-2 space-y-1.5">
+            {envNames.map((name) => (
+              <div key={name} className="flex items-center gap-1.5">
+                <span className="w-40 shrink-0 truncate font-mono" title={name}>
+                  {envStatus[name] ? "✓" : "∅"} {name}
+                </span>
+                <input
+                  type="password"
+                  value={envValueInputs[name] ?? ""}
+                  onChange={(e) => setEnvValueInputs((s) => ({ ...s, [name]: e.target.value }))}
+                  placeholder={envStatus[name] ? "value stored — paste to replace" : "value (kept in your Keychain)"}
+                  spellCheck={false}
+                  className={`${input} font-mono`}
+                />
+                <button
+                  onClick={() => void saveEnvValue(name)}
+                  disabled={!(envValueInputs[name] ?? "").trim() && !envStatus[name]}
+                  className="h-8 shrink-0 rounded-lg border border-border px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+                >
+                  {(envValueInputs[name] ?? "").trim() ? "Save" : "Clear"}
+                </button>
+                <button
+                  onClick={() => void removeEnvName(name)}
+                  title={`Remove ${name} and its stored value`}
+                  className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-input hover:text-destructive"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+            <div className="flex items-center gap-1.5">
+              <input
+                value={envNameInput}
+                onChange={(e) => setEnvNameInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && addEnvName()}
+                placeholder="VAR_NAME"
+                spellCheck={false}
+                className={`${input} w-40 shrink-0 grow-0 font-mono`}
+              />
+              <button
+                onClick={addEnvName}
+                disabled={!envNameInput.trim()}
+                className="h-8 shrink-0 rounded-lg border border-border px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+              >
+                Add
+              </button>
+              <p className="min-w-0 flex-1 text-muted-foreground">
+                Injected into the run's environment and <span className="font-mono">.env</span> on the VM only; never into snapshots or logs.
+              </p>
+            </div>
+            {envError && <Problem>{envError}</Problem>}
+          </div>
         </div>
 
         <div className="text-xs text-muted-foreground">

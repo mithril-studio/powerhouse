@@ -273,6 +273,10 @@ pub struct SubmitRequest {
     /// Plan/context markdown rendered by Powerhouse (handoff doc, notes).
     #[serde(default)]
     pub brief: String,
+    /// Per-project env var names; values come from the Keychain per repo and
+    /// travel only in the per-run credentials file.
+    #[serde(default)]
+    pub env_names: Vec<String>,
 }
 
 fn default_permission_mode() -> String {
@@ -501,7 +505,8 @@ pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest
     // machine is touched. Git publication needs a token only for HTTPS remotes.
     let need_claude = manifest.agent.provider == AgentProvider::Claude;
     let git_remote = manifest.source.remote_url.starts_with("https://").then_some(manifest.source.remote_url.as_str());
-    let credentials_text = secrets::render_run_credentials(mgr.secrets.as_ref(), need_claude, git_remote)?;
+    let project_env = secrets::project_env_values(mgr.secrets.as_ref(), &req.repo_id, &req.env_names)?;
+    let credentials_text = secrets::render_run_credentials(mgr.secrets.as_ref(), need_claude, git_remote, &project_env)?;
     let vm_name = task_vm_name(source.branch.as_deref(), &run_id);
     let ceiling = Some(req.machine_ceiling.unwrap_or(DEFAULT_MACHINE_CEILING));
     // One live run per branch: the VM name is the branch's cloud identity, so
@@ -718,6 +723,8 @@ pub struct QuickSubmitRequest {
     pub provider: String,
     #[serde(default)]
     pub fake_script: Option<String>,
+    #[serde(default)]
+    pub env_names: Vec<String>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -755,7 +762,11 @@ pub fn do_quick_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: QuickSu
     };
     let need_claude = req.provider != "fake";
     let git_remote = remote_url.starts_with("https://").then_some(remote_url.as_str());
-    if let Err(e) = secrets::render_run_credentials(mgr.secrets.as_ref(), need_claude, git_remote) {
+    let project_env = match secrets::project_env_values(mgr.secrets.as_ref(), &req.repo_id, &req.env_names) {
+        Ok(env) => env,
+        Err(e) => return attention("preflight", e),
+    };
+    if let Err(e) = secrets::render_run_credentials(mgr.secrets.as_ref(), need_claude, git_remote, &project_env) {
         return attention("preflight", e);
     }
     let base = match find_snapshot(mgr.boxd.as_ref(), req.base_snapshot.trim()) {
@@ -818,6 +829,7 @@ pub fn do_quick_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: QuickSu
         provider: req.provider,
         fake_script: req.fake_script,
         brief,
+        env_names: req.env_names,
     };
     match do_submit(mgr, app, submit) {
         Ok(record) => Ok(QuickSubmitOutcome::Accepted { record: Box::new(record) }),
@@ -913,7 +925,7 @@ fn https_auth_env_for(mgr: &CloudManager, remote: &str) -> Vec<(String, String)>
     if !remote.starts_with("https://") {
         return vec![];
     }
-    match secrets::render_run_credentials(mgr.secrets.as_ref(), false, Some(remote)) {
+    match secrets::render_run_credentials(mgr.secrets.as_ref(), false, Some(remote), &[]) {
         Ok(text) => text
             .lines()
             .find_map(|l| l.strip_prefix("GIT_PUBLISH_TOKEN=").map(|t| t.to_string()))
@@ -1544,7 +1556,7 @@ pub fn cloud_secret_status(state: State<CloudManager>, remote_url: Option<String
 /// `github_token:<owner>[/<repo>]` slot. An empty value clears the entry.
 #[tauri::command]
 pub fn cloud_set_secret(state: State<CloudManager>, name: String, value: String, remote_url: Option<String>) -> Result<secrets::SecretStatus, String> {
-    if !secrets::KNOWN.contains(&name.as_str()) && !secrets::is_github_slot(&name) {
+    if !secrets::KNOWN.contains(&name.as_str()) && !secrets::is_github_slot(&name) && !secrets::is_project_env_slot(&name) {
         return Err(format!("unknown secret {name}"));
     }
     if name.len() > 200 || name.chars().any(|c| c.is_whitespace()) {
@@ -1556,6 +1568,33 @@ pub fn cloud_set_secret(state: State<CloudManager>, name: String, value: String,
         state.secrets.set(&name, value.trim())?;
     }
     secrets::status_for(state.secrets.as_ref(), remote_url.as_deref())
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct EnvVarStatus {
+    pub name: String,
+    /// Whether a non-empty value is stored for this repo (values never leave
+    /// the Keychain through this command).
+    pub set: bool,
+}
+
+/// Which of a repo's configured env names have a stored value.
+#[tauri::command]
+pub fn cloud_project_env_status(state: State<CloudManager>, repo_id: String, names: Vec<String>) -> Result<Vec<EnvVarStatus>, String> {
+    names
+        .into_iter()
+        .map(|name| {
+            if !secrets::is_env_var_name(&name) {
+                return Err(format!("`{name}` is not a valid environment variable name"));
+            }
+            let set = state
+                .secrets
+                .get(&secrets::project_env_slot(&repo_id, &name))?
+                .map(|v| !v.trim().is_empty())
+                .unwrap_or(false);
+            Ok(EnvVarStatus { name, set })
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -1838,7 +1877,7 @@ mod tests {
             machine_ceiling: None, checks: vec![],
             deadline_seconds: 900, permission_mode: "dontAsk".into(), allowed_tools: vec![], max_turns: None,
             max_budget_usd: None, model: None, provider: "fake".into(), fake_script: Some("complete".into()),
-            brief: "# Plan\n1. add file".into(),
+            brief: "# Plan\n1. add file".into(), env_names: vec![],
         }
     }
 
@@ -2069,8 +2108,34 @@ mod tests {
             repo_id: "repo".into(), repo_path: source.into(), repo_name: "work".into(), source_path: source.into(),
             base_snapshot: base.into(), machine_ceiling: None, checks: vec![], deadline_seconds: 900,
             permission_mode: "dontAsk".into(), allowed_tools: vec![], max_turns: None, max_budget_usd: None,
-            model: None, provider: "fake".into(), fake_script: Some("complete".into()),
+            model: None, provider: "fake".into(), fake_script: Some("complete".into()), env_names: vec![],
         }
+    }
+
+    #[test]
+    fn project_env_values_travel_only_in_the_credentials_file() {
+        let (dir, work) = temp_repo();
+        let fake = Arc::new(Fake { echo_submit: true, ..Default::default() });
+        fake.snapshot("ph-test-base", "v1");
+        fake.on_exec("probe", Ok(probe_json()));
+        let store = mem_secrets(true, true);
+        store.set(&secrets::project_env_slot("repo", "FOO_API_KEY"), "supersecret123").unwrap();
+        let mgr = CloudManager::with(CloudStore::open(dir.path().join("cloud-runs.json")), fake.clone(), store);
+        let mut req = request(&work, "ph-test-base");
+        req.env_names = vec!["FOO_API_KEY".into()];
+        let rec = do_submit(&mgr, None, req).unwrap();
+        assert_eq!(rec.phase, Phase::Accepted);
+        // The credentials file travelled; the value is nowhere in the record
+        // or the persisted store.
+        assert!(fake.calls().iter().any(|c| c.contains(".creds")), "{:?}", fake.calls());
+        let persisted = std::fs::read_to_string(dir.path().join("cloud-runs.json")).unwrap();
+        assert!(!persisted.contains("supersecret123"), "env value leaked into the run store");
+        assert!(!serde_json::to_string(&rec.manifest).unwrap().contains("supersecret123"), "env value leaked into the manifest");
+        // A configured name without a value refuses the submission up front.
+        let mut req = request(&work, "ph-test-base");
+        req.env_names = vec!["MISSING_KEY".into()];
+        let err = do_submit(&mgr, None, req).unwrap_err();
+        assert!(err.contains("MISSING_KEY") && err.contains("no value"), "{err}");
     }
 
     #[test]
@@ -2647,6 +2712,7 @@ mod e2e {
             provider: provider.clone(),
             fake_script: (provider == "fake").then(|| script.clone()),
             brief: format!("# Plan\n\n1. Read the repository layout.\n2. {task}\n3. Make the acceptance check pass: it verifies {expect_file} exists.\n"),
+            env_names: vec![],
         };
         let t0 = Instant::now();
         let rec = do_submit(&mgr, None, req).expect("submit");

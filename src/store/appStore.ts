@@ -170,6 +170,8 @@ export interface Repo {
   branches: Branch[];
   workflow: WorkflowStep[];
   pushOnMerge: boolean;
+  /** Env var names injected into this repo's cloud runs; values live in the Keychain. */
+  cloudEnvNames?: string[];
 }
 
 export interface Selection {
@@ -253,6 +255,7 @@ interface AppState extends PersistedTree {
   setQueueEntries: (repoId: string, live: QueueEntry[]) => void;
   dismissQueueEntry: (repoId: string, entryId: string) => void;
   setWorkflow: (repoId: string, workflow: WorkflowStep[], pushOnMerge: boolean) => void;
+  setRepoEnvNames: (repoId: string, names: string[]) => void;
   openWorkflowModal: (repoId: string) => void;
   closeWorkflowModal: () => void;
   toggleRightSidebar: () => void;
@@ -666,6 +669,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   setWorkflow: (repoId, workflow, pushOnMerge) =>
     set((s) => ({
       repos: updateRepo(s.repos, repoId, (r) => ({ ...r, workflow, pushOnMerge })),
+    })),
+  setRepoEnvNames: (repoId, names) =>
+    set((s) => ({
+      repos: updateRepo(s.repos, repoId, (r) => ({ ...r, cloudEnvNames: names })),
     })),
 
   openWorkflowModal: (repoId) => set({ workflowModalRepoId: repoId }),

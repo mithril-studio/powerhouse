@@ -80,6 +80,7 @@ pub fn run() {
             cloud::commands::cloud_forget,
             cloud::commands::cloud_secret_status,
             cloud::commands::cloud_set_secret,
+            cloud::commands::cloud_project_env_status,
             cloud::commands::cloud_latest_handoff,
         ])
         .build(tauri::generate_context!())

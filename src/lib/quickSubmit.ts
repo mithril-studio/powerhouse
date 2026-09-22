@@ -19,6 +19,7 @@ export function buildQuickSubmitRequest(repo: Repo, sourcePath: string, settings
     maxBudgetUsd: cloud.maxBudgetUsd,
     model: cloud.model.trim() || null,
     provider: "claude",
+    envNames: repo.cloudEnvNames ?? [],
   };
 }
 

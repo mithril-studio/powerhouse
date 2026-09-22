@@ -27,7 +27,16 @@ pub fn run(script: &str) -> i32 {
     let brief_present = Path::new(".powerhouse/cloud-task.md").exists();
     let has_claude = std::env::var_os("CLAUDE_CODE_OAUTH_TOKEN").is_some() || std::env::var_os("ANTHROPIC_API_KEY").is_some();
     let has_git = std::env::var_os("GIT_PUBLISH_TOKEN").is_some() || std::env::var_os("GITHUB_PAT_TOKEN").is_some();
-    emit(serde_json::json!({"type":"fake","subtype":"isolation","runner_state_readable":readable,"runner_root_writable":writable_root,"uid":unsafe{libc::geteuid()},"brief_present":brief_present,"has_model_token":has_claude,"has_git_token":has_git}));
+    // Names (never values) outside the runner's own baseline: the per-project
+    // env vars a run was configured with.
+    const BASELINE: [&str; 9] = ["PATH", "HOME", "USER", "LANG", "TERM", "CI", "DISABLE_AUTOUPDATER", "POWERHOUSE_RUN_ID", "POWERHOUSE_RUNNER_ROOT"];
+    let mut extra_env: Vec<String> = std::env::vars_os()
+        .filter_map(|(k, _)| k.into_string().ok())
+        .filter(|k| !BASELINE.contains(&k.as_str()) && !["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "GIT_PUBLISH_TOKEN"].contains(&k.as_str()))
+        .collect();
+    extra_env.sort();
+    let env_file_present = Path::new(".env").exists();
+    emit(serde_json::json!({"type":"fake","subtype":"isolation","runner_state_readable":readable,"runner_root_writable":writable_root,"uid":unsafe{libc::geteuid()},"brief_present":brief_present,"has_model_token":has_claude,"has_git_token":has_git,"extra_env":extra_env,"env_file_present":env_file_present}));
     if readable || writable_root {
         emit(text("isolation failure: runner state reachable"));
         return 97;
