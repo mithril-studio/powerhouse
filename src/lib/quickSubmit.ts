@@ -2,13 +2,19 @@ import { cloudSettingsOf, useAppStore, type Branch, type Repo, type Settings } f
 import { cloudQuickSubmit, type QuickSubmitRequest } from "./cloud";
 
 /** The one-click request: last-used settings, the repo's workflow as checks. */
-export function buildQuickSubmitRequest(repo: Repo, sourcePath: string, settings: Settings): QuickSubmitRequest {
+export function buildQuickSubmitRequest(
+  repo: Repo,
+  sourcePath: string,
+  settings: Settings,
+  chatId: string | null = null,
+): QuickSubmitRequest {
   const cloud = cloudSettingsOf(settings);
   return {
     repoId: repo.id,
     repoPath: repo.path,
     repoName: repo.name,
     sourcePath,
+    chatId,
     baseSnapshot: cloud.baseSnapshot.trim(),
     machineCeiling: cloud.machineCeiling,
     checks: repo.workflow.map((w) => ({ name: w.name, command: w.command })).filter((c) => c.command.trim()),
@@ -29,14 +35,19 @@ export function buildQuickSubmitRequest(repo: Repo, sourcePath: string, settings
  * (credentials and run defaults live in Settings, env vars in the repo's
  * workflow modal). The backend announces checkpoint/push/submit stages.
  */
-export async function quickSubmit(repo: Repo, sourcePath: string, branchLabel: string): Promise<void> {
+export async function quickSubmit(
+  repo: Repo,
+  sourcePath: string,
+  branchLabel: string,
+  chatId: string | null = null,
+): Promise<void> {
   const s = useAppStore.getState();
   if (s.cloudQuickStages[`${repo.id}:${branchLabel}`]) return;
   s.setCloudQuickStage(repo.id, branchLabel, "starting");
   s.setCloudQuickError(repo.id, branchLabel, null);
   s.openRightTab("cloud");
   try {
-    const out = await cloudQuickSubmit(buildQuickSubmitRequest(repo, sourcePath, s.settings));
+    const out = await cloudQuickSubmit(buildQuickSubmitRequest(repo, sourcePath, s.settings, chatId));
     const st = useAppStore.getState();
     if (out.kind === "accepted") {
       st.setCloudRun(out.record);
@@ -50,4 +61,5 @@ export async function quickSubmit(repo: Repo, sourcePath: string, branchLabel: s
   }
 }
 
-export const quickSubmitBranch = (repo: Repo, branch: Branch) => quickSubmit(repo, branch.worktreePath, branch.name);
+export const quickSubmitBranch = (repo: Repo, branch: Branch) =>
+  quickSubmit(repo, branch.worktreePath, branch.name, branch.activeChatId);

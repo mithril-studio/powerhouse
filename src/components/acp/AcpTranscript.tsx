@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { ToolCallContent } from "@agentclientprotocol/sdk";
 import type { AcpTranscriptItem } from "../../lib/acpTranscript";
+import { CloudResultCard } from "../CloudResultCard";
 
 const statusGlyph: Record<string, string> = {
   pending: "·",
@@ -106,6 +107,7 @@ function ToolItem({ item }: { item: Extract<AcpTranscriptItem, { type: "tool" }>
 
 function TranscriptItem({ item }: { item: AcpTranscriptItem }) {
   if (item.type === "tool") return <ToolItem item={item} />;
+  if (item.type === "cloud-result") return <CloudResultCard runId={item.runId} late={item.late} />;
   if (item.type === "plan") {
     return (
       <section className="border-l border-accent-brand/40 pl-3" aria-label="Agent plan">

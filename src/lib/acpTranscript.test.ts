@@ -1,6 +1,19 @@
 import { describe, expect, it } from "vitest";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
-import { applyAcpUpdate, type AcpTranscriptItem } from "./acpTranscript";
+import { appendCloudResult, applyAcpUpdate, type AcpTranscriptItem } from "./acpTranscript";
+
+describe("appendCloudResult", () => {
+  it("posts a run's card once and never again (restart-safe by run id)", () => {
+    const once = appendCloudResult([], "run-1", true);
+    expect(once).toEqual([{ id: "cloud-result-run-1", type: "cloud-result", runId: "run-1", late: true }]);
+    // A replayed record update or a restart must not add a second card.
+    const twice = appendCloudResult(once, "run-1", false);
+    expect(twice).toBe(once);
+    // A different run gets its own card.
+    const other = appendCloudResult(once, "run-2", false);
+    expect(other).toHaveLength(2);
+  });
+});
 
 describe("applyAcpUpdate", () => {
   it("combines streamed assistant chunks into one message", () => {

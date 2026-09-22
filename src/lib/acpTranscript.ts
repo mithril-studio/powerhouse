@@ -34,9 +34,30 @@ export type AcpTranscriptItem =
       id: "plan";
       type: "plan";
       entries: PlanEntry[];
+    }
+  | {
+      /** `cloud-result-<runId>` — the run id is the dedupe key across restarts. */
+      id: string;
+      type: "cloud-result";
+      runId: string;
+      /** True when appended at boot for a run that had already finished. */
+      late: boolean;
     };
 
 const newId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
+
+/** Append the cloud-result card for a run once. The run id keys the dedupe, so
+ *  replayed record updates and restarts never double-post. */
+export function appendCloudResult(
+  transcript: AcpTranscriptItem[],
+  runId: string,
+  late: boolean,
+): AcpTranscriptItem[] {
+  if (transcript.some((item) => item.type === "cloud-result" && item.runId === runId)) {
+    return transcript;
+  }
+  return [...transcript, { id: `cloud-result-${runId}`, type: "cloud-result", runId, late }];
+}
 
 export function appendUserMessage(
   transcript: AcpTranscriptItem[],
