@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ask, message } from "@tauri-apps/plugin-dialog";
 import { cloudSettingsOf, useAppStore, type Branch, type Repo } from "../store/appStore";
 import {
@@ -418,20 +418,36 @@ function CloudRunCard({ record: r }: { record: CloudRunRecord }) {
   );
 }
 
+/** The live feed: cached runner events as a scrolling log that follows the
+ * tail while the reader stays at the bottom (scrolling up stops the follow). */
 function Activity({ record: r }: { record: CloudRunRecord }) {
   const lines = useMemo(
     () =>
       r.events
         .map((e) => ({ seq: e.seq, ts: e.ts_ms, text: describeEvent(e) }))
         .filter((l): l is { seq: number; ts: number; text: string } => !!l.text)
-        .slice(-200),
+        .slice(-500),
     [r.events],
   );
+  const box = useRef<HTMLDivElement>(null);
+  const follow = useRef(true);
+  const lastSeq = lines.length ? lines[lines.length - 1].seq : 0;
+  useEffect(() => {
+    const el = box.current;
+    if (el && follow.current) el.scrollTop = el.scrollHeight;
+  }, [lastSeq]);
   if (lines.length === 0) {
     return <p className="py-2 text-xs text-muted-foreground">No events cached yet.</p>;
   }
   return (
-    <div className="max-h-72 select-text overflow-y-auto rounded-md bg-background/60 px-2 py-1.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
+    <div
+      ref={box}
+      onScroll={(e) => {
+        const el = e.currentTarget;
+        follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+      }}
+      className="max-h-72 select-text overflow-y-auto rounded-md bg-background/60 px-2 py-1.5 font-mono text-[11px] leading-relaxed text-muted-foreground"
+    >
       {lines.map((l) => (
         <div key={l.seq} className="flex gap-2">
           <span className="shrink-0 text-muted-foreground/50">{new Date(l.ts).toLocaleTimeString()}</span>
