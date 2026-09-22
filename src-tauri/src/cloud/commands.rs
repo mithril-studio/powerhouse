@@ -5,11 +5,13 @@
 //! module is reached by PTY cleanup or app shutdown.
 //!
 //! Lifecycle rules (docs/boxd-cloud-vm-lifecycle-plan.md): every run owns one
-//! VM `ph-<run8>` created from the base snapshot; a completed, published,
+//! VM named for its source branch (`ph-<branch-slug>`, or `ph-<run8>` on a
+//! detached HEAD) created from the base snapshot; a completed, published,
 //! fully cached and remotely verified run releases its VM at once; any other
 //! terminal state holds the VM for `hold_secs()`, then parks it as snapshot
-//! `ph-<run8>-park` and destroys the VM. The intended state is persisted
-//! before each boxd call so a lost acknowledgement is reconciled by name.
+//! `<vm>-park` and destroys the VM. The intended state is persisted before
+//! each boxd call so a lost acknowledgement is reconciled by name — always
+//! the name stored on the record, never one recomputed after submit.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -80,15 +82,69 @@ fn short(run_id: &str) -> String {
     run_id.chars().take(8).collect()
 }
 
-/// Every run owns one machine, `ph-<run8>`. Deterministic so a lost create
-/// acknowledgement is reconciled by name instead of creating twice.
-pub fn task_vm_name(run_id: &str) -> String {
-    format!("{OWNED_PREFIX}{}", short(run_id))
+/// Every run owns one machine, named for the branch it runs: `ph-<slug>`, so
+/// `boxd machine list` reads as "which branches are in the cloud". Detached
+/// HEAD (no branch) falls back to `ph-<run8>`. Deterministic so a lost create
+/// acknowledgement is reconciled by name instead of creating twice. The name
+/// is computed once, at submit; every later step reads it from the record.
+pub fn task_vm_name(source_branch: Option<&str>, run_id: &str) -> String {
+    match source_branch.map(branch_slug).filter(|s| !s.is_empty()) {
+        Some(slug) => format!("{OWNED_PREFIX}{slug}"),
+        None => format!("{OWNED_PREFIX}{}", short(run_id)),
+    }
 }
 
-/// Park snapshot for a run, `ph-<run8>-park`. Re-saving bumps its version.
-pub fn park_snapshot_name(run_id: &str) -> String {
-    format!("{OWNED_PREFIX}{}-park", short(run_id))
+/// Park snapshot for a run's VM, `<vm>-park`. Re-saving bumps its version.
+pub fn park_snapshot_name(vm_name: &str) -> String {
+    format!("{vm_name}-park")
+}
+
+const SLUG_MAX: usize = 32;
+
+/// Lowercased, `[a-z0-9]` kept, every other char `-`, runs of `-` collapsed,
+/// ends trimmed, capped at [`SLUG_MAX`]. When case folding, collapsing,
+/// trimming or truncation could make two branches collide, a 6-hex-char hash
+/// of the full branch name is appended to keep the name deterministic and
+/// distinct. Plain per-char substitution (`feat/foo` → `feat-foo`) gets no
+/// suffix; the one-live-run-per-branch gate at submit catches the rest.
+fn branch_slug(branch: &str) -> String {
+    let lower = branch.to_lowercase();
+    let mapped: String = lower.chars().map(|c| if c.is_ascii_lowercase() || c.is_ascii_digit() { c } else { '-' }).collect();
+    let mut cleaned = String::with_capacity(mapped.len());
+    for c in mapped.chars() {
+        if c == '-' && (cleaned.is_empty() || cleaned.ends_with('-')) {
+            continue;
+        }
+        cleaned.push(c);
+    }
+    let cleaned = cleaned.trim_end_matches('-').to_string();
+    let mut lossy = lower != branch || cleaned != mapped;
+    let mut slug = cleaned;
+    if slug.len() > SLUG_MAX {
+        slug.truncate(SLUG_MAX);
+        slug = slug.trim_end_matches('-').to_string();
+        lossy = true;
+    }
+    if slug.is_empty() {
+        return hash6(branch);
+    }
+    if lossy {
+        format!("{slug}-{}", hash6(branch))
+    } else {
+        slug
+    }
+}
+
+/// First 6 hex chars of the FNV-1a 64-bit hash. Stable across releases: park
+/// snapshots and lost-acknowledgement reconciliation depend on recomputing
+/// the same name for the same branch forever.
+fn hash6(s: &str) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in s.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("{h:016x}")[..6].to_string()
 }
 
 /// Parse boxd's idle values ("300s", "off") into seconds.
@@ -420,8 +476,26 @@ pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest
     let need_claude = manifest.agent.provider == AgentProvider::Claude;
     let git_remote = manifest.source.remote_url.starts_with("https://").then_some(manifest.source.remote_url.as_str());
     let credentials_text = secrets::render_run_credentials(mgr.secrets.as_ref(), need_claude, git_remote)?;
-    let vm_name = task_vm_name(&run_id);
+    let vm_name = task_vm_name(source.branch.as_deref(), &run_id);
     let ceiling = Some(req.machine_ceiling.unwrap_or(DEFAULT_MACHINE_CEILING));
+    // One live run per branch: the VM name is the branch's cloud identity, so
+    // a second run would collide with the first's VM or park snapshot. This
+    // doubles as the two-writer guard for the branch's output.
+    if let Some(existing) = mgr
+        .store
+        .lock()
+        .unwrap()
+        .list()
+        .into_iter()
+        .find(|r| r.task_vm.as_ref().is_some_and(|v| v.name == vm_name) && r.holds_resources())
+    {
+        return Err(format!(
+            "branch {} is already in the cloud: run {} still holds {}. Discard that run's workspace in the Cloud tab (or wait for it to finish) before sending this branch again.",
+            source.branch.as_deref().unwrap_or("(detached)"),
+            short(&existing.run_id),
+            if existing.machine == MachineState::Parked { "a parked snapshot" } else { "its VM" },
+        ));
+    }
 
     let mut record = CloudRunRecord {
         run_id: run_id.clone(),
@@ -777,7 +851,7 @@ pub fn do_park(mgr: &CloudManager, app: Option<&AppHandle>, run_id: &str) -> Res
     if record.state().map(|s| s.is_live()).unwrap_or(true) || runner_reports_live(mgr.boxd.as_ref(), &vm.name, run_id)? {
         return Err("the run is still live on the VM; cancel it and wait for `cancelled` before parking".into());
     }
-    let name = park_snapshot_name(run_id);
+    let name = park_snapshot_name(&vm.name);
     let result = (|| -> Result<(), String> {
         // Intent first: a lost `save` acknowledgement is found by name.
         if record.park_snapshot.is_none() {
@@ -1592,7 +1666,7 @@ mod tests {
 
     /// An accepted record on VM `ph-<run8>` whose repo is a real local clone.
     fn accepted_record(work: &str, run_id: &str) -> CloudRunRecord {
-        let mut rec = super::super::store::tests_support::record_with_vm(run_id, &task_vm_name(run_id));
+        let mut rec = super::super::store::tests_support::record_with_vm(run_id, &task_vm_name(None, run_id));
         rec.phase = Phase::Accepted;
         rec.repo_path = work.to_string();
         rec.manifest.source.remote_url = "file-remote".into();
@@ -1652,7 +1726,7 @@ mod tests {
         let calls = fake.calls();
         let rec = &mgr.store.lock().unwrap().list()[0];
         let vm = rec.task_vm.as_ref().unwrap().name.clone();
-        assert_eq!(vm, format!("ph-{}", short(&rec.run_id)));
+        assert_eq!(vm, "ph-main", "the VM is named for the source branch");
         assert!(calls.iter().any(|c| c.starts_with(&format!("get {vm}"))), "lookup by name before create: {calls:?}");
         assert!(calls.iter().any(|c| c.starts_with(&format!("new {vm} from ph-test-base iso=true 0/0"))), "{calls:?}");
         assert!(calls.iter().any(|c| c.contains("probe")));
@@ -1678,7 +1752,7 @@ mod tests {
         assert_eq!(rec.phase, Phase::Accepted);
         assert_eq!(rec.machine, MachineState::Active);
         let vm = rec.task_vm.as_ref().unwrap().name.clone();
-        assert!(vm.starts_with("ph-") && vm.len() == 11, "{vm}");
+        assert_eq!(vm, "ph-main");
         assert_eq!(rec.manifest.context.brief_markdown, "# Plan\n1. add file");
         assert_eq!(rec.manifest.workspace.base_snapshot.as_ref().unwrap().name, "ph-test-base");
         assert_eq!(rec.manifest.workspace.base_snapshot.as_ref().unwrap().version.as_deref(), Some("v3"));
@@ -1711,13 +1785,110 @@ mod tests {
     }
 
     #[test]
-    fn names_are_per_run_and_powerhouse_owned() {
-        assert_eq!(task_vm_name("11111111-2222-4333-8444-555555555555"), "ph-11111111");
-        assert_eq!(park_snapshot_name("11111111-2222-4333-8444-555555555555"), "ph-11111111-park");
-        assert!(ensure_owned(&task_vm_name("abcdef12-x")).is_ok());
+    fn names_derive_from_the_branch_and_stay_powerhouse_owned() {
+        let run_id = "11111111-2222-4333-8444-555555555555";
+        // A clean branch maps by plain substitution, no hash suffix.
+        assert_eq!(task_vm_name(Some("feat/foo-bar"), run_id), "ph-feat-foo-bar");
+        assert_eq!(park_snapshot_name("ph-feat-foo-bar"), "ph-feat-foo-bar-park");
+        assert_eq!(task_vm_name(Some("main"), run_id), "ph-main");
+        // Detached HEAD falls back to the run id.
+        assert_eq!(task_vm_name(None, run_id), "ph-11111111");
+        assert_eq!(park_snapshot_name("ph-11111111"), "ph-11111111-park");
+        // Case folding, dash collapsing and trimming could collide branches:
+        // a deterministic hash suffix keeps them distinct.
+        let folded = task_vm_name(Some("Feat/Foo"), run_id);
+        assert!(folded.starts_with("ph-feat-foo-") && folded.len() == "ph-feat-foo-".len() + 6, "{folded}");
+        assert_ne!(folded, task_vm_name(Some("feat//foo"), run_id));
+        assert_eq!(folded, task_vm_name(Some("Feat/Foo"), "another-run-id"), "independent of the run id");
+        // Truncation keeps determinism through the hash.
+        let long = "feature/a-very-long-branch-name-that-goes-on-and-on";
+        let name = task_vm_name(Some(long), run_id);
+        assert!(name.len() <= OWNED_PREFIX.len() + SLUG_MAX + 7, "{name}");
+        assert_eq!(name, task_vm_name(Some(long), "other"));
+        assert_ne!(name, task_vm_name(Some(&format!("{long}-v2")), run_id));
+        // A branch with no usable characters still gets a stable name.
+        let odd = task_vm_name(Some("///"), run_id);
+        assert_eq!(odd.len(), OWNED_PREFIX.len() + 6, "{odd}");
+        // Every generated name passes the ownership guard.
+        for b in [Some("feat/foo-bar"), Some("Feat/Foo"), Some(long), Some("///"), None] {
+            assert!(ensure_owned(&task_vm_name(b, run_id)).is_ok(), "{b:?}");
+        }
         assert_eq!(source_snapshot_version(Some("snapshot/powerhouse-base:3")), Some(("powerhouse-base".into(), "v3".into())));
         assert_eq!(source_snapshot_version(Some("fork/powerhouse-cloud-base")), None);
         assert_eq!(source_snapshot_version(None), None);
+    }
+
+    #[test]
+    fn submission_on_a_feature_branch_uses_the_branch_named_vm() {
+        let (dir, work) = temp_repo();
+        // Same commit as main (already on the remote), new branch name.
+        std::process::Command::new("git").arg("-C").arg(&work).args(["checkout", "-q", "-b", "feat/foo-bar"]).output().unwrap();
+        let fake = Arc::new(Fake { echo_submit: true, ..Default::default() });
+        fake.snapshot("ph-test-base", "v1");
+        fake.on_exec("probe", Ok(probe_json()));
+        let mgr = manager(fake.clone(), dir.path());
+        let rec = do_submit(&mgr, None, request(&work, "ph-test-base")).unwrap();
+        assert_eq!(rec.source_branch.as_deref(), Some("feat/foo-bar"));
+        assert_eq!(rec.task_vm.as_ref().unwrap().name, "ph-feat-foo-bar");
+    }
+
+    #[test]
+    fn second_submit_on_the_same_branch_is_refused_while_the_first_holds_resources() {
+        let (dir, work) = temp_repo();
+        let fake = Arc::new(Fake { echo_submit: true, ..Default::default() });
+        fake.snapshot("ph-test-base", "v1");
+        fake.on_exec("probe", Ok(probe_json()));
+        let mgr = manager(fake.clone(), dir.path());
+        let first = do_submit(&mgr, None, request(&work, "ph-test-base")).unwrap();
+        assert_eq!(first.phase, Phase::Accepted);
+        assert!(first.holds_resources());
+        // Same branch, VM still held: refused before any cloud side effect.
+        let creates_before = fake.count("new ");
+        let err = do_submit(&mgr, None, request(&work, "ph-test-base")).unwrap_err();
+        assert!(err.contains("already in the cloud") && err.contains(&short(&first.run_id)) && err.contains("Discard"), "{err}");
+        assert_eq!(fake.count("new "), creates_before, "no second machine was created");
+        assert_eq!(mgr.store.lock().unwrap().list().len(), 1, "no second record either");
+        // A parked run still blocks the branch (its park snapshot would collide).
+        let mut parked = load(&mgr, &first.run_id).unwrap();
+        parked.set_machine(MachineState::Parked, now_ms());
+        parked.vm_released = true;
+        parked.park_snapshot = Some(SnapshotHandle { name: "ph-main-park".into(), version: Some("v1".into()), size: None });
+        mgr.store.lock().unwrap().put(parked).unwrap();
+        fake.machines.lock().unwrap().clear();
+        let err = do_submit(&mgr, None, request(&work, "ph-test-base")).unwrap_err();
+        assert!(err.contains("parked snapshot"), "{err}");
+        // Once discarded, the branch is free again.
+        let mut released = load(&mgr, &first.run_id).unwrap();
+        released.set_machine(MachineState::Released, now_ms());
+        released.park_snapshot = None;
+        mgr.store.lock().unwrap().put(released).unwrap();
+        let rec = do_submit(&mgr, None, request(&work, "ph-test-base")).unwrap();
+        assert_eq!(rec.phase, Phase::Accepted);
+        assert_eq!(rec.task_vm.as_ref().unwrap().name, "ph-main");
+    }
+
+    #[test]
+    fn park_uses_the_stored_vm_name_never_a_recomputed_one() {
+        // A record whose stored VM name does not match what today's naming
+        // would produce (e.g. created before a rename): park must derive the
+        // snapshot from the record, not recompute from branch or run id.
+        let (dir, work, _remote) = temp_repo_with(false);
+        let fake = base_fake();
+        let mgr = manager(fake.clone(), dir.path());
+        let run_id = "11111111-2222-4333-8444-555555555555";
+        fake.machine("ph-legacy-name", "running");
+        let mut rec = accepted_record(&work, run_id);
+        rec.task_vm = Some(VmRef { name: "ph-legacy-name".into(), id: None });
+        rec.source_branch = Some("feat/foo-bar".into());
+        rec.machine = MachineState::Holding;
+        rec.machine_changed_ms = 1;
+        rec.snapshot = Some(snapshot_of(run_id, "failed"));
+        mgr.store.lock().unwrap().put(rec).unwrap();
+        fake.on_exec("inspect", Ok(snap_json(run_id, "failed", 2, 1, false)));
+        let r = do_park(&mgr, None, run_id).unwrap();
+        assert_eq!(r.park_snapshot.as_ref().unwrap().name, "ph-legacy-name-park");
+        assert!(fake.snapshots.lock().unwrap().contains_key("ph-legacy-name-park"));
+        assert!(fake.calls().iter().any(|c| c == "snapsave ph-legacy-name ph-legacy-name-park"), "{:?}", fake.calls());
     }
 
     #[test]
@@ -1792,7 +1963,7 @@ mod tests {
         let fake = base_fake();
         let mgr = manager(fake.clone(), dir.path());
         let run_id = "11111111-2222-4333-8444-555555555555";
-        let vm = task_vm_name(run_id);
+        let vm = task_vm_name(None, run_id);
         fake.machine(&vm, "running");
         mgr.store.lock().unwrap().put(accepted_record(&work, run_id)).unwrap();
         let sha = head_sha(&work);
@@ -1833,7 +2004,7 @@ mod tests {
         let fake = base_fake();
         let mgr = manager(fake.clone(), dir.path());
         let run_id = "11111111-2222-4333-8444-555555555555";
-        fake.machine(&task_vm_name(run_id), "running");
+        fake.machine(&task_vm_name(None, run_id), "running");
         mgr.store.lock().unwrap().put(accepted_record(&work, run_id)).unwrap();
         let sha = head_sha(&work);
         publish_branch(&work, run_id);
@@ -1860,7 +2031,7 @@ mod tests {
         let fake = base_fake();
         let mgr = manager(fake.clone(), dir.path());
         let run_id = "11111111-2222-4333-8444-555555555555";
-        let vm = task_vm_name(run_id);
+        let vm = task_vm_name(None, run_id);
         fake.machine(&vm, "running");
         mgr.store.lock().unwrap().put(accepted_record(&work, run_id)).unwrap();
         fake.on_exec("inspect", Ok(snap_json(run_id, "failed", 20, 2, false)));
@@ -1907,7 +2078,7 @@ mod tests {
         let fake = base_fake();
         let mgr = manager(fake.clone(), dir.path());
         let run_id = "11111111-2222-4333-8444-555555555555";
-        fake.machine(&task_vm_name(run_id), "running");
+        fake.machine(&task_vm_name(None, run_id), "running");
         let mut rec = accepted_record(&work, run_id);
         rec.machine = MachineState::Holding;
         rec.machine_changed_ms = 1;
@@ -1931,7 +2102,7 @@ mod tests {
         let fake = Arc::new(Fake { save_timeout_but_exists: true, ..Default::default() });
         let mgr = manager(fake.clone(), dir.path());
         let run_id = "11111111-2222-4333-8444-555555555555";
-        fake.machine(&task_vm_name(run_id), "running");
+        fake.machine(&task_vm_name(None, run_id), "running");
         let mut rec = accepted_record(&work, run_id);
         rec.machine = MachineState::Holding;
         rec.machine_changed_ms = 1;
@@ -1951,7 +2122,7 @@ mod tests {
         let fake = base_fake();
         let mgr = manager(fake.clone(), dir.path());
         let run_id = "11111111-2222-4333-8444-555555555555";
-        let vm = task_vm_name(run_id);
+        let vm = task_vm_name(None, run_id);
         fake.snapshot("ph-11111111-park", "v1");
         let mut rec = accepted_record(&work, run_id);
         rec.machine = MachineState::Parked;
@@ -1981,7 +2152,7 @@ mod tests {
         let fake = base_fake();
         let mgr = manager(fake.clone(), dir.path());
         let run_id = "11111111-2222-4333-8444-555555555555";
-        let vm = task_vm_name(run_id);
+        let vm = task_vm_name(None, run_id);
         fake.machine(&vm, "running");
         let mut rec = accepted_record(&work, run_id);
         rec.machine = MachineState::Holding;
@@ -2008,7 +2179,7 @@ mod tests {
         let fake = base_fake();
         let mgr = manager(fake.clone(), dir.path());
         let run_id = "11111111-2222-4333-8444-555555555555";
-        fake.machine(&task_vm_name(run_id), "running");
+        fake.machine(&task_vm_name(None, run_id), "running");
         mgr.store.lock().unwrap().put(accepted_record(&work, run_id)).unwrap();
         fake.on_exec("events", Ok(events_json(run_id, &[1, 2])));
         fake.on_exec("result", Ok(result_json(run_id, Some("b"), false)));
