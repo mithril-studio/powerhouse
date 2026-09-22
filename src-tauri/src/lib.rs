@@ -72,6 +72,7 @@ pub fn run() {
             cloud::commands::cloud_restore,
             cloud::commands::cloud_lifecycle_tick,
             cloud::commands::cloud_submit,
+            cloud::commands::cloud_quick_submit,
             cloud::commands::cloud_sync,
             cloud::commands::cloud_cancel,
             cloud::commands::cloud_diff,

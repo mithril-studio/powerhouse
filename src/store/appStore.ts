@@ -207,8 +207,11 @@ interface AppState extends PersistedTree {
   pendingHandoff: Record<string, number>;
   /** Runtime mirror of the Rust-owned cloud-run store (never persisted here). */
   cloudRuns: Record<string, CloudRunRecord>;
-  /** Repo whose `Run in cloud` form is open, plus the source directory. */
-  cloudModal: { repoId: string; sourcePath: string; sourceLabel: string } | null;
+  /** Repo whose `Run in cloud` form is open, plus the source directory.
+   * `notice` carries the reason a one-click submit handed over to the form. */
+  cloudModal: { repoId: string; sourcePath: string; sourceLabel: string; notice?: string | null } | null;
+  /** `${repoId}:${branch}` → stage of an in-flight one-click submit (never persisted). */
+  cloudQuickStages: Record<string, string>;
 
   settingsOpen: boolean;
 
@@ -268,9 +271,10 @@ interface AppState extends PersistedTree {
   setCloudRuns: (runs: CloudRunRecord[]) => void;
   setCloudRun: (run: CloudRunRecord) => void;
   removeCloudRun: (runId: string) => void;
-  openCloudModal: (repoId: string, sourcePath: string, sourceLabel: string) => void;
+  openCloudModal: (repoId: string, sourcePath: string, sourceLabel: string, notice?: string | null) => void;
   closeCloudModal: () => void;
   setCloudSettings: (cloud: CloudSettings) => void;
+  setCloudQuickStage: (repoId: string, branch: string, stage: string | null) => void;
 }
 
 const SEED_AGENTS: AgentProfile[] = [
@@ -469,6 +473,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   settingsOpen: false,
   cloudRuns: {},
   cloudModal: null,
+  cloudQuickStages: {},
 
   hydrate: (tree) =>
     set({
@@ -700,9 +705,20 @@ export const useAppStore = create<AppState>((set, get) => ({
       delete next[runId];
       return { cloudRuns: next };
     }),
-  openCloudModal: (repoId, sourcePath, sourceLabel) =>
-    set({ cloudModal: { repoId, sourcePath, sourceLabel } }),
+  openCloudModal: (repoId, sourcePath, sourceLabel, notice) =>
+    set({ cloudModal: { repoId, sourcePath, sourceLabel, notice: notice ?? null } }),
   closeCloudModal: () => set({ cloudModal: null }),
+  setCloudQuickStage: (repoId, branch, stage) =>
+    set((s) => {
+      const key = `${repoId}:${branch}`;
+      if (stage === null) {
+        if (!(key in s.cloudQuickStages)) return s;
+        const next = { ...s.cloudQuickStages };
+        delete next[key];
+        return { cloudQuickStages: next };
+      }
+      return { cloudQuickStages: { ...s.cloudQuickStages, [key]: stage } };
+    }),
   setCloudSettings: (cloud) => set((s) => ({ settings: { ...s.settings, cloud } })),
 }));
 

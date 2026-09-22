@@ -34,9 +34,49 @@ function dot(tone: Tone) {
   }
 }
 
+const QUICK_STAGES = ["checkpointing", "pushing", "submitting"] as const;
+
+/** Staged progress for a one-click submit that has no run record yet. */
+function QuickSubmitCard({ branch, stage }: { branch: string; stage: string }) {
+  const at = QUICK_STAGES.indexOf(stage as (typeof QUICK_STAGES)[number]);
+  return (
+    <div className="rounded-xl border border-border bg-card p-3">
+      <div className="flex items-center gap-2">
+        <span className={`size-2 shrink-0 rounded-full ${dot("live")}`} aria-hidden />
+        <span className="min-w-0 flex-1 truncate text-xs font-medium">Sending {branch} to cloud</span>
+      </div>
+      <div className="mt-1.5 flex items-center gap-1.5 pl-4 text-[11px]">
+        {QUICK_STAGES.map((s, i) => (
+          <span
+            key={s}
+            className={
+              i < at
+                ? "text-muted-foreground line-through decoration-muted-foreground/40"
+                : i === at
+                  ? "animate-pulse text-accent-brand"
+                  : "text-muted-foreground/60"
+            }
+          >
+            {s}
+            {i < QUICK_STAGES.length - 1 ? " →" : ""}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function CloudPane({ repo, branch }: { repo: Repo; branch?: Branch | null }) {
   const runs = useAppStore((s) => s.cloudRuns);
   const openCloudModal = useAppStore((s) => s.openCloudModal);
+  const quickStages = useAppStore((s) => s.cloudQuickStages);
+  const pending = useMemo(
+    () =>
+      Object.entries(quickStages)
+        .filter(([k]) => k.startsWith(`${repo.id}:`))
+        .map(([k, stage]) => ({ branch: k.slice(repo.id.length + 1), stage })),
+    [quickStages, repo.id],
+  );
   const list = useMemo(
     () =>
       Object.values(runs)
@@ -81,7 +121,14 @@ export function CloudPane({ repo, branch }: { repo: Repo; branch?: Branch | null
             Run in cloud
           </button>
         </div>
-        {list.length === 0 ? (
+        {pending.length > 0 && (
+          <div className="mb-2 space-y-2">
+            {pending.map((p) => (
+              <QuickSubmitCard key={p.branch} branch={p.branch} stage={p.stage} />
+            ))}
+          </div>
+        )}
+        {list.length === 0 && pending.length === 0 ? (
           <p className="py-16 text-center text-sm text-muted-foreground">
             No cloud runs yet. A cloud run checks out a pushed commit on an isolated boxd VM, lets the agent work
             unattended, runs your checks, and publishes a branch for review.

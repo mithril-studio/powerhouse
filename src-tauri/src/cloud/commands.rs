@@ -345,6 +345,37 @@ fn wait_snapshot_ready(boxd: &dyn Boxd, name: &str) -> Result<SnapshotInfo, Stri
     }
 }
 
+/// Refuse when the org is at or above the machine ceiling.
+fn ensure_capacity(boxd: &dyn Boxd, ceiling: usize) -> Result<(), String> {
+    let count = boxd.machine_list().map_err(|e| e.to_string())?.len();
+    if count >= ceiling {
+        return Err(format!(
+            "your boxd org has {count} machines and Powerhouse's ceiling is {ceiling} (org limit {ORG_MACHINE_SLOTS}). Discard or park finished runs in the Cloud tab, remove other machines, or raise the ceiling in the run form."
+        ));
+    }
+    Ok(())
+}
+
+/// The record (if any) that still holds this VM name's resources — the reason
+/// a branch counts as "in the cloud".
+fn holding_run(mgr: &CloudManager, vm_name: &str) -> Option<CloudRunRecord> {
+    mgr.store
+        .lock()
+        .unwrap()
+        .list()
+        .into_iter()
+        .find(|r| r.task_vm.as_ref().is_some_and(|v| v.name == vm_name) && r.holds_resources())
+}
+
+fn branch_conflict_message(branch: Option<&str>, existing: &CloudRunRecord) -> String {
+    format!(
+        "branch {} is already in the cloud: run {} still holds {}. Discard that run's workspace in the Cloud tab (or wait for it to finish) before sending this branch again.",
+        branch.unwrap_or("(detached)"),
+        short(&existing.run_id),
+        if existing.machine == MachineState::Parked { "a parked snapshot" } else { "its VM" },
+    )
+}
+
 /// Create (or find) a machine by name from a snapshot. A timeout or unclear
 /// error from `machine new` is followed by a lookup: absence of an
 /// acknowledgement is not absence of a machine.
@@ -355,12 +386,7 @@ fn ensure_machine_from_snapshot(boxd: &dyn Boxd, name: &str, snapshot: &str, cei
         Err(e) => return Err(e.to_string()),
     }
     if let Some(ceiling) = ceiling {
-        let count = boxd.machine_list().map_err(|e| e.to_string())?.len();
-        if count >= ceiling {
-            return Err(format!(
-                "your boxd org has {count} machines and Powerhouse's ceiling is {ceiling} (org limit {ORG_MACHINE_SLOTS}). Discard or park finished runs in the Cloud tab, remove other machines, or raise the ceiling in the run form."
-            ));
-        }
+        ensure_capacity(boxd, ceiling)?;
     }
     match boxd.machine_new_from_snapshot(name, snapshot, true, 0, 0) {
         Ok(info) => Ok(info),
@@ -481,20 +507,8 @@ pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest
     // One live run per branch: the VM name is the branch's cloud identity, so
     // a second run would collide with the first's VM or park snapshot. This
     // doubles as the two-writer guard for the branch's output.
-    if let Some(existing) = mgr
-        .store
-        .lock()
-        .unwrap()
-        .list()
-        .into_iter()
-        .find(|r| r.task_vm.as_ref().is_some_and(|v| v.name == vm_name) && r.holds_resources())
-    {
-        return Err(format!(
-            "branch {} is already in the cloud: run {} still holds {}. Discard that run's workspace in the Cloud tab (or wait for it to finish) before sending this branch again.",
-            source.branch.as_deref().unwrap_or("(detached)"),
-            short(&existing.run_id),
-            if existing.machine == MachineState::Parked { "a parked snapshot" } else { "its VM" },
-        ));
+    if let Some(existing) = holding_run(mgr, &vm_name) {
+        return Err(branch_conflict_message(source.branch.as_deref(), &existing));
     }
 
     let mut record = CloudRunRecord {
@@ -666,6 +680,164 @@ pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest
             Err(e)
         }
     }
+}
+
+// --- one-click submission -------------------------------------------------------
+
+/// Fixed task text for quick submissions: the brief *is* the task.
+pub const QUICK_TASK_TEXT: &str =
+    "Execute the work described in the brief (`.powerhouse/cloud-task.md`). It contains the plan and context.";
+const QUICK_EVENT: &str = "cloud-quick-submit";
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickSubmitRequest {
+    pub repo_id: String,
+    pub repo_path: String,
+    pub repo_name: String,
+    /// Worktree whose branch is sent to the cloud.
+    pub source_path: String,
+    /// Last-used settings, persisted by the UI.
+    pub base_snapshot: String,
+    #[serde(default)]
+    pub machine_ceiling: Option<usize>,
+    #[serde(default)]
+    pub checks: Vec<CheckSpec>,
+    pub deadline_seconds: u64,
+    #[serde(default = "default_permission_mode")]
+    pub permission_mode: String,
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
+    #[serde(default)]
+    pub max_turns: Option<u32>,
+    #[serde(default)]
+    pub max_budget_usd: Option<f64>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default = "default_provider")]
+    pub provider: String,
+    #[serde(default)]
+    pub fake_script: Option<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum QuickSubmitOutcome {
+    /// The run was accepted; the record carries the rest of the story.
+    Accepted { record: Box<CloudRunRecord> },
+    /// Something needs the user; the UI opens the advanced form with the
+    /// reason instead of a dead-end toast. `stage` names where it stopped.
+    NeedsAttention { stage: String, reason: String },
+}
+
+fn emit_quick_stage(app: Option<&AppHandle>, repo_id: &str, branch: &str, stage: &str) {
+    if let Some(app) = app {
+        let _ = app.emit(QUICK_EVENT, serde_json::json!({ "repoId": repo_id, "branch": branch, "stage": stage }));
+    }
+}
+
+/// One-click "Send to cloud": preflight every submit-time refusal before any
+/// side effect, checkpoint a dirty worktree as a WIP commit, push the branch,
+/// pick the newest plan document as the brief (or generate a stub), then run
+/// the normal submission with the caller's last-used settings.
+pub fn do_quick_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: QuickSubmitRequest) -> Result<QuickSubmitOutcome, String> {
+    let worktree = PathBuf::from(&req.source_path);
+    let attention = |stage: &str, reason: String| Ok(QuickSubmitOutcome::NeedsAttention { stage: stage.into(), reason });
+
+    // Preflight, in the order the failures are cheapest to detect. Nothing
+    // here mutates the worktree, the store, or boxd.
+    let Some(branch) = git(&worktree, &["symbolic-ref", "--short", "-q", "HEAD"]).ok().filter(|b| !b.is_empty()) else {
+        return attention("preflight", "The worktree is on a detached HEAD; check out a branch first, or use the advanced form.".into());
+    };
+    let remote_url = match git(&worktree, &["remote", "get-url", "origin"]) {
+        Ok(u) => strip_credentials(&u),
+        Err(_) => return attention("preflight", "The repository has no `origin` remote; the cloud VM needs a remote to fetch from.".into()),
+    };
+    let need_claude = req.provider != "fake";
+    let git_remote = remote_url.starts_with("https://").then_some(remote_url.as_str());
+    if let Err(e) = secrets::render_run_credentials(mgr.secrets.as_ref(), need_claude, git_remote) {
+        return attention("preflight", e);
+    }
+    let base = match find_snapshot(mgr.boxd.as_ref(), req.base_snapshot.trim()) {
+        Ok(b) => b,
+        Err(e) => return attention("preflight", e),
+    };
+    if let Err(e) = ensure_capacity(mgr.boxd.as_ref(), req.machine_ceiling.unwrap_or(DEFAULT_MACHINE_CEILING)) {
+        return attention("preflight", e);
+    }
+    // The run id plays no part in a branch-derived name; "" keeps that honest.
+    if let Some(existing) = holding_run(mgr, &task_vm_name(Some(&branch), "")) {
+        return attention("preflight", branch_conflict_message(Some(&branch), &existing));
+    }
+
+    // Checkpoint: make the source clean so the strict `inspect_source` in
+    // `do_submit` passes; `.powerhouse/` stays excluded from the commit.
+    crate::handoff::ensure_powerhouse_dir(&worktree);
+    emit_quick_stage(app, &req.repo_id, &branch, "checkpointing");
+    let dirty = match git(&worktree, &["status", "--porcelain"]) {
+        Ok(s) => !s.trim().is_empty(),
+        Err(e) => return attention("checkpoint", e),
+    };
+    if dirty {
+        if let Err(e) = git(&worktree, &["add", "-A"]).and_then(|_| git(&worktree, &["commit", "-m", "WIP: send to cloud"])) {
+            return attention("checkpoint", format!("could not checkpoint the dirty worktree: {e}"));
+        }
+    }
+    // Push with the user's own git credentials; the Powerhouse token is only
+    // for the VM. Never force; git's own message explains a refusal.
+    emit_quick_stage(app, &req.repo_id, &branch, "pushing");
+    let has_upstream = git(&worktree, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]).is_ok();
+    let push_args: Vec<&str> = if has_upstream { vec!["push", "origin", &branch] } else { vec!["push", "-u", "origin", &branch] };
+    if let Err(e) = git(&worktree, &push_args) {
+        return attention("push", format!("git push failed: {}", super::redact_stderr(&e)));
+    }
+
+    let brief = match latest_brief_doc(&req.source_path) {
+        Some(doc) => doc.content,
+        None => stub_brief(&worktree),
+    };
+
+    emit_quick_stage(app, &req.repo_id, &branch, "submitting");
+    let submit = SubmitRequest {
+        repo_id: req.repo_id.clone(),
+        repo_path: req.repo_path,
+        repo_name: req.repo_name,
+        source_path: req.source_path,
+        task: QUICK_TASK_TEXT.into(),
+        acceptance_criteria: vec![],
+        base_snapshot: base.name.clone(),
+        base_snapshot_version: base.version.clone(),
+        machine_ceiling: req.machine_ceiling,
+        checks: req.checks,
+        deadline_seconds: req.deadline_seconds,
+        permission_mode: req.permission_mode,
+        allowed_tools: req.allowed_tools,
+        max_turns: req.max_turns,
+        max_budget_usd: req.max_budget_usd,
+        model: req.model,
+        provider: req.provider,
+        fake_script: req.fake_script,
+        brief,
+    };
+    match do_submit(mgr, app, submit) {
+        Ok(record) => Ok(QuickSubmitOutcome::Accepted { record: Box::new(record) }),
+        Err(e) => attention("submit", e),
+    }
+}
+
+/// No plan document under `.powerhouse/`: a generated snapshot of the branch
+/// so the agent still has context beyond the fixed task line.
+fn stub_brief(worktree: &Path) -> String {
+    let log = git(worktree, &["log", "--oneline", "-10"]).unwrap_or_default();
+    let stat = git(worktree, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+        .ok()
+        .and_then(|h| git(worktree, &["diff", "--stat", &format!("{h}...")]).ok())
+        .or_else(|| git(worktree, &["diff", "--stat", "origin/main..."]).ok())
+        .unwrap_or_default();
+    format!(
+        "# Branch snapshot (auto-generated)\n\nNo plan document was found under `.powerhouse/`; \
+         this is the branch's recent history.\n\n## Recent commits\n\n```\n{log}\n```\n\n## Diff stat against the default branch\n\n```\n{stat}\n```\n"
+    )
 }
 
 // --- machine lifecycle ----------------------------------------------------------
@@ -1267,6 +1439,16 @@ pub async fn cloud_submit(app: AppHandle, request: SubmitRequest) -> Result<Clou
 }
 
 #[tauri::command]
+pub async fn cloud_quick_submit(app: AppHandle, request: QuickSubmitRequest) -> Result<QuickSubmitOutcome, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mgr = app.state::<CloudManager>();
+        do_quick_submit(&mgr, Some(&app), request)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn cloud_sync(app: AppHandle, run_id: String, force_events: Option<bool>) -> Result<CloudRunRecord, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mgr = app.state::<CloudManager>();
@@ -1382,32 +1564,38 @@ pub struct HandoffDoc {
     pub content: String,
 }
 
-/// Newest `.powerhouse/handoff-*.md` in the source directory, if any. This is
-/// the plan artifact Powerhouse already produces; the cloud form offers it as
-/// the run's brief.
-#[tauri::command]
-pub fn cloud_latest_handoff(source_path: String) -> Result<Option<HandoffDoc>, String> {
-    let dir = Path::new(&source_path).join(".powerhouse");
-    let mut candidates: Vec<PathBuf> = std::fs::read_dir(&dir)
+/// Newest plan document under `.powerhouse/` in the source directory:
+/// `handoff-*.md` (the artifact Powerhouse already produces) or anything with
+/// `plan` in the name. Newest by modification time, name as the tie-break;
+/// content capped at the brief limit.
+fn latest_brief_doc(source_path: &str) -> Option<HandoffDoc> {
+    let dir = Path::new(source_path).join(".powerhouse");
+    let candidates: Vec<PathBuf> = std::fs::read_dir(&dir)
         .map(|rd| {
             rd.flatten()
                 .map(|e| e.path())
                 .filter(|p| {
                     p.file_name()
                         .and_then(|n| n.to_str())
-                        .map(|n| n.starts_with("handoff-") && n.ends_with(".md"))
+                        .map(|n| n.ends_with(".md") && (n.starts_with("handoff-") || n.contains("plan")))
                         .unwrap_or(false)
                 })
                 .collect()
         })
         .unwrap_or_default();
-    candidates.sort();
-    let Some(path) = candidates.pop() else {
-        return Ok(None);
-    };
-    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let path = candidates.into_iter().max_by_key(|p| {
+        let mtime = std::fs::metadata(p).and_then(|m| m.modified()).ok();
+        (mtime, p.file_name().map(|n| n.to_os_string()))
+    })?;
+    let bytes = std::fs::read(&path).ok()?;
     let text = String::from_utf8_lossy(&bytes[..bytes.len().min(MAX_BRIEF_BYTES)]).to_string();
-    Ok(Some(HandoffDoc { path: path.to_string_lossy().to_string(), content: text }))
+    Some(HandoffDoc { path: path.to_string_lossy().to_string(), content: text })
+}
+
+/// The document `latest_brief_doc` would pick, for the form's brief prefill.
+#[tauri::command]
+pub fn cloud_latest_handoff(source_path: String) -> Result<Option<HandoffDoc>, String> {
+    Ok(latest_brief_doc(&source_path))
 }
 
 /// Drop the local record. Refuses while the run may still be active (unless
@@ -1865,6 +2053,131 @@ mod tests {
         let rec = do_submit(&mgr, None, request(&work, "ph-test-base")).unwrap();
         assert_eq!(rec.phase, Phase::Accepted);
         assert_eq!(rec.task_vm.as_ref().unwrap().name, "ph-main");
+    }
+
+    // --- one-click submission ---------------------------------------------------
+
+    /// Origin fetches over https (so the manifest validates) but pushes to
+    /// the local bare remote, so quick submit's push lands somewhere real.
+    fn split_push_origin(work: &str, remote: &Path) {
+        std::process::Command::new("git").arg("-C").arg(work).args(["remote", "set-url", "origin", "https://example.invalid/remote.git"]).output().unwrap();
+        std::process::Command::new("git").arg("-C").arg(work).args(["config", "remote.origin.pushurl"]).arg(remote).output().unwrap();
+    }
+
+    fn quick_request(source: &str, base: &str) -> QuickSubmitRequest {
+        QuickSubmitRequest {
+            repo_id: "repo".into(), repo_path: source.into(), repo_name: "work".into(), source_path: source.into(),
+            base_snapshot: base.into(), machine_ceiling: None, checks: vec![], deadline_seconds: 900,
+            permission_mode: "dontAsk".into(), allowed_tools: vec![], max_turns: None, max_budget_usd: None,
+            model: None, provider: "fake".into(), fake_script: Some("complete".into()),
+        }
+    }
+
+    #[test]
+    fn quick_submit_checkpoints_pushes_and_uses_the_plan_doc() {
+        let (dir, work, remote) = temp_repo_with(false);
+        split_push_origin(&work, &remote);
+        std::fs::write(Path::new(&work).join("wip.txt"), "unfinished").unwrap();
+        std::fs::create_dir_all(Path::new(&work).join(".powerhouse")).unwrap();
+        std::fs::write(Path::new(&work).join(".powerhouse").join("handoff-20260922-101010.md"), "# The plan\ndo the thing").unwrap();
+        let fake = Arc::new(Fake { echo_submit: true, ..Default::default() });
+        fake.snapshot("ph-test-base", "v1");
+        fake.on_exec("probe", Ok(probe_json()));
+        let mgr = manager(fake.clone(), dir.path());
+        let out = do_quick_submit(&mgr, None, quick_request(&work, "ph-test-base")).unwrap();
+        let QuickSubmitOutcome::Accepted { record } = out else { panic!("expected accepted: {out:?}") };
+        assert_eq!(record.phase, Phase::Accepted);
+        assert_eq!(record.task_vm.as_ref().unwrap().name, "ph-main");
+        assert_eq!(record.manifest.task.text, QUICK_TASK_TEXT);
+        assert_eq!(record.manifest.context.brief_markdown, "# The plan\ndo the thing");
+        // The worktree is clean, the WIP commit exists and is on origin.
+        assert!(git(Path::new(&work), &["status", "--porcelain"]).unwrap().trim().is_empty());
+        assert_eq!(git(Path::new(&work), &["log", "-1", "--format=%s"]).unwrap(), "WIP: send to cloud");
+        let head = head_sha(&work);
+        assert_eq!(git(&remote, &["rev-parse", "refs/heads/main"]).unwrap(), head);
+        assert_eq!(record.manifest.source.commit_sha, head);
+        // `.powerhouse/` never enters the checkpoint commit.
+        assert!(!git(Path::new(&work), &["ls-files"]).unwrap().contains(".powerhouse"), "plan docs stay untracked");
+    }
+
+    #[test]
+    fn quick_submit_refuses_with_a_structured_reason_before_any_side_effect() {
+        let (dir, work) = temp_repo();
+        std::fs::write(Path::new(&work).join("wip.txt"), "unfinished").unwrap();
+        let fake = base_fake();
+        let mgr = CloudManager::with(CloudStore::open(dir.path().join("cloud-runs.json")), fake.clone(), mem_secrets(false, true));
+        let mut req = quick_request(&work, "ph-test-base");
+        req.provider = "claude".into();
+        req.fake_script = None;
+        let out = do_quick_submit(&mgr, None, req).unwrap();
+        let QuickSubmitOutcome::NeedsAttention { stage, reason } = out else { panic!("expected attention") };
+        assert_eq!(stage, "preflight");
+        assert!(reason.contains("Claude credential"), "{reason}");
+        // No side effects: the worktree is still dirty, nothing was recorded.
+        assert!(!git(Path::new(&work), &["status", "--porcelain"]).unwrap().trim().is_empty());
+        assert_ne!(git(Path::new(&work), &["log", "-1", "--format=%s"]).unwrap(), "WIP: send to cloud");
+        assert!(mgr.store.lock().unwrap().list().is_empty());
+        assert_eq!(fake.count("new "), 0);
+    }
+
+    #[test]
+    fn quick_submit_without_a_plan_doc_generates_a_stub_brief() {
+        let (dir, work, remote) = temp_repo_with(false);
+        split_push_origin(&work, &remote);
+        let fake = Arc::new(Fake { echo_submit: true, ..Default::default() });
+        fake.snapshot("ph-test-base", "v1");
+        fake.on_exec("probe", Ok(probe_json()));
+        let mgr = manager(fake.clone(), dir.path());
+        let out = do_quick_submit(&mgr, None, quick_request(&work, "ph-test-base")).unwrap();
+        let QuickSubmitOutcome::Accepted { record } = out else { panic!("{out:?}") };
+        let brief = &record.manifest.context.brief_markdown;
+        assert!(brief.contains("Recent commits") && brief.contains("init"), "{brief}");
+    }
+
+    #[test]
+    fn quick_submit_second_click_points_at_the_live_run() {
+        let (dir, work, remote) = temp_repo_with(false);
+        split_push_origin(&work, &remote);
+        let fake = Arc::new(Fake { echo_submit: true, ..Default::default() });
+        fake.snapshot("ph-test-base", "v1");
+        fake.on_exec("probe", Ok(probe_json()));
+        let mgr = manager(fake.clone(), dir.path());
+        let QuickSubmitOutcome::Accepted { record } = do_quick_submit(&mgr, None, quick_request(&work, "ph-test-base")).unwrap() else {
+            panic!("first submit should be accepted")
+        };
+        let out = do_quick_submit(&mgr, None, quick_request(&work, "ph-test-base")).unwrap();
+        let QuickSubmitOutcome::NeedsAttention { stage, reason } = out else { panic!("{out:?}") };
+        assert_eq!(stage, "preflight");
+        assert!(reason.contains("already in the cloud") && reason.contains(&short(&record.run_id)), "{reason}");
+    }
+
+    #[test]
+    fn quick_submit_on_a_detached_head_needs_attention() {
+        let (dir, work, _remote) = temp_repo_with(false);
+        let sha = head_sha(&work);
+        std::process::Command::new("git").arg("-C").arg(&work).args(["checkout", "-q", &sha]).output().unwrap();
+        let fake = base_fake();
+        let mgr = manager(fake.clone(), dir.path());
+        let QuickSubmitOutcome::NeedsAttention { stage, reason } = do_quick_submit(&mgr, None, quick_request(&work, "ph-test-base")).unwrap() else {
+            panic!("expected attention")
+        };
+        assert_eq!(stage, "preflight");
+        assert!(reason.contains("detached"), "{reason}");
+        assert!(fake.calls().is_empty(), "refused before any cloud call");
+    }
+
+    #[test]
+    fn quick_submit_surfaces_push_failures_verbatim() {
+        let (dir, work, _remote) = temp_repo_with(false);
+        let fake = base_fake();
+        let mgr = manager(fake.clone(), dir.path());
+        std::process::Command::new("git").arg("-C").arg(&work).args(["remote", "set-url", "origin", "/nonexistent/remote.git"]).output().unwrap();
+        let QuickSubmitOutcome::NeedsAttention { stage, reason } = do_quick_submit(&mgr, None, quick_request(&work, "ph-test-base")).unwrap() else {
+            panic!("expected attention")
+        };
+        assert_eq!(stage, "push");
+        assert!(reason.contains("git push failed"), "{reason}");
+        assert!(mgr.store.lock().unwrap().list().is_empty());
     }
 
     #[test]

@@ -211,6 +211,37 @@ export interface SubmitRequest {
   brief: string;
 }
 
+/** One-click submission: the brief is auto-picked, the task text is fixed. */
+export interface QuickSubmitRequest {
+  repoId: string;
+  repoPath: string;
+  repoName: string;
+  sourcePath: string;
+  baseSnapshot: string;
+  machineCeiling: number | null;
+  checks: { name: string; command: string }[];
+  deadlineSeconds: number;
+  permissionMode: string;
+  allowedTools: string[];
+  maxTurns: number | null;
+  maxBudgetUsd: number | null;
+  model: string | null;
+  provider: "claude" | "fake";
+  fakeScript?: string | null;
+}
+
+export type QuickSubmitOutcome =
+  | { kind: "accepted"; record: CloudRunRecord }
+  /** Open the advanced form with this reason; never a dead-end. */
+  | { kind: "needs_attention"; stage: string; reason: string };
+
+/** Stage announcements while a one-click submit is in flight. */
+export interface QuickSubmitStage {
+  repoId: string;
+  branch: string;
+  stage: string;
+}
+
 // --- ipc -----------------------------------------------------------------------
 
 export const cloudListRuns = () => invoke<CloudRunRecord[]>("cloud_list_runs");
@@ -221,6 +252,8 @@ export const cloudInventory = (baseSnapshot?: string | null, ceiling?: number | 
   invoke<Inventory>("cloud_inventory", { baseSnapshot: baseSnapshot ?? null, ceiling: ceiling ?? null });
 export const cloudSubmit = (request: SubmitRequest) =>
   invoke<CloudRunRecord>("cloud_submit", { request });
+export const cloudQuickSubmit = (request: QuickSubmitRequest) =>
+  invoke<QuickSubmitOutcome>("cloud_quick_submit", { request });
 export const cloudSync = (runId: string, forceEvents = false) =>
   invoke<CloudRunRecord>("cloud_sync", { runId, forceEvents });
 export const cloudCancel = (runId: string) => invoke<CloudRunRecord>("cloud_cancel", { runId });
@@ -326,6 +359,9 @@ export async function startCloudSync() {
   }
   await listen<CloudRunRecord>("cloud-run-update", (e) => {
     useAppStore.getState().setCloudRun(e.payload);
+  });
+  await listen<QuickSubmitStage>("cloud-quick-submit", (e) => {
+    useAppStore.getState().setCloudQuickStage(e.payload.repoId, e.payload.branch, e.payload.stage);
   });
   const tick = () => {
     const now = Date.now();

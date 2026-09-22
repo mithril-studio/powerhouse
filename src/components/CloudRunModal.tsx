@@ -193,6 +193,7 @@ export function CloudRunModal() {
           </p>
         </div>
 
+        {modal.notice && <Problem>One-click send needs attention: {modal.notice}</Problem>}
         {sourceError && <Problem>{sourceError}</Problem>}
         {problems.map((p) => (
           <Problem key={p}>{p}</Problem>

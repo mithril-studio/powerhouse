@@ -1,5 +1,14 @@
 import { useAppStore, type Branch, type Repo } from "../store/appStore";
 import { deleteBranch, enqueueBranch } from "../lib/actions";
+import { holdsResources } from "../lib/cloud";
+import { quickSubmitBranch } from "../lib/quickSubmit";
+
+const QUICK_STAGE_LABEL: Record<string, string> = {
+  starting: "sending",
+  checkpointing: "checkpointing",
+  pushing: "pushing",
+  submitting: "submitting",
+};
 
 interface Props {
   repo: Repo;
@@ -10,18 +19,14 @@ export function BranchItem({ repo, branch }: Props) {
   const select = useAppStore((s) => s.select);
   const setActiveChat = useAppStore((s) => s.setActiveChat);
   const openCloudModal = useAppStore((s) => s.openCloudModal);
-  const cloudActive = useAppStore((s) =>
+  // "In cloud" while a run from this branch still holds a VM or park
+  // snapshot; clears on release/discard.
+  const inCloud = useAppStore((s) =>
     Object.values(s.cloudRuns).some(
-      (r) =>
-        r.repo_id === repo.id &&
-        r.source_branch === branch.name &&
-        r.phase !== "submit_failed" &&
-        (r.phase !== "accepted" ||
-          !["completed", "blocked", "failed", "cancelled", "interrupted"].includes(
-            r.snapshot?.state ?? r.receipt?.state ?? "accepted",
-          )),
+      (r) => r.repo_id === repo.id && r.source_branch === branch.name && holdsResources(r),
     ),
   );
+  const quickStage = useAppStore((s) => s.cloudQuickStages[`${repo.id}:${branch.name}`]);
   const selected = useAppStore(
     (s) => s.selection.repoId === repo.id && s.selection.branchId === branch.id,
   );
@@ -62,19 +67,34 @@ export function BranchItem({ repo, branch }: Props) {
         aria-hidden
       />
       <span className="min-w-0 flex-1 truncate font-mono text-xs">{branch.name}</span>
-      {cloudActive && (
-        <span title="A cloud run from this branch is active" className="shrink-0 text-[10px] text-accent-brand">
-          ☁
+      {quickStage ? (
+        <span
+          title={`Sending to cloud: ${QUICK_STAGE_LABEL[quickStage] ?? quickStage}`}
+          className="shrink-0 animate-pulse text-[10px] text-accent-brand"
+        >
+          ☁ {QUICK_STAGE_LABEL[quickStage] ?? quickStage}…
         </span>
+      ) : (
+        inCloud && (
+          <span title="This branch is in the cloud (a run still holds its VM or snapshot)" className="shrink-0 text-[10px] text-accent-brand">
+            ☁
+          </span>
+        )
       )}
       <button
         onClick={(e) => {
           e.stopPropagation();
+          void quickSubmitBranch(repo, branch);
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
           openCloudModal(repo.id, branch.worktreePath, branch.name);
         }}
-        title="Run in cloud"
-        aria-label={`Run ${branch.name} in cloud`}
-        className="hidden size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-input hover:text-foreground group-hover:flex"
+        title="Send to cloud (right-click: Run in cloud (advanced)…)"
+        aria-label={`Send ${branch.name} to cloud`}
+        disabled={!!quickStage}
+        className="hidden size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-input hover:text-foreground group-hover:flex disabled:opacity-40"
       >
         ☁
       </button>
