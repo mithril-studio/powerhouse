@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  agentModelEnv,
   cloudSettingsOf,
   migrateSettings,
   resolveChatTransport,
@@ -39,6 +40,25 @@ describe("agent transport migration", () => {
     expect(settings.agents.find((agent) => agent.id === "opencode")).toBeUndefined();
     expect(settings.defaultAgentId).toBe("claude");
     expect(settings.agents.map((agent) => agent.id)).toEqual(["claude", "codex", "pi"]);
+  });
+
+  it("backfills Claude's default model without overriding a cleared one", () => {
+    const base = { theme: "dark" as const, connections: { github: { status: "disconnected" as const } } };
+    const claude: AgentProfile = { id: "claude", name: "Claude", command: "claude", promptTemplate: "" };
+
+    const legacy = migrateSettings({ settings: { ...base, agents: [claude], defaultAgentId: "claude" } });
+    const migrated = legacy.agents.find((a) => a.id === "claude")!;
+    expect(agentModelEnv(migrated)).toEqual({ ANTHROPIC_MODEL: "claude-opus-4-8" });
+
+    const cleared = migrateSettings({
+      settings: { ...base, agents: [{ ...claude, defaultModel: "" }], defaultAgentId: "claude" },
+    });
+    expect(agentModelEnv(cleared.agents.find((a) => a.id === "claude")!)).toBeUndefined();
+  });
+
+  it("sets no model env for agents without a model env var", () => {
+    const codex = migrateSettings(null).agents.find((a) => a.id === "codex")!;
+    expect(agentModelEnv({ ...codex, defaultModel: "gpt-6" })).toBeUndefined();
   });
 
   it("keeps custom agents on the terminal transport", () => {

@@ -346,29 +346,48 @@ function LoginTerminal({ sessionId, command }: { sessionId: string; command: str
 
 function AgentRow({ agent }: { agent: AgentProfile }) {
   const [open, setOpen] = useState(false);
-  if (!agent.loginCommand) return null;
+  const setAgentDefaultModel = useAppStore((s) => s.setAgentDefaultModel);
+  if (!agent.loginCommand && !agent.modelEnvVar) return null;
 
   return (
     <div className="rounded-xl border border-border bg-card p-3">
       <div className="flex items-center gap-3">
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-foreground">{agent.name}</p>
-          <p className="truncate font-mono text-[11px] text-muted-foreground">
-            {agent.loginCommand}
-          </p>
+          {agent.loginCommand && (
+            <p className="truncate font-mono text-[11px] text-muted-foreground">
+              {agent.loginCommand}
+            </p>
+          )}
         </div>
-        <button
-          onClick={() => setOpen((v) => !v)}
-          className={
-            open
-              ? "h-8 shrink-0 rounded-lg border border-border px-3 text-xs font-medium text-muted-foreground transition-all hover:text-foreground active:translate-y-px"
-              : "h-8 shrink-0 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-all active:translate-y-px focus-visible:ring-3 focus-visible:ring-ring/50"
-          }
-        >
-          {open ? "Close" : "Run login"}
-        </button>
+        {agent.loginCommand && (
+          <button
+            onClick={() => setOpen((v) => !v)}
+            className={
+              open
+                ? "h-8 shrink-0 rounded-lg border border-border px-3 text-xs font-medium text-muted-foreground transition-all hover:text-foreground active:translate-y-px"
+                : "h-8 shrink-0 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-all active:translate-y-px focus-visible:ring-3 focus-visible:ring-ring/50"
+            }
+          >
+            {open ? "Close" : "Run login"}
+          </button>
+        )}
       </div>
-      {open && (
+      {agent.modelEnvVar && (
+        <label className="mt-2 block space-y-1 text-xs">
+          <span className="text-muted-foreground">
+            Default model for new chats (blank = agent default)
+          </span>
+          <input
+            value={agent.defaultModel ?? ""}
+            onChange={(e) => setAgentDefaultModel(agent.id, e.target.value)}
+            placeholder="e.g. claude-opus-4-8"
+            spellCheck={false}
+            className={`${cloudInput} font-mono`}
+          />
+        </label>
+      )}
+      {open && agent.loginCommand && (
         <LoginTerminal
           sessionId={`login-${agent.id}`}
           command={agent.loginCommand}
@@ -380,11 +399,11 @@ function AgentRow({ agent }: { agent: AgentProfile }) {
 
 function AgentsSection() {
   const agents = useAppStore((s) => s.settings.agents);
-  const withLogin = agents.filter((a) => a.loginCommand);
+  const configurable = agents.filter((a) => a.loginCommand || a.modelEnvVar);
 
   return (
     <div className="space-y-2">
-      {withLogin.map((agent) => (
+      {configurable.map((agent) => (
         <AgentRow key={agent.id} agent={agent} />
       ))}
     </div>
@@ -603,7 +622,7 @@ export function SettingsPage() {
 
           <Section
             title="Agents"
-            description="CLI access — run the login flow for each coding agent."
+            description="CLI access and the default model for each coding agent."
           >
             <AgentsSection />
           </Section>

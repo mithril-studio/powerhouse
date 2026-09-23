@@ -86,6 +86,16 @@ function selectorFromConfig(
     active: option.currentValue === value.value,
     apply: { kind: "config", configId: option.id, value: value.value },
   }));
+  // A pinned model outside the picker (e.g. Opus 4.8) is still the live value.
+  const current = option.currentValue;
+  if (typeof current === "string" && current && !options.some((o) => o.active)) {
+    options.unshift({
+      id: `${option.id}:${current}`,
+      label: current,
+      active: true,
+      apply: { kind: "config", configId: option.id, value: current },
+    });
+  }
   return { supported: true, title, current: options.find((o) => o.active), options };
 }
 

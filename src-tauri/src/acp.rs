@@ -104,6 +104,7 @@ pub fn acp_spawn(
     chat_id: String,
     cwd: String,
     command: String,
+    env: Option<HashMap<String, String>>,
 ) -> Result<(), String> {
     if !Path::new(&cwd).is_dir() {
         return Err(format!("ACP working directory does not exist: {cwd}"));
@@ -122,6 +123,7 @@ pub fn acp_spawn(
     let mut child = Command::new("/bin/zsh")
         .args(["-lc", "exec \"$@\"", "powerhouse-acp"])
         .args(&parts)
+        .envs(env.unwrap_or_default())
         .current_dir(&cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

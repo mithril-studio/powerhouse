@@ -12,8 +12,12 @@ export interface ChangedFile {
   status: string;
 }
 
-export const acpSpawn = (chatId: string, cwd: string, command: string) =>
-  invoke<void>("acp_spawn", { chatId, cwd, command });
+export const acpSpawn = (
+  chatId: string,
+  cwd: string,
+  command: string,
+  env?: Record<string, string>,
+) => invoke<void>("acp_spawn", { chatId, cwd, command, env });
 
 export const acpWrite = (chatId: string, data: string) =>
   invoke<void>("acp_write", { chatId, data });

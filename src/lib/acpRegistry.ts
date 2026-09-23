@@ -66,10 +66,12 @@ export async function startAcp(opts: {
   chatId: string;
   cwd: string;
   command: string;
+  /** Extra environment for the agent process. */
+  env?: Record<string, string>;
   resumeSessionId?: string;
   callbacks: AcpCallbacks;
 }): Promise<AcpStartResult> {
-  const { chatId, cwd, command, resumeSessionId, callbacks } = opts;
+  const { chatId, cwd, command, env, resumeSessionId, callbacks } = opts;
   await disposeAcp(chatId);
   const decoder = new TextDecoder();
   const { PROTOCOL_VERSION, client, methods, ndJsonStream } = await import(
@@ -132,7 +134,7 @@ export async function startAcp(opts: {
   registry.set(chatId, entry);
 
   try {
-    await acpSpawn(chatId, cwd, command);
+    await acpSpawn(chatId, cwd, command, env);
     const initialized = await connection.agent.request(methods.agent.initialize, {
       protocolVersion: PROTOCOL_VERSION,
       clientCapabilities: { session: { configOptions: { boolean: {} } } },
