@@ -1101,10 +1101,15 @@ fn do_return(mgr: &CloudManager, app: Option<&AppHandle>, record: &mut CloudRunR
     // Make the result revision local so the ff-only merge can resolve it. The
     // output branch is Powerhouse's own, fetched with its token.
     let auth_env = https_auth_env_for(mgr, &record.manifest.source.remote_url);
-    let refspec = format!("+refs/heads/{output_branch}:refs/remotes/origin/{output_branch}");
-    if let Err(e) = git_with_env(&repo, &["fetch", "--quiet", "origin", &refspec], &auth_env) {
-        record.return_error = Some(format!("return pending: fetch: {e}"));
-        return persist(mgr, app, record);
+    // A no-op result (equal to the source) never produced an output branch to
+    // fetch — the source is already at the result. Skip straight to the
+    // push/cleanup; fetching the missing branch would loop on "return pending".
+    if result_sha != source_sha {
+        let refspec = format!("+refs/heads/{output_branch}:refs/remotes/origin/{output_branch}");
+        if let Err(e) = git_with_env(&repo, &["fetch", "--quiet", "origin", &refspec], &auth_env) {
+            record.return_error = Some(format!("return pending: fetch: {e}"));
+            return persist(mgr, app, record);
+        }
     }
 
     let Some(worktree) = worktree_for_branch(&repo, &branch) else {
@@ -1464,6 +1469,12 @@ pub fn do_import(mgr: &CloudManager, app: Option<&AppHandle>, run_id: &str) -> R
         return Err(result.publish_error.unwrap_or_else(|| "the result was not published".into()));
     }
     let result_sha = result.result_sha.clone().ok_or("result has no revision")?;
+    // A no-op result (identical to the source commit) never produced an output
+    // branch to push, so the fetch below would fail with "couldn't find remote
+    // ref". There is nothing to import — say so plainly instead.
+    if result_sha == record.manifest.source.commit_sha {
+        return Err("The cloud run made no changes: the result is identical to your source commit, so there is nothing to fetch.".into());
+    }
     let repo = Path::new(&record.repo_path);
     let branch = record.manifest.output_branch.clone();
     let refspec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
@@ -2672,6 +2683,29 @@ mod tests {
         // No integration: branch and origin untouched.
         assert_eq!(head_sha(&work), source_sha);
         assert_eq!(git(&remote, &["rev-parse", "refs/heads/main"]).unwrap(), source_sha);
+    }
+
+    #[test]
+    fn importing_a_no_change_result_reports_no_changes_instead_of_a_git_404() {
+        // The agent produced nothing: the result equals the source commit, so no
+        // output branch was ever pushed. Import must say so, not fetch a ghost ref.
+        let (dir, work, _remote) = temp_repo_with(false);
+        let fake = base_fake();
+        let mgr = manager(fake.clone(), dir.path());
+        let run_id = "11111111-2222-4333-8444-555555555555";
+        let source_sha = head_sha(&work);
+        let mut rec = accepted_record(&work, run_id);
+        rec.manifest.source.commit_sha = source_sha.clone();
+        rec.result = Some(
+            serde_json::from_str::<Response<ResultManifest>>(&result_json(run_id, Some(&source_sha), true))
+                .unwrap()
+                .into_result()
+                .unwrap(),
+        );
+        rec.remote_verified = true;
+        mgr.store.lock().unwrap().put(rec).unwrap();
+        let err = do_import(&mgr, None, run_id).unwrap_err();
+        assert!(err.contains("no changes") || err.contains("nothing to fetch"), "{err}");
     }
 
     #[test]
