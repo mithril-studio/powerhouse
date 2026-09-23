@@ -2,6 +2,8 @@ import type {
   SessionConfigOption,
   SessionModeState,
 } from "@agentclientprotocol/sdk";
+import type { AcpUsageItem } from "../../lib/acpTranscript";
+import { ContextUsageMeter } from "./ContextUsageMeter";
 
 function selectedLabel(option: SessionConfigOption): string | null {
   if (option.type === "boolean") return option.currentValue ? option.name : null;
@@ -26,6 +28,7 @@ export function AcpFooter({
   configOptions,
   commandCount,
   nativeCliOpen,
+  usage,
 }: {
   agentName: string;
   branchName: string;
@@ -34,6 +37,8 @@ export function AcpFooter({
   configOptions: SessionConfigOption[];
   commandCount: number;
   nativeCliOpen: boolean;
+  /** Latest context-window reading; absent until the agent reports one. */
+  usage: AcpUsageItem | null;
 }) {
   const mode = modes?.availableModes.find(
     (item) => item.id === modes.currentModeId,
@@ -50,6 +55,9 @@ export function AcpFooter({
         {busy ? "● working" : "● ready"}
       </span>
       <span className="flex-1" />
+      {usage && (
+        <ContextUsageMeter used={usage.used} size={usage.size} barClassName="w-10" />
+      )}
       {commandCount > 0 && <span>{commandCount} commands</span>}
       {[mode, ...settings].filter(Boolean).map((value) => (
         <span key={value}>{value}</span>

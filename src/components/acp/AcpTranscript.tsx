@@ -1,6 +1,21 @@
 import { useEffect, useRef } from "react";
 import type { ToolCallContent } from "@agentclientprotocol/sdk";
 import type { AcpTranscriptItem } from "../../lib/acpTranscript";
+import { ContextUsageMeter } from "./ContextUsageMeter";
+
+/** Context-window reading at the end of a turn: how full the model's memory is. */
+function UsageItem({ item }: { item: Extract<AcpTranscriptItem, { type: "usage" }> }) {
+  return (
+    <p role="status" className="flex justify-end text-[10px]">
+      <ContextUsageMeter
+        used={item.used}
+        size={item.size}
+        cost={item.cost}
+        label="context"
+      />
+    </p>
+  );
+}
 
 const statusGlyph: Record<string, string> = {
   pending: "·",
@@ -106,6 +121,7 @@ function ToolItem({ item }: { item: Extract<AcpTranscriptItem, { type: "tool" }>
 
 function TranscriptItem({ item }: { item: AcpTranscriptItem }) {
   if (item.type === "tool") return <ToolItem item={item} />;
+  if (item.type === "usage") return <UsageItem item={item} />;
   if (item.type === "plan") {
     return (
       <section className="border-l border-accent-brand/40 pl-3" aria-label="Agent plan">
