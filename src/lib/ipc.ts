@@ -71,6 +71,10 @@ export const gitInitRepo = (name: string, destParent?: string | null) =>
 export const gitCreateWorktree = (repoPath: string, branch: string, base: string) =>
   invoke<string>("git_create_worktree", { repoPath, branch, base });
 
+/** Local branch names for the repo, most-recently-committed first. */
+export const gitListBranches = (repoPath: string) =>
+  invoke<string[]>("git_list_branches", { repoPath });
+
 export const gitRemoveWorktree = (repoPath: string, worktreePath: string) =>
   invoke<void>("git_remove_worktree", { repoPath, worktreePath });
 

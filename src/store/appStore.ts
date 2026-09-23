@@ -546,10 +546,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       },
     })),
 
-  openSettings: () => set({ settingsOpen: true }),
+  openSettings: () => set({ settingsOpen: true, telemetryOpen: false }),
   closeSettings: () => set({ settingsOpen: false }),
 
-  openTelemetry: () => set({ telemetryOpen: true }),
+  openTelemetry: () => set({ telemetryOpen: true, settingsOpen: false }),
   closeTelemetry: () => set({ telemetryOpen: false }),
 
   addRepo: (repo) => {
@@ -807,7 +807,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 export const cloudSettingsOf = (s: Settings): CloudSettings => {
   // `baseVm` belonged to the fork-era settings; a snapshot name replaces it.
   const { baseVm: _legacy, ...stored } = (s.cloud ?? {}) as Partial<CloudSettings> & { baseVm?: string };
-  return { ...DEFAULT_CLOUD_SETTINGS, ...stored };
+  const merged = { ...DEFAULT_CLOUD_SETTINGS, ...stored };
+  // A persisted blank must not shadow the default: `{...def, baseSnapshot: ""}`
+  // spreads to `""`, which would fail submit with "base snapshot `` not found".
+  if (!merged.baseSnapshot?.trim()) merged.baseSnapshot = DEFAULT_CLOUD_SETTINGS.baseSnapshot;
+  return merged;
 };
 
 export const selectedRepo = (s: AppState) =>
