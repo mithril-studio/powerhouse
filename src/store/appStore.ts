@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { WorkflowDraft } from "../features/workflows/workflowDrafts";
 import type { AcpTranscriptItem } from "../lib/acpTranscript";
 
 export type AgentTransport = "acp" | "pty";
@@ -176,6 +177,8 @@ export interface Repo {
   pushOnMerge: boolean;
   /** Env var names injected into this repo's cloud runs; values live in the Keychain. */
   cloudEnvNames?: string[];
+  /** Tucked out of the project list until "Show hidden projects" is toggled on. */
+  hidden?: boolean;
 }
 
 export interface Selection {
@@ -183,14 +186,34 @@ export interface Selection {
   branchId: string | null;
 }
 
+/** A recently-opened project, shown in the Add-project menu's Recents list. */
+export interface RecentRepo {
+  name: string;
+  path: string;
+  defaultBranch: string;
+}
+
+const RECENTS_CAP = 8;
+
 /** Runtime-only; terminals/PTYs are never persisted. */
 export type ChatStatus = "idle" | "running" | "exited";
+
+/** Runtime-only agent turn state: working, or finished and not yet viewed. */
+export type ChatActivity = "working" | "done" | "error";
 
 export interface PersistedTree {
   repos: Repo[];
   selection: Selection;
   settings: Settings;
   queues: Record<string, QueueEntry[]>;
+  /** MRU of opened projects, for the Add-project menu's Recents. */
+  recentRepos: RecentRepo[];
+  workflowDrafts: WorkflowDraft[];
+}
+
+/** Prepend a project to the MRU, dedupe by path, cap the length. */
+function pushRecent(list: RecentRepo[], r: RecentRepo): RecentRepo[] {
+  return [r, ...list.filter((x) => x.path !== r.path)].slice(0, RECENTS_CAP);
 }
 
 /** Old persisted shape (pre agent-profiles) — read only during migration. */
@@ -199,8 +222,13 @@ interface LegacyTree {
 }
 
 interface AppState extends PersistedTree {
+  workspaceView: "home" | "workflows";
+  setWorkspaceView: (view: "home" | "workflows") => void;
+  saveWorkflowDraft: (draft: WorkflowDraft) => void;
   hydrated: boolean;
   chatStatus: Record<string, ChatStatus>;
+  /** chatId → agent turn state; absent means idle or already seen. */
+  chatActivity: Record<string, ChatActivity>;
   branchModalRepoId: string | null;
   workflowModalRepoId: string | null;
   rightSidebarOpen: boolean;
@@ -231,6 +259,9 @@ interface AppState extends PersistedTree {
   openTelemetry: () => void;
   closeTelemetry: () => void;
   addRepo: (repo: Omit<Repo, "id" | "branches" | "workflow" | "pushOnMerge">) => Repo;
+  removeRepo: (repoId: string) => void;
+  setRepoHidden: (repoId: string, hidden: boolean) => void;
+  removeRecentRepo: (path: string) => void;
   addBranch: (repoId: string, branch: Branch) => void;
   removeBranch: (repoId: string, branchId: string) => void;
   addChat: (repoId: string, branchId: string, chat: Chat) => void;
@@ -256,6 +287,7 @@ interface AppState extends PersistedTree {
   ) => void;
   select: (repoId: string | null, branchId: string | null) => void;
   setChatStatus: (chatId: string, status: ChatStatus) => void;
+  setChatActivity: (chatId: string, activity: ChatActivity | null) => void;
   openBranchModal: (repoId: string) => void;
   closeBranchModal: () => void;
 
@@ -476,13 +508,29 @@ const updateBranch = (
     branches: r.branches.map((b) => (b.id === branchId ? fn(b) : b)),
   }));
 
+function withoutKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  if (!(key in record)) return record;
+  const { [key]: _removed, ...rest } = record;
+  return rest;
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
   repos: [],
+  recentRepos: [],
   selection: { repoId: null, branchId: null },
   settings: seedSettings(),
   queues: {},
+  workflowDrafts: [],
+  workspaceView: "home",
+  setWorkspaceView: (workspaceView) => set({ workspaceView, settingsOpen: false, telemetryOpen: false }),
+  saveWorkflowDraft: (draft) => set((s) => ({
+    workflowDrafts: s.workflowDrafts.some((d) => d.id === draft.id)
+      ? s.workflowDrafts.map((d) => d.id === draft.id ? draft : d)
+      : [...s.workflowDrafts, draft],
+  })),
   hydrated: false,
   chatStatus: {},
+  chatActivity: {},
   branchModalRepoId: null,
   workflowModalRepoId: null,
   rightSidebarOpen: false,
@@ -500,6 +548,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   hydrate: (tree) =>
     set({
+      workflowDrafts: tree?.workflowDrafts ?? [],
       // Migration: default the queue-config fields for repos persisted before
       // they existed.
       repos: (tree?.repos ?? []).map((r) => ({
@@ -508,6 +557,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         pushOnMerge: r.pushOnMerge ?? true,
       })),
       selection: tree?.selection ?? { repoId: null, branchId: null },
+      recentRepos: tree?.recentRepos ?? [],
       settings: migrateSettings(tree),
       // The Rust engine starts empty, so any entry persisted in a live state
       // was cut short by a crash/quit — surface it as `interrupted`.
@@ -551,16 +601,24 @@ export const useAppStore = create<AppState>((set, get) => ({
       },
     })),
 
-  openSettings: () => set({ settingsOpen: true }),
+  openSettings: () => set({ settingsOpen: true, telemetryOpen: false }),
   closeSettings: () => set({ settingsOpen: false }),
 
-  openTelemetry: () => set({ telemetryOpen: true }),
+  openTelemetry: () => set({ telemetryOpen: true, settingsOpen: false }),
   closeTelemetry: () => set({ telemetryOpen: false }),
 
   addRepo: (repo) => {
+    const recent: RecentRepo = {
+      name: repo.name,
+      path: repo.path,
+      defaultBranch: repo.defaultBranch,
+    };
     const existing = get().repos.find((r) => r.path === repo.path);
     if (existing) {
-      set({ selection: { repoId: existing.id, branchId: null } });
+      set((s) => ({
+        selection: { repoId: existing.id, branchId: null },
+        recentRepos: pushRecent(s.recentRepos, recent),
+      }));
       return existing;
     }
     const created: Repo = {
@@ -573,9 +631,37 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({
       repos: [...s.repos, created],
       selection: { repoId: created.id, branchId: null },
+      recentRepos: pushRecent(s.recentRepos, recent),
     }));
     return created;
   },
+
+  removeRepo: (repoId) =>
+    set((s) => {
+      const { [repoId]: _dropped, ...queues } = s.queues;
+      return {
+        repos: s.repos.filter((r) => r.id !== repoId),
+        queues,
+        selection:
+          s.selection.repoId === repoId
+            ? { repoId: null, branchId: null }
+            : s.selection,
+      };
+    }),
+
+  setRepoHidden: (repoId, hidden) =>
+    set((s) => ({
+      repos: updateRepo(s.repos, repoId, (r) => ({ ...r, hidden })),
+      // Hiding the selected project clears the selection so the main view
+      // doesn't keep showing a project the user just tucked away.
+      selection:
+        hidden && s.selection.repoId === repoId
+          ? { repoId: null, branchId: null }
+          : s.selection,
+    })),
+
+  removeRecentRepo: (path) =>
+    set((s) => ({ recentRepos: s.recentRepos.filter((r) => r.path !== path) })),
 
   addBranch: (repoId, branch) =>
     set((s) => ({
@@ -618,6 +704,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
         return { ...b, chats, activeChatId };
       }),
+      chatActivity: withoutKey(s.chatActivity, chatId),
     })),
 
   setActiveChat: (repoId, branchId, chatId) =>
@@ -658,10 +745,26 @@ export const useAppStore = create<AppState>((set, get) => ({
       })),
     })),
 
-  select: (repoId, branchId) => set({ selection: { repoId, branchId } }),
+  // Selecting a project/branch is a navigation — it also leaves the telemetry
+  // and settings pages and the workflows view (which otherwise cover the
+  // main area).
+  select: (repoId, branchId) =>
+    set({
+      selection: { repoId, branchId },
+      telemetryOpen: false,
+      settingsOpen: false,
+      workspaceView: "home",
+    }),
 
   setChatStatus: (chatId, status) =>
     set((s) => ({ chatStatus: { ...s.chatStatus, [chatId]: status } })),
+
+  setChatActivity: (chatId, activity) =>
+    set((s) => ({
+      chatActivity: activity
+        ? { ...s.chatActivity, [chatId]: activity }
+        : withoutKey(s.chatActivity, chatId),
+    })),
 
   openBranchModal: (repoId) => set({ branchModalRepoId: repoId }),
   closeBranchModal: () => set({ branchModalRepoId: null }),
@@ -773,7 +876,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 export const cloudSettingsOf = (s: Settings): CloudSettings => {
   // `baseVm` belonged to the fork-era settings; a snapshot name replaces it.
   const { baseVm: _legacy, ...stored } = (s.cloud ?? {}) as Partial<CloudSettings> & { baseVm?: string };
-  return { ...DEFAULT_CLOUD_SETTINGS, ...stored };
+  const merged = { ...DEFAULT_CLOUD_SETTINGS, ...stored };
+  // A persisted blank must not shadow the default: `{...def, baseSnapshot: ""}`
+  // spreads to `""`, which would fail submit with "base snapshot `` not found".
+  if (!merged.baseSnapshot?.trim()) merged.baseSnapshot = DEFAULT_CLOUD_SETTINGS.baseSnapshot;
+  return merged;
 };
 
 export const selectedRepo = (s: AppState) =>

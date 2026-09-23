@@ -12,6 +12,8 @@ export function useShortcuts() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const s = useAppStore.getState();
+      // Workflow editing must not close or manipulate a hidden chat/worktree.
+      if (s.workspaceView !== "home") return;
 
       // Ctrl+` toggles the bottom terminal (layout-independent via e.code).
       if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.code === "Backquote") {

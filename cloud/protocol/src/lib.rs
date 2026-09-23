@@ -10,6 +10,9 @@ use sha2::{Digest, Sha256};
 /// Bump when a change would make an older desktop and a newer runner (or the
 /// reverse) misinterpret each other. Both sides reject mismatches.
 pub const PROTOCOL_VERSION: u32 = 2;
+/// Script requests require v3 so a deployed v2 runner cannot silently treat
+/// them as agent work. Agent requests keep their existing v2 wire encoding.
+pub const SCRIPT_PROTOCOL_VERSION: u32 = 3;
 
 /// Prefix of every branch the runner is allowed to push. Enforced in code.
 pub const OUTPUT_BRANCH_PREFIX: &str = "powerhouse/cloud/";
@@ -115,6 +118,13 @@ pub struct CheckSpec {
     pub command: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScriptSpec {
+    /// Bash source executed as the unprivileged workload user in the checkout.
+    pub command: String,
+}
+
 /// The immutable request. A retry re-sends this byte-for-byte (same digest);
 /// a new attempt mints a new `run_id` and may set `predecessor_run_id`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -125,7 +135,10 @@ pub struct RunManifest {
     pub source: SourceSpec,
     pub output_branch: String,
     pub workspace: WorkspaceSpec,
-    pub agent: AgentSpec,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script: Option<ScriptSpec>,
     #[serde(default)]
     pub checks: Vec<CheckSpec>,
     #[serde(default)]
@@ -150,11 +163,33 @@ impl RunManifest {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        if self.protocol_version != PROTOCOL_VERSION {
+        if ![PROTOCOL_VERSION, SCRIPT_PROTOCOL_VERSION].contains(&self.protocol_version) {
             return Err(format!(
-                "protocol version {} not supported (runner speaks {PROTOCOL_VERSION})",
+                "protocol version {} not supported (runner accepts {PROTOCOL_VERSION} and {SCRIPT_PROTOCOL_VERSION})",
                 self.protocol_version
             ));
+        }
+        match (&self.agent, &self.script, self.protocol_version) {
+            (Some(agent), None, PROTOCOL_VERSION) => {
+                if agent.permission_mode.is_empty() {
+                    return Err("agent.permission_mode is required".into());
+                }
+                if agent.permission_mode == "bypassPermissions" && agent.provider == AgentProvider::Claude {
+                    return Err("bypassPermissions is not allowed for cloud runs".into());
+                }
+                if self.output_branch != Self::expected_output_branch(&self.run_id) {
+                    return Err(format!("output_branch must be {}", Self::expected_output_branch(&self.run_id)));
+                }
+            }
+            (None, Some(script), SCRIPT_PROTOCOL_VERSION) => {
+                if script.command.trim().is_empty() || script.command.len() > 64 * 1024 || script.command.contains('\0') {
+                    return Err("script.command must be nonempty, at most 64 KiB, and contain no NUL bytes".into());
+                }
+                if !self.output_branch.is_empty() || !self.checks.is_empty() {
+                    return Err("script runs cannot publish a branch or include agent checks".into());
+                }
+            }
+            _ => return Err("specify exactly one workload: agent with protocol 2 or script with protocol 3".into()),
         }
         validate_run_id(&self.run_id)?;
         if self.task.text.trim().is_empty() {
@@ -170,12 +205,6 @@ impl RunManifest {
         if self.source.repo_name.is_empty() || self.source.repo_name.len() > 200 {
             return Err("repo_name must be 1–200 characters".into());
         }
-        if self.output_branch != Self::expected_output_branch(&self.run_id) {
-            return Err(format!(
-                "output_branch must be {}",
-                Self::expected_output_branch(&self.run_id)
-            ));
-        }
         let has_snapshot = self.workspace.base_snapshot.as_ref().map(|s| !s.name.trim().is_empty()).unwrap_or(false);
         if !has_snapshot && self.workspace.base_vm_id.is_empty() {
             return Err("workspace.base_snapshot (or legacy base_vm_id) is required".into());
@@ -184,14 +213,6 @@ impl RunManifest {
             return Err(format!(
                 "deadline_seconds must be within {MIN_DEADLINE_SECONDS}..={MAX_DEADLINE_SECONDS}"
             ));
-        }
-        if self.agent.permission_mode.is_empty() {
-            return Err("agent.permission_mode is required".into());
-        }
-        if self.agent.permission_mode == "bypassPermissions"
-            && self.agent.provider == AgentProvider::Claude
-        {
-            return Err("bypassPermissions is not allowed for cloud runs".into());
         }
         if let Some(prev) = &self.predecessor_run_id {
             validate_run_id(prev)?;
@@ -482,12 +503,25 @@ pub struct ResultManifest {
     pub usage: Option<serde_json::Value>,
     #[serde(default)]
     pub agent_exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script: Option<ScriptResult>,
     pub partial_work_preserved: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ScriptResult {
+    pub exit_code: Option<i32>,
+    pub output_tail: String,
+    pub output_truncated: bool,
+    /// Retained redacted log bytes, accessible through script.output events.
+    pub log_bytes: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProbeInfo {
     pub protocol_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script_protocol_version: Option<u32>,
     pub runner_version: String,
     pub agents: Vec<AgentProvider>,
     pub os: String,
@@ -563,7 +597,7 @@ mod tests {
             },
             output_branch: RunManifest::expected_output_branch(&run_id),
             workspace: WorkspaceSpec::from_snapshot("powerhouse-base", Some("v1".into())),
-            agent: AgentSpec {
+            agent: Some(AgentSpec {
                 provider: AgentProvider::Fake,
                 model: None,
                 permission_mode: "dontAsk".into(),
@@ -571,7 +605,8 @@ mod tests {
                 max_turns: Some(20),
                 max_budget_usd: Some(1.0),
                 fake_script: Some("complete".into()),
-            },
+            }),
+            script: None,
             checks: vec![CheckSpec {
                 name: "unit".into(),
                 command: "true".into(),
@@ -598,6 +633,64 @@ mod tests {
     }
 
     #[test]
+    fn legacy_agent_wire_encoding_and_digest_are_unchanged() {
+        // Exact v2 shape from d92d9f3: no script field (including null).
+        let legacy: serde_json::Value = serde_json::from_str(include_str!("../tests/fixtures/agent-v2.json")).unwrap();
+        let parsed: RunManifest = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), legacy);
+        assert_eq!(manifest(), parsed);
+        assert_eq!(parsed.digest(), hex(&Sha256::digest(serde_json::to_vec(&legacy).unwrap())));
+    }
+
+    fn script_json() -> serde_json::Value {
+        let mut value = serde_json::to_value(manifest()).unwrap();
+        value.as_object_mut().unwrap().remove("agent");
+        value["protocol_version"] = 3.into();
+        value["output_branch"] = "".into();
+        value["checks"] = serde_json::json!([]);
+        value["script"] = serde_json::json!({"command": "printf 'workflow output\\n'"});
+        value
+    }
+
+    #[test]
+    fn script_request_roundtrips_without_an_agent_or_publication() {
+        let value = script_json();
+        let m: RunManifest = serde_json::from_value(value.clone()).unwrap();
+        assert!(m.validate().is_ok());
+        assert_eq!(serde_json::to_value(&m).unwrap(), value);
+        let digest = m.digest();
+        let mut changed = value;
+        changed["script"]["command"] = "exit 7".into();
+        assert_ne!(digest, serde_json::from_value::<RunManifest>(changed).unwrap().digest());
+    }
+
+    #[test]
+    fn script_request_rejects_ambiguous_or_legacy_execution() {
+        for change in [
+            serde_json::json!({"protocol_version": 2}),
+            serde_json::json!({"agent": manifest().agent}),
+            serde_json::json!({"script": null}),
+            serde_json::json!({"output_branch": "powerhouse/cloud/unexpected"}),
+            serde_json::json!({"checks": [{"name": "hidden extra work", "command": "true"}]}),
+        ] {
+            let mut value = script_json();
+            value.as_object_mut().unwrap().extend(change.as_object().unwrap().clone());
+            let result = serde_json::from_value::<RunManifest>(value);
+            assert!(result.is_err() || result.unwrap().validate().is_err());
+        }
+    }
+
+    #[test]
+    fn script_commands_are_bounded_and_reject_nul() {
+        for command in [" ".to_string(), "echo\0injected".to_string(), "x".repeat(64 * 1024 + 1)] {
+            let mut value = script_json();
+            value["script"]["command"] = command.into();
+            let m: RunManifest = serde_json::from_value(value).unwrap();
+            assert!(m.validate().is_err());
+        }
+    }
+
+    #[test]
     fn validation_catches_bad_input() {
         assert!(manifest().validate().is_ok());
         let mut m = manifest();
@@ -619,8 +712,8 @@ mod tests {
         m.protocol_version = 99;
         assert!(m.validate().unwrap_err().contains("protocol version"));
         let mut m = manifest();
-        m.agent.provider = AgentProvider::Claude;
-        m.agent.permission_mode = "bypassPermissions".into();
+        m.agent.as_mut().unwrap().provider = AgentProvider::Claude;
+        m.agent.as_mut().unwrap().permission_mode = "bypassPermissions".into();
         assert!(m.validate().is_err());
     }
 

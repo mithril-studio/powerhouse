@@ -1,5 +1,6 @@
 mod acp;
 mod cloud;
+mod files;
 mod git;
 mod github;
 mod handoff;
@@ -29,6 +30,7 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(AcpManager::default())
         .manage(PtyManager::default())
         .manage(QueueManager::default())
@@ -52,12 +54,16 @@ pub fn run() {
             pty::pty_read_transcript,
             pty::pty_delete_transcript,
             git::git_validate_repo,
+            git::git_clone_repo,
+            git::git_init_repo,
             git::git_create_worktree,
+            git::git_list_branches,
             git::git_remove_worktree,
             git::git_changed_files,
             git::git_file_diff,
             git::git_list_files,
             git::git_file_content,
+            files::read_image_file,
             queue::queue_enqueue,
             queue::queue_cancel,
             queue::queue_state,
@@ -69,6 +75,7 @@ pub fn run() {
             github::github_device_start,
             github::github_poll,
             github::github_account,
+            github::github_list_repos,
             github::github_disconnect,
             cloud::commands::cloud_list_runs,
             cloud::commands::cloud_inspect_source,

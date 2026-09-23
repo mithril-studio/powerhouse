@@ -7,7 +7,9 @@ import {
   type QueueEntry,
 } from "../store/appStore";
 import {
+  gitCloneRepo,
   gitCreateWorktree,
+  gitInitRepo,
   gitRemoveWorktree,
   gitValidateRepo,
   queueCancel,
@@ -21,7 +23,7 @@ import { disposeAcp } from "./acpRegistry";
 import { cloudImport, cloudSync } from "./cloud";
 
 export async function pickAndAddRepo() {
-  const dir = await open({ directory: true, multiple: false, title: "Add project" });
+  const dir = await open({ directory: true, multiple: false, title: "Open project" });
   if (!dir) return;
   try {
     const info = await gitValidateRepo(dir);
@@ -31,7 +33,44 @@ export async function pickAndAddRepo() {
       defaultBranch: info.default_branch,
     });
   } catch (err) {
-    await message(String(err), { title: "Cannot add project", kind: "error" });
+    await message(String(err), { title: "Cannot open project", kind: "error" });
+  }
+}
+
+/** Clone a git/GitHub URL into `destParent` (default ~/conductor/repos) and add
+ *  it. Throws with git's message so the modal can show it inline. */
+export async function cloneGithubProject(url: string, destParent?: string | null) {
+  const info = await gitCloneRepo(url, destParent ?? null);
+  useAppStore.getState().addRepo({
+    name: info.name,
+    path: info.root,
+    defaultBranch: info.default_branch,
+  });
+}
+
+/** Create a brand-new project (git init + initial commit) and add it. Throws
+ *  on failure so the modal can show it inline. */
+export async function quickStartProject(name: string, destParent?: string | null) {
+  const info = await gitInitRepo(name, destParent ?? null);
+  useAppStore.getState().addRepo({
+    name: info.name,
+    path: info.root,
+    defaultBranch: info.default_branch,
+  });
+}
+
+/** Re-open a project from the Recents list; drops it from Recents if it's gone. */
+export async function openRecentRepo(path: string) {
+  try {
+    const info = await gitValidateRepo(path);
+    useAppStore.getState().addRepo({
+      name: info.name,
+      path: info.root,
+      defaultBranch: info.default_branch,
+    });
+  } catch (err) {
+    useAppStore.getState().removeRecentRepo(path);
+    await message(`${path}\n\n${String(err)}`, { title: "Cannot open project", kind: "error" });
   }
 }
 
@@ -88,11 +127,15 @@ export function createHandoffChat(
 }
 
 /** Creates the worktree + branch row + its first chat. Throws with git's stderr. */
-export async function createBranch(repoId: string, name: string) {
+export async function createBranch(repoId: string, name: string, base?: string) {
   const s = useAppStore.getState();
   const repo = s.repos.find((r) => r.id === repoId);
   if (!repo) throw new Error("repository not found");
-  const worktreePath = await gitCreateWorktree(repo.path, name, repo.defaultBranch);
+  const worktreePath = await gitCreateWorktree(
+    repo.path,
+    name,
+    base?.trim() || repo.defaultBranch,
+  );
   const branch: Branch = {
     id: crypto.randomUUID(),
     name,
@@ -148,6 +191,57 @@ export async function deleteBranch(repoId: string, branchId: string) {
     return;
   }
   useAppStore.getState().removeBranch(repoId, branchId);
+}
+
+/**
+ * Remove a project from the app: tear down every branch's worktree, terminals,
+ * and transcripts, then drop the repo from the store. Best-effort per branch —
+ * a worktree that won't remove is reported but doesn't abort the rest.
+ */
+export async function deleteRepo(repoId: string) {
+  const s = useAppStore.getState();
+  const repo = s.repos.find((r) => r.id === repoId);
+  if (!repo) return;
+
+  const confirmed = await ask(
+    `Remove project “${repo.name}”?\n\n${
+      repo.branches.length > 0
+        ? `Its ${repo.branches.length} branch worktree${
+            repo.branches.length === 1 ? "" : "s"
+          } and any uncommitted changes will be removed. `
+        : ""
+    }The project is removed from the app; the git repository itself is kept.`,
+    { title: "Remove project", kind: "warning", okLabel: "Remove" },
+  );
+  if (!confirmed) return;
+
+  for (const branch of repo.branches) {
+    // Stop the handoff watcher and cancel any in-flight handoff for this branch.
+    void handoffWatchStop(branch.id).catch(() => {});
+    const pendingTimer = s.pendingHandoff[branch.id];
+    if (pendingTimer !== undefined) {
+      window.clearTimeout(pendingTimer);
+      s.clearPendingHandoff(branch.id);
+    }
+
+    for (const chat of branch.chats) {
+      disposeTerminal(chat.id);
+      void disposeAcp(chat.id);
+      void ptyDeleteTranscript(chat.id).catch(() => {});
+    }
+    // Bottom-panel surfaces (ids mirror BottomPanel's shellId/agentCliId).
+    disposeTerminal(`shell-${branch.id}`);
+    void ptyDeleteTranscript(`shell-${branch.id}`).catch(() => {});
+    disposeTerminal(`agentcli-${branch.id}`);
+    void ptyDeleteTranscript(`agentcli-${branch.id}`).catch(() => {});
+    try {
+      await gitRemoveWorktree(repo.path, branch.worktreePath);
+    } catch (err) {
+      await message(String(err), { title: "Could not remove worktree", kind: "error" });
+    }
+  }
+
+  useAppStore.getState().removeRepo(repoId);
 }
 
 /** Snapshot the repo's workflow config and enqueue the branch for validation. */

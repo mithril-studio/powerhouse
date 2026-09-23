@@ -239,7 +239,10 @@ function CloudRunCard({ record: r }: { record: CloudRunRecord }) {
   const active = isRunActive(r);
   const state = r.snapshot?.state ?? r.receipt?.state;
   const canCancel = r.phase === "accepted" && active && !r.snapshot?.cancel_requested;
-  const canFetch = !!r.result?.published && !!r.result?.result_sha;
+  // A result equal to the source commit made no changes: there is no output
+  // branch on the remote to fetch, so don't offer an import that would 404.
+  const noResultChanges = !!r.result?.result_sha && r.result.result_sha === r.manifest.source.commit_sha;
+  const canFetch = !!r.result?.published && !!r.result?.result_sha && !noResultChanges;
   const held = holdsResources(r);
   const canDiscard = held && !active && r.machine !== "restoring" && r.machine !== "provisioning";
   const canRestore = r.machine === "parked";
@@ -352,6 +355,11 @@ function CloudRunCard({ record: r }: { record: CloudRunRecord }) {
         <p className="mt-2 select-text whitespace-pre-wrap text-xs">
           <span className="text-muted-foreground">Agent summary (unverified): </span>
           {r.result.summary}
+        </p>
+      )}
+      {noResultChanges && r.result?.published && !active && (
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          No changes to fetch — the result matches your source commit ({shortSha(r.manifest.source.commit_sha)}).
         </p>
       )}
       {r.result && r.result.concerns.length > 0 && (

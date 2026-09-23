@@ -36,6 +36,9 @@ const base = (over: Partial<CloudRunRecord>): CloudRunRecord => ({
   diff_cached: null,
   remote_verified: false,
   machine_error: null,
+  origin_chat_id: null,
+  returned: null,
+  return_error: null,
   ...over,
 });
 

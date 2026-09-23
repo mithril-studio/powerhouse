@@ -64,8 +64,20 @@ export const ptyKillAll = () => invoke<void>("pty_kill_all");
 export const gitValidateRepo = (path: string) =>
   invoke<RepoInfo>("git_validate_repo", { path });
 
+/** Clone a git URL into `destParent` (default ~/conductor/repos) and validate it. */
+export const gitCloneRepo = (url: string, destParent?: string | null) =>
+  invoke<RepoInfo>("git_clone_repo", { url, destParent: destParent ?? null });
+
+/** Create a new git project (init + initial commit) under `destParent`. */
+export const gitInitRepo = (name: string, destParent?: string | null) =>
+  invoke<RepoInfo>("git_init_repo", { name, destParent: destParent ?? null });
+
 export const gitCreateWorktree = (repoPath: string, branch: string, base: string) =>
   invoke<string>("git_create_worktree", { repoPath, branch, base });
+
+/** Local branch names for the repo, most-recently-committed first. */
+export const gitListBranches = (repoPath: string) =>
+  invoke<string[]>("git_list_branches", { repoPath });
 
 export const gitRemoveWorktree = (repoPath: string, worktreePath: string) =>
   invoke<void>("git_remove_worktree", { repoPath, worktreePath });
@@ -81,6 +93,18 @@ export const gitListFiles = (worktreePath: string) =>
 
 export const gitFileContent = (worktreePath: string, path: string) =>
   invoke<string>("git_file_content", { worktreePath, path });
+
+export interface ImageFile {
+  name: string;
+  mimeType: string;
+  /** Base64 payload, no data-URL prefix. */
+  data: string;
+  bytes: number;
+}
+
+/** Reads an image from disk for an ACP prompt; rejects non-images and >10 MB. */
+export const readImageFile = (path: string) =>
+  invoke<ImageFile>("read_image_file", { path });
 
 // --- merge queue ---
 type StepInput = Pick<WorkflowStep, "name" | "command" | "type">;
@@ -445,5 +469,16 @@ export const githubPoll = (deviceCode: string) =>
 
 export const githubAccount = () =>
   invoke<GithubAccount | null>("github_account");
+
+/** A repository the signed-in user can clone. */
+export interface GithubRepoSummary {
+  full_name: string;
+  clone_url: string;
+  private: boolean;
+}
+
+/** Repos the signed-in user can access, newest first (for Add-project autocomplete). */
+export const githubListRepos = () =>
+  invoke<GithubRepoSummary[]>("github_list_repos");
 
 export const githubDisconnect = () => invoke<void>("github_disconnect");

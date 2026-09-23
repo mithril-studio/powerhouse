@@ -6,6 +6,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "../store/appStore";
+import { appendCloudResult } from "./acpTranscript";
 
 // --- protocol mirror (serialized from Rust, snake_case) ------------------------
 
@@ -91,6 +92,12 @@ export interface ResultManifest {
   partial_work_preserved: boolean;
 }
 
+/** How a finished run's result came home. Mirrors Rust `ReturnOutcome`. */
+export type ReturnOutcome =
+  | { kind: "fast_forwarded"; sha: string }
+  | { kind: "diverged"; reason: string }
+  | { kind: "reported_only" };
+
 export interface SnapshotRef {
   name: string;
   version: string | null;
@@ -136,6 +143,12 @@ export interface CloudRunRecord {
   diff_cached: { bytes: number; truncated: boolean } | null;
   remote_verified: boolean;
   machine_error: string | null;
+  /** Chat the send came from; the result card returns here. */
+  origin_chat_id: string | null;
+  /** How the finished result came home; null until a terminal run is returned. */
+  returned: ReturnOutcome | null;
+  /** Retryable return failure (fetch/push), retried by the tick. */
+  return_error: string | null;
 }
 
 export interface SourceInfo {
@@ -231,6 +244,8 @@ export interface QuickSubmitRequest {
   provider: "claude" | "fake";
   fakeScript?: string | null;
   envNames: string[];
+  /** Chat the send came from (`branch.activeChatId`); the result returns here. */
+  chatId: string | null;
 }
 
 export type QuickSubmitOutcome =
@@ -313,6 +328,48 @@ export const holdsResources = (r: CloudRunRecord): boolean => {
 let started = false;
 const inFlight = new Set<string>();
 const nextAllowed = new Map<string, number>();
+/** Run ids whose result card has been posted to a chat this session. The
+ *  persisted transcript is the durable dedupe (see `appendCloudResult`); this
+ *  just avoids re-touching the store on every replayed record update. */
+const returnedToChat = new Set<string>();
+
+/** The repo+branch holding a chat id, or null if it is gone. */
+function findChatLocation(chatId: string): { repoId: string; branchId: string } | null {
+  for (const repo of useAppStore.getState().repos) {
+    for (const branch of repo.branches) {
+      if (branch.chats.some((c) => c.id === chatId)) return { repoId: repo.id, branchId: branch.id };
+    }
+  }
+  return null;
+}
+
+/**
+ * Post a finished run's result card to the chat that sent it. Falls back to the
+ * branch's first chat; with no chat at all the Cloud-tab card (which exists
+ * today) is the only surface. Idempotent per run id, and `appendCloudResult`
+ * dedupes against the persisted transcript so restarts never double-post.
+ */
+export function returnResultToChat(rec: CloudRunRecord, late: boolean) {
+  if (!rec.returned || returnedToChat.has(rec.run_id)) return;
+  const s = useAppStore.getState();
+  let location = rec.origin_chat_id ? findChatLocation(rec.origin_chat_id) : null;
+  let chatId = location ? rec.origin_chat_id : null;
+  if (!location) {
+    const branch = s.repos
+      .find((r) => r.id === rec.repo_id)
+      ?.branches.find((b) => b.name === rec.source_branch);
+    const first = branch?.chats[0];
+    if (branch && first) {
+      location = { repoId: rec.repo_id, branchId: branch.id };
+      chatId = first.id;
+    }
+  }
+  if (!location || !chatId) return; // no chat: Cloud-tab card only
+  returnedToChat.add(rec.run_id);
+  s.updateChatAcpTranscript(location.repoId, location.branchId, chatId, (t) =>
+    appendCloudResult(t, rec.run_id, late),
+  );
+}
 
 async function syncOne(runId: string) {
   if (inFlight.has(runId)) return;
@@ -320,6 +377,7 @@ async function syncOne(runId: string) {
   try {
     const rec = await cloudSync(runId);
     useAppStore.getState().setCloudRun(rec);
+    returnResultToChat(rec, false);
     nextAllowed.set(runId, Date.now() + (rec.last_sync_error ? RECONNECT_BACKOFF_MS : ACTIVE_POLL_MS));
   } catch {
     nextAllowed.set(runId, Date.now() + RECONNECT_BACKOFF_MS);
@@ -360,11 +418,15 @@ export async function startCloudSync() {
   try {
     const runs = await cloudListRuns();
     useAppStore.getState().setCloudRuns(runs);
+    // A run already returned at boot finished while the app was closed: its
+    // card arrives late.
+    for (const rec of runs) returnResultToChat(rec, true);
   } catch (err) {
     console.warn("cloud runs unavailable:", err);
   }
   await listen<CloudRunRecord>("cloud-run-update", (e) => {
     useAppStore.getState().setCloudRun(e.payload);
+    returnResultToChat(e.payload, false);
   });
   await listen<QuickSubmitStage>("cloud-quick-submit", (e) => {
     useAppStore.getState().setCloudQuickStage(e.payload.repoId, e.payload.branch, e.payload.stage);

@@ -2,6 +2,8 @@ import { useAppStore, type Branch, type Repo } from "../store/appStore";
 import { deleteBranch, enqueueBranch } from "../lib/actions";
 import { holdsResources } from "../lib/cloud";
 import { quickSubmitBranch } from "../lib/quickSubmit";
+import { rollupActivity } from "../lib/chatActivity";
+import { ActivityDot } from "./ActivityDot";
 
 const QUICK_STAGE_LABEL: Record<string, string> = {
   starting: "sending",
@@ -37,6 +39,11 @@ export function BranchItem({ repo, branch }: Props) {
     ),
   );
 
+  // Agent activity across this worktree's chats outranks the static dot.
+  const activity = useAppStore((s) =>
+    rollupActivity(branch.chats.map((c) => c.id), s.chatActivity),
+  );
+
   const onSelect = () => {
     select(repo.id, branch.id);
     if (!branch.activeChatId && branch.chats.length > 0) {
@@ -53,18 +60,22 @@ export function BranchItem({ repo, branch }: Props) {
           : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
       }`}
     >
-      <span
-        className={`size-1.5 shrink-0 rounded-full ${
-          branch.merged
-            ? "bg-success"
-            : queued
-              ? "animate-pulse bg-accent-brand"
-              : selected
-                ? "bg-accent-brand"
-                : "bg-muted-foreground/40"
-        }`}
-        aria-hidden
-      />
+      {activity ? (
+        <ActivityDot activity={activity} />
+      ) : (
+        <span
+          className={`size-1.5 shrink-0 rounded-full ${
+            branch.merged
+              ? "bg-success"
+              : queued
+                ? "animate-pulse bg-accent-brand"
+                : selected
+                  ? "bg-accent-brand"
+                  : "bg-muted-foreground/40"
+          }`}
+          aria-hidden
+        />
+      )}
       <span className="min-w-0 flex-1 truncate font-mono text-xs">{branch.name}</span>
       {quickStage ? (
         <span

@@ -84,6 +84,22 @@ pub struct DiffMeta {
     pub truncated: bool,
 }
 
+/// How a finished run's result came home to the local branch. Set once, on the
+/// sync that returns it; drives the chat result card. See
+/// docs/cloud-return-to-branch-spec.md.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ReturnOutcome {
+    /// The local source branch was fast-forwarded to `sha` and pushed; the
+    /// remote output branch was deleted.
+    FastForwarded { sha: String },
+    /// The branch could not be moved safely; `reason` explains what happened.
+    /// The output branch is kept for the review-worktree import.
+    Diverged { reason: String },
+    /// A failed/blocked/cancelled run: reported to chat only, no integration.
+    ReportedOnly,
+}
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CloudRunRecord {
     pub run_id: String,
@@ -137,6 +153,19 @@ pub struct CloudRunRecord {
     /// Last lifecycle problem (park/release/restore), shown on the card.
     #[serde(default)]
     pub machine_error: Option<String>,
+    // --- return to branch --------------------------------------------------
+    /// Which chat the send came from; the result card returns here. `None` for
+    /// Cloud-tab sends with no chat.
+    #[serde(default)]
+    pub origin_chat_id: Option<String>,
+    /// How the finished result came home. `None` until a terminal run is
+    /// returned; set exactly once thereafter.
+    #[serde(default)]
+    pub returned: Option<ReturnOutcome>,
+    /// Retryable failure from the return attempt (fetch died, push rejected),
+    /// retried by the lifecycle tick like "release pending".
+    #[serde(default)]
+    pub return_error: Option<String>,
 }
 
 impl CloudRunRecord {
@@ -320,7 +349,8 @@ pub mod tests_support {
                 source: SourceSpec { repo_name: "r".into(), remote_url: "https://x/y.git".into(), commit_sha: "a".repeat(40), source_branch: None },
                 output_branch: RunManifest::expected_output_branch(&id),
                 workspace: WorkspaceSpec::from_snapshot("ph-test-base", Some("v1".into())),
-                agent: AgentSpec { provider: AgentProvider::Fake, model: None, permission_mode: "dontAsk".into(), allowed_tools: vec![], max_turns: None, max_budget_usd: None, fake_script: None },
+                agent: Some(AgentSpec { provider: AgentProvider::Fake, model: None, permission_mode: "dontAsk".into(), allowed_tools: vec![], max_turns: None, max_budget_usd: None, fake_script: None }),
+                script: None,
                 checks: vec![],
                 context: ContextSpec::default(),
                 deadline_seconds: 600,
@@ -347,6 +377,9 @@ pub mod tests_support {
             diff_cached: None,
             remote_verified: false,
             machine_error: None,
+            origin_chat_id: None,
+            returned: None,
+            return_error: None,
         }
     }
 }

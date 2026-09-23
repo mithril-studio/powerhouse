@@ -128,12 +128,50 @@ pub trait Boxd: Send + Sync {
 
 pub struct BoxdCli {
     pub binary: String,
+    /// Optional API key passed to boxd as `BOXD_TOKEN`. Lets auth work without
+    /// depending on the cached `boxd auth login` session (e.g. a key from
+    /// settings). `None` falls back to boxd's own stored credentials.
+    pub token: Option<String>,
 }
 
 impl Default for BoxdCli {
     fn default() -> Self {
-        Self { binary: "boxd".into() }
+        Self {
+            binary: resolve_boxd_binary(),
+            token: std::env::var("BOXD_TOKEN").ok().filter(|s| !s.is_empty()),
+        }
     }
+}
+
+/// Locate the `boxd` executable by absolute path.
+///
+/// A desktop app launched from Finder/Dock inherits the stripped launchd PATH
+/// (`/usr/bin:/bin:/usr/sbin:/sbin`), which omits every dir boxd installs into.
+/// Spawning bare `"boxd"` then fails with `NotFound` — surfaced to the user as
+/// "the boxd CLI is not installed" — even though it is. Probe the known install
+/// locations directly; fall back to `"boxd"` so a PATH that *does* contain it
+/// (e.g. `tauri dev` launched from a shell) keeps working.
+fn resolve_boxd_binary() -> String {
+    if let Some(explicit) = std::env::var_os("BOXD_BIN") {
+        if !explicit.is_empty() {
+            return explicit.to_string_lossy().into_owned();
+        }
+    }
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(home) = std::env::var_os("HOME") {
+        candidates.push(std::path::Path::new(&home).join(".local/bin/boxd"));
+    }
+    candidates.push("/opt/homebrew/bin/boxd".into());
+    candidates.push("/usr/local/bin/boxd".into());
+    first_existing(&candidates).unwrap_or_else(|| "boxd".into())
+}
+
+/// First candidate that resolves to a file (symlinks are followed), if any.
+fn first_existing(candidates: &[std::path::PathBuf]) -> Option<String> {
+    candidates
+        .iter()
+        .find(|c| c.is_file())
+        .map(|c| c.to_string_lossy().into_owned())
 }
 
 /// The CLI prints upgrade notices around its JSON; find the JSON document.
@@ -146,11 +184,15 @@ pub fn extract_json(stdout: &str) -> Option<serde_json::Value> {
 
 impl BoxdCli {
     fn run(&self, args: &[&str], timeout: Duration) -> TResult<(String, String, i32)> {
-        let mut child = Command::new(&self.binary)
-            .args(args)
+        let mut cmd = Command::new(&self.binary);
+        cmd.args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(token) = &self.token {
+            cmd.env("BOXD_TOKEN", token);
+        }
+        let mut child = cmd
             .spawn()
             .map_err(|e| {
                 if e.kind() == std::io::ErrorKind::NotFound {
@@ -359,12 +401,30 @@ mod tests {
     #[test]
     fn cli_refuses_to_remove_unowned_names_before_spawning() {
         // A binary that cannot exist: the guard must fire first.
-        let cli = BoxdCli { binary: "/nonexistent/boxd".into() };
+        let cli = BoxdCli { binary: "/nonexistent/boxd".into(), token: None };
         assert_eq!(cli.machine_remove("legal-ai-app"), Err(TransportError::NotOwned("legal-ai-app".into())));
         assert_eq!(cli.snapshot_remove("golden-copy"), Err(TransportError::NotOwned("golden-copy".into())));
         assert_eq!(cli.machine_new_from_snapshot("mine", "powerhouse-base", true, 0, 0).unwrap_err(), TransportError::NotOwned("mine".into()));
         // Owned names reach the (missing) CLI.
         assert_eq!(cli.machine_remove("ph-deadbeef"), Err(TransportError::CliMissing));
+    }
+
+    #[test]
+    fn binary_resolver_picks_the_first_existing_candidate() {
+        // A real file that is guaranteed to exist: this test binary itself.
+        let real = std::env::current_exe().unwrap();
+        let missing = std::path::PathBuf::from("/nonexistent/boxd");
+        assert_eq!(
+            first_existing(&[missing.clone(), real.clone()]),
+            Some(real.to_string_lossy().into_owned()),
+        );
+        // Later candidates never mask an earlier hit.
+        assert_eq!(
+            first_existing(&[real.clone(), missing.clone()]),
+            Some(real.to_string_lossy().into_owned()),
+        );
+        assert_eq!(first_existing(&[missing]), None);
+        assert_eq!(first_existing(&[]), None);
     }
 
     #[test]

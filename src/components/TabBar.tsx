@@ -1,6 +1,8 @@
 import { resolveAgent, useAppStore, type Branch, type Repo } from "../store/appStore";
 import { deleteChat } from "../lib/actions";
 import { startHandoff } from "../lib/handoff";
+import { quickSubmitBranch } from "../lib/quickSubmit";
+import { ActivityDot } from "./ActivityDot";
 
 interface Props {
   repo: Repo | null;
@@ -16,10 +18,14 @@ export function TabBar({ repo, branch }: Props) {
   const pending = useAppStore((s) =>
     branch ? branch.id in s.pendingHandoff : false,
   );
+  const chatActivity = useAppStore((s) => s.chatActivity);
   const activeRunning = useAppStore((s) =>
     branch?.activeChatId
       ? (s.chatStatus[branch.activeChatId] ?? "idle") === "running"
       : false,
+  );
+  const cloudStage = useAppStore((s) =>
+    repo && branch ? s.cloudQuickStages[`${repo.id}:${branch.name}`] : undefined,
   );
 
   return (
@@ -35,6 +41,7 @@ export function TabBar({ repo, branch }: Props) {
           {branch.chats.map((chat) => {
             const active = chat.id === branch.activeChatId;
             const agent = resolveAgent(settings, chat.agentId);
+            const activity = chatActivity[chat.id];
             return (
               <div
                 key={chat.id}
@@ -45,6 +52,7 @@ export function TabBar({ repo, branch }: Props) {
                     : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
                 }`}
               >
+                {activity && <ActivityDot activity={activity} />}
                 <span className="max-w-32 truncate">{chat.title}</span>
                 <span className="max-w-20 truncate text-[10px] text-muted-foreground/60">
                   {agent.name}
@@ -77,25 +85,34 @@ export function TabBar({ repo, branch }: Props) {
       <span className="flex-1" />
 
       {repo && branch && (
-        <button
-          onClick={() => void startHandoff(repo.id, branch.id)}
-          disabled={!pending && !activeRunning}
-          title={
-            pending
-              ? "Cancel handoff"
-              : "Hand off this chat to a fresh agent session"
-          }
-          className={`flex h-7 items-center gap-1.5 rounded-md px-2 text-xs disabled:opacity-40 ${
-            pending
-              ? "bg-muted text-foreground"
-              : "text-muted-foreground hover:bg-muted hover:text-foreground"
-          }`}
-        >
-          {pending && (
-            <span className="size-2 animate-pulse rounded-full bg-accent-brand" />
-          )}
-          {pending ? "Handing off…" : "Handoff"}
-        </button>
+        <>
+          <button
+            onClick={() => void quickSubmitBranch(repo, branch)}
+            disabled={!!cloudStage}
+            title="Send this branch to the cloud"
+            className="flex h-7 items-center gap-1.5 rounded-md bg-foreground px-2.5 text-xs font-medium text-background hover:bg-foreground/90 disabled:opacity-50"
+          >
+            {cloudStage && (
+              <span className="size-2 animate-pulse rounded-full bg-background/70" />
+            )}
+            {cloudStage ? "Sending…" : "Cloud"}
+          </button>
+          <button
+            onClick={() => void startHandoff(repo.id, branch.id)}
+            disabled={!pending && !activeRunning}
+            title={
+              pending
+                ? "Cancel handoff"
+                : "Hand off this chat to a fresh agent session"
+            }
+            className="flex h-7 items-center gap-1.5 rounded-md bg-foreground px-2.5 text-xs font-medium text-background hover:bg-foreground/90 disabled:opacity-50"
+          >
+            {pending && (
+              <span className="size-2 animate-pulse rounded-full bg-background/70" />
+            )}
+            {pending ? "Handing off…" : "Handoff"}
+          </button>
+        </>
       )}
 
       {repo && (

@@ -3,6 +3,7 @@ import type {
   AgentCapabilities,
   AvailableCommand,
   ClientConnection,
+  ContentBlock,
   Implementation,
   PromptResponse,
   RequestPermissionRequest,
@@ -214,15 +215,20 @@ function getEntry(chatId: string): Entry {
   return entry;
 }
 
-export async function sendAcpPrompt(chatId: string, text: string): Promise<PromptResponse> {
+/** Sends one turn. `prompt` is the ordered content: text and/or image blocks. */
+export async function sendAcpPrompt(
+  chatId: string,
+  prompt: ContentBlock[],
+): Promise<PromptResponse> {
   const entry = getEntry(chatId);
   if (entry.busy) throw new Error("ACP agent is already working");
+  if (prompt.length === 0) throw new Error("Prompt is empty");
   entry.busy = true;
   entry.callbacks.onBusyChange?.(true);
   try {
     return await entry.connection.agent.request("session/prompt", {
       sessionId: entry.sessionId!,
-      prompt: [{ type: "text", text }],
+      prompt,
     });
   } finally {
     entry.busy = false;

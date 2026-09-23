@@ -37,6 +37,12 @@ describe("buildQuickSubmitRequest", () => {
     expect(req.model).toBeNull();
     expect(req.provider).toBe("claude");
     expect(req.envNames).toEqual([]);
+    expect(req.chatId).toBeNull();
+  });
+
+  it("remembers the originating chat so the result can return to it", () => {
+    const req = buildQuickSubmitRequest(repo, repo.path, settings, "chat-7");
+    expect(req.chatId).toBe("chat-7");
   });
 
   it("passes the repo's configured env names", () => {

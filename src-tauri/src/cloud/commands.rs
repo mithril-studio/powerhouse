@@ -25,7 +25,7 @@ use powerhouse_cloud_protocol::{
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use super::secrets::{self, SecretStore};
-use super::store::{CloudRunRecord, CloudStore, DiffMeta, MachineState, Phase, SnapshotHandle, VmRef};
+use super::store::{CloudRunRecord, CloudStore, DiffMeta, MachineState, Phase, ReturnOutcome, SnapshotHandle, VmRef};
 use super::transport::{ensure_owned, Boxd, BoxdCli, MachineInfo, SnapshotInfo, TransportError, OWNED_PREFIX};
 use crate::git::git;
 
@@ -277,6 +277,10 @@ pub struct SubmitRequest {
     /// travel only in the per-run credentials file.
     #[serde(default)]
     pub env_names: Vec<String>,
+    /// Chat the send came from; the finished result returns here. `None` for
+    /// Cloud-tab sends with no active chat.
+    #[serde(default)]
+    pub chat_id: Option<String>,
 }
 
 fn default_permission_mode() -> String {
@@ -423,7 +427,7 @@ pub fn build_manifest(req: &SubmitRequest, run_id: &str, source: &SourceInfo, ba
         },
         output_branch: RunManifest::expected_output_branch(run_id),
         workspace: WorkspaceSpec::from_snapshot(&base.name, base.version.clone()),
-        agent: AgentSpec {
+        agent: Some(AgentSpec {
             provider,
             model: req.model.clone().filter(|m| !m.trim().is_empty()),
             permission_mode: req.permission_mode.clone(),
@@ -431,7 +435,8 @@ pub fn build_manifest(req: &SubmitRequest, run_id: &str, source: &SourceInfo, ba
             max_turns: req.max_turns,
             max_budget_usd: req.max_budget_usd,
             fake_script: req.fake_script.clone(),
-        },
+        }),
+        script: None,
         checks: req.checks.iter().filter(|c| !c.command.trim().is_empty()).cloned().collect(),
         context: ContextSpec { brief_markdown: req.brief.chars().take(MAX_BRIEF_BYTES).collect() },
         deadline_seconds: req.deadline_seconds,
@@ -503,7 +508,7 @@ pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest
     let digest = manifest.digest();
     // Credentials are Powerhouse's own, per run, and must exist before any
     // machine is touched. Git publication needs a token only for HTTPS remotes.
-    let need_claude = manifest.agent.provider == AgentProvider::Claude;
+    let need_claude = manifest.agent.as_ref().is_some_and(|a| a.provider == AgentProvider::Claude);
     let git_remote = manifest.source.remote_url.starts_with("https://").then_some(manifest.source.remote_url.as_str());
     let project_env = secrets::project_env_values(mgr.secrets.as_ref(), &req.repo_id, &req.env_names)?;
     let credentials_text = secrets::render_run_credentials(mgr.secrets.as_ref(), need_claude, git_remote, &project_env)?;
@@ -543,6 +548,9 @@ pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest
         diff_cached: None,
         remote_verified: false,
         machine_error: None,
+        origin_chat_id: req.chat_id.clone(),
+        returned: None,
+        return_error: None,
     };
     // Durable intent (run id, machine name, snapshot version) before the
     // first remote side effect.
@@ -725,6 +733,9 @@ pub struct QuickSubmitRequest {
     pub fake_script: Option<String>,
     #[serde(default)]
     pub env_names: Vec<String>,
+    /// Chat the send came from (`branch.activeChatId`); the result returns here.
+    #[serde(default)]
+    pub chat_id: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -830,6 +841,7 @@ pub fn do_quick_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: QuickSu
         fake_script: req.fake_script,
         brief,
         env_names: req.env_names,
+        chat_id: req.chat_id,
     };
     match do_submit(mgr, app, submit) {
         Ok(record) => Ok(QuickSubmitOutcome::Accepted { record: Box::new(record) }),
@@ -1001,6 +1013,9 @@ fn advance_after_terminal(mgr: &CloudManager, app: Option<&AppHandle>, record: &
                 }
             }
         }
+        // The remote is confirmed: bring the result home to the branch. Its own
+        // failures live in `return_error` and never block the VM release.
+        let _ = do_return(mgr, app, record);
         match release_gate(record) {
             Ok(()) => {
                 let vm = record.task_vm.as_ref().map(|v| v.name.clone()).ok_or("no task VM")?;
@@ -1017,10 +1032,130 @@ fn advance_after_terminal(mgr: &CloudManager, app: Option<&AppHandle>, record: &
     } else {
         // Partial work only exists in the workspace: hold, then park.
         let _ = cache_diff(mgr, record);
+        // Report the outcome to chat; no integration for a non-completed run.
+        let _ = do_return(mgr, app, record);
         record.set_machine(MachineState::Holding, now_ms());
         record.machine_error = None;
         persist(mgr, app, record)
     }
+}
+
+/// The local worktree that has `branch` checked out, if any. Parses
+/// `git worktree list --porcelain` from the repo (the main checkout is a
+/// worktree too).
+fn worktree_for_branch(repo: &Path, branch: &str) -> Option<PathBuf> {
+    let out = git(repo, &["worktree", "list", "--porcelain"]).ok()?;
+    let want = format!("refs/heads/{branch}");
+    let mut current: Option<PathBuf> = None;
+    for line in out.lines() {
+        if let Some(p) = line.strip_prefix("worktree ") {
+            current = Some(PathBuf::from(p.trim()));
+        } else if let Some(b) = line.strip_prefix("branch ") {
+            if b.trim() == want {
+                return current;
+            }
+        }
+    }
+    None
+}
+
+/// Bring a finished run's result home to the branch that sent it. Idempotent:
+/// does nothing once `returned` is set. Never touches the VM. Retryable
+/// failures (fetch died, push rejected) are recorded in `return_error` and left
+/// for the lifecycle tick, mirroring "release pending". The integration rules
+/// (fast-forward only a clean, unmoved branch; everything else is Diverged) are
+/// in docs/cloud-return-to-branch-spec.md.
+fn do_return(mgr: &CloudManager, app: Option<&AppHandle>, record: &mut CloudRunRecord) -> Result<(), String> {
+    if record.returned.is_some() {
+        return Ok(());
+    }
+    let Some(state) = record.state().filter(|s| s.is_terminal()) else { return Ok(()) };
+    let published = record.result.as_ref().map(|r| r.published && r.result_sha.is_some()).unwrap_or(false);
+
+    // Anything but a completed & published run has no code to integrate.
+    if state != RunState::Completed || !published {
+        record.returned = Some(ReturnOutcome::ReportedOnly);
+        record.return_error = None;
+        return persist(mgr, app, record);
+    }
+    // The fast-forward path needs the remote confirmed first; otherwise a
+    // not-yet-pushed branch would look like a divergence. Wait (retried).
+    if !record.remote_verified {
+        return Ok(());
+    }
+    let result_sha = record.result.as_ref().and_then(|r| r.result_sha.clone()).ok_or("no result revision")?;
+    let source_sha = record.manifest.source.commit_sha.clone();
+    let output_branch = record.manifest.output_branch.clone();
+
+    let diverge = |record: &mut CloudRunRecord, reason: String| {
+        record.returned = Some(ReturnOutcome::Diverged { reason });
+        record.return_error = None;
+        persist(mgr, app, record)
+    };
+
+    // A run with no source branch (detached HEAD) has nothing to move.
+    let Some(branch) = record.source_branch.clone() else {
+        return diverge(record, "the run was sent from a detached HEAD; import it for review to merge it yourself.".into());
+    };
+
+    let repo = Path::new(&record.repo_path).to_path_buf();
+    // Make the result revision local so the ff-only merge can resolve it. The
+    // output branch is Powerhouse's own, fetched with its token.
+    let auth_env = https_auth_env_for(mgr, &record.manifest.source.remote_url);
+    // A no-op result (equal to the source) never produced an output branch to
+    // fetch — the source is already at the result. Skip straight to the
+    // push/cleanup; fetching the missing branch would loop on "return pending".
+    if result_sha != source_sha {
+        let refspec = format!("+refs/heads/{output_branch}:refs/remotes/origin/{output_branch}");
+        if let Err(e) = git_with_env(&repo, &["fetch", "--quiet", "origin", &refspec], &auth_env) {
+            record.return_error = Some(format!("return pending: fetch: {e}"));
+            return persist(mgr, app, record);
+        }
+    }
+
+    let Some(worktree) = worktree_for_branch(&repo, &branch) else {
+        return diverge(record, format!("branch {branch} is no longer checked out locally; import the result for review to merge it yourself."));
+    };
+
+    let head = match git(&worktree, &["rev-parse", "HEAD"]) {
+        Ok(h) => h,
+        Err(e) => {
+            record.return_error = Some(format!("return pending: {e}"));
+            return persist(mgr, app, record);
+        }
+    };
+    // Already at the result (a retry after a push failure, or the user pulled
+    // it themselves): only the push and cleanup remain.
+    if head != result_sha {
+        if head != source_sha {
+            return diverge(record, format!("your branch moved since the run started (now {}); import the result for review to merge it yourself.", short(&head)));
+        }
+        let dirty = git(&worktree, &["status", "--porcelain"]).map(|s| !s.trim().is_empty()).unwrap_or(true);
+        if dirty {
+            return diverge(record, "the branch has uncommitted changes; import the result for review to merge it yourself.".into());
+        }
+        if git(&worktree, &["merge-base", "--is-ancestor", &source_sha, &result_sha]).is_err() {
+            return diverge(record, "the cloud result is not a fast-forward of your branch; import it for review to merge it yourself.".into());
+        }
+        if let Err(e) = git(&worktree, &["merge", "--ff-only", &result_sha]) {
+            return diverge(record, format!("could not fast-forward the branch ({}); import the result for review to merge it yourself.", super::redact_stderr(&e)));
+        }
+    }
+    // Push the moved branch with the user's own credentials (the token is only
+    // for Powerhouse's own branches). Never force; a rejection keeps the local
+    // fast-forward and is retried by the tick.
+    if let Err(e) = git(&worktree, &["push", "origin", &branch]) {
+        record.return_error = Some(format!("return pending: push: {}", super::redact_stderr(&e)));
+        return persist(mgr, app, record);
+    }
+
+    record.returned = Some(ReturnOutcome::FastForwarded { sha: result_sha });
+    record.return_error = None;
+    persist(mgr, app, record)?;
+    // The output branch's commits now live on the source branch; delete it
+    // (best effort — the return already succeeded).
+    let _ = git_with_env(&repo, &["push", "origin", "--delete", &output_branch], &auth_env);
+    Ok(())
 }
 
 /// Snapshot a held VM and destroy it. Refuses while the runner reports a live run.
@@ -1142,6 +1277,27 @@ pub fn do_lifecycle_tick(mgr: &CloudManager, app: Option<&AppHandle>) -> Result<
     for rec in records {
         let id = rec.run_id.clone();
         let note = |s: &str| format!("{}: {s}", short(&id));
+        // Return the result to the branch/chat if a terminal run still needs it
+        // (a push that was rejected, or the app was closed when it finished).
+        // Idempotent and independent of the VM lifecycle below.
+        if rec.phase == Phase::Accepted
+            && rec.machine != MachineState::Unmanaged
+            && rec.returned.is_none()
+            && rec.state().map(|s| s.is_terminal()).unwrap_or(false)
+        {
+            let _guard = mgr.lifecycle.lock().unwrap();
+            if let Ok(mut r) = load(mgr, &id) {
+                if r.returned.is_none() {
+                    let _ = do_return(mgr, app, &mut r);
+                    match &r.returned {
+                        Some(ReturnOutcome::FastForwarded { sha }) => actions.push(note(&format!("returned: fast-forwarded to {}", short(sha)))),
+                        Some(ReturnOutcome::Diverged { .. }) => actions.push(note("returned: diverged, review needed")),
+                        Some(ReturnOutcome::ReportedOnly) => actions.push(note("returned: reported to chat")),
+                        None => {}
+                    }
+                }
+            }
+        }
         match rec.machine {
             MachineState::Unmanaged | MachineState::Restoring => {}
             MachineState::Provisioning | MachineState::Active => {
@@ -1314,6 +1470,12 @@ pub fn do_import(mgr: &CloudManager, app: Option<&AppHandle>, run_id: &str) -> R
         return Err(result.publish_error.unwrap_or_else(|| "the result was not published".into()));
     }
     let result_sha = result.result_sha.clone().ok_or("result has no revision")?;
+    // A no-op result (identical to the source commit) never produced an output
+    // branch to push, so the fetch below would fail with "couldn't find remote
+    // ref". There is nothing to import — say so plainly instead.
+    if result_sha == record.manifest.source.commit_sha {
+        return Err("The cloud run made no changes: the result is identical to your source commit, so there is nothing to fetch.".into());
+    }
     let repo = Path::new(&record.repo_path);
     let branch = record.manifest.output_branch.clone();
     let refspec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
@@ -1877,7 +2039,7 @@ mod tests {
             machine_ceiling: None, checks: vec![],
             deadline_seconds: 900, permission_mode: "dontAsk".into(), allowed_tools: vec![], max_turns: None,
             max_budget_usd: None, model: None, provider: "fake".into(), fake_script: Some("complete".into()),
-            brief: "# Plan\n1. add file".into(), env_names: vec![],
+            brief: "# Plan\n1. add file".into(), env_names: vec![], chat_id: None,
         }
     }
 
@@ -1898,6 +2060,36 @@ mod tests {
         rec.repo_path = work.to_string();
         rec.manifest.source.remote_url = "file-remote".into();
         rec
+    }
+
+    fn git_commit(work: &str, msg: &str) -> String {
+        for args in [vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", msg]] {
+            std::process::Command::new("git").arg("-C").arg(work).args(&args).output().unwrap();
+        }
+        head_sha(work)
+    }
+
+    /// A completed, published run whose result branch is on the remote: `main`
+    /// is back at the source commit locally, the result is one commit ahead.
+    /// The record is on VM `ph-main` for source branch `main`.
+    fn completed_return_setup(work: &str, run_id: &str, fake: &Fake) -> (String, String, CloudRunRecord) {
+        let source_sha = head_sha(work);
+        std::fs::write(Path::new(work).join("cloud.txt"), "from cloud").unwrap();
+        let result_sha = git_commit(work, "cloud work");
+        publish_branch(work, run_id);
+        std::process::Command::new("git").arg("-C").arg(work).args(["reset", "--hard", &source_sha]).output().unwrap();
+        let vm = task_vm_name(Some("main"), run_id);
+        fake.machine(&vm, "running");
+        let mut rec = accepted_record(work, run_id);
+        rec.task_vm = Some(VmRef { name: vm, id: None });
+        rec.source_branch = Some("main".into());
+        rec.manifest.source.commit_sha = source_sha.clone();
+        rec.manifest.source.source_branch = Some("main".into());
+        (source_sha, result_sha, rec)
+    }
+
+    fn branch_missing(remote: &Path, run_id: &str) -> bool {
+        git(remote, &["rev-parse", "--verify", "-q", &format!("refs/heads/powerhouse/cloud/{run_id}")]).is_err()
     }
 
     // --- submission -------------------------------------------------------------
@@ -2108,7 +2300,7 @@ mod tests {
             repo_id: "repo".into(), repo_path: source.into(), repo_name: "work".into(), source_path: source.into(),
             base_snapshot: base.into(), machine_ceiling: None, checks: vec![], deadline_seconds: 900,
             permission_mode: "dontAsk".into(), allowed_tools: vec![], max_turns: None, max_budget_usd: None,
-            model: None, provider: "fake".into(), fake_script: Some("complete".into()), env_names: vec![],
+            model: None, provider: "fake".into(), fake_script: Some("complete".into()), env_names: vec![], chat_id: None,
         }
     }
 
@@ -2374,6 +2566,175 @@ mod tests {
         // The diff is still readable after the VM is gone.
         let patch = std::fs::read_to_string(mgr.store.lock().unwrap().cache_dir(run_id).join("diff.patch")).unwrap();
         assert!(patch.contains("diff --git"));
+    }
+
+    // --- return to branch -------------------------------------------------------
+
+    #[test]
+    fn quick_submit_remembers_the_origin_chat() {
+        let (dir, work, remote) = temp_repo_with(false);
+        split_push_origin(&work, &remote);
+        let fake = Arc::new(Fake { echo_submit: true, ..Default::default() });
+        fake.snapshot("ph-test-base", "v1");
+        fake.on_exec("probe", Ok(probe_json()));
+        let mgr = manager(fake.clone(), dir.path());
+        let mut req = quick_request(&work, "ph-test-base");
+        req.chat_id = Some("chat-42".into());
+        let QuickSubmitOutcome::Accepted { record } = do_quick_submit(&mgr, None, req).unwrap() else {
+            panic!("expected accepted")
+        };
+        assert_eq!(record.origin_chat_id.as_deref(), Some("chat-42"));
+    }
+
+    #[test]
+    fn completed_run_returns_home_by_fast_forwarding_and_deleting_the_output_branch() {
+        let (dir, work, remote) = temp_repo_with(false);
+        let fake = base_fake();
+        let mgr = manager(fake.clone(), dir.path());
+        let run_id = "11111111-2222-4333-8444-555555555555";
+        let (source_sha, result_sha, mut rec) = completed_return_setup(&work, run_id, &fake);
+        rec.origin_chat_id = Some("chat-1".into());
+        mgr.store.lock().unwrap().put(rec).unwrap();
+        assert_eq!(head_sha(&work), source_sha);
+        fake.on_exec("inspect", Ok(snap_json(run_id, "completed", 20, 2, false)));
+        fake.on_exec("events", Ok(events_json(run_id, &[1, 2])));
+        fake.on_exec("result", Ok(result_json(run_id, Some(&result_sha), true)));
+        fake.on_exec("diff", Ok(diff_json()));
+        let r = do_sync(&mgr, None, run_id, false).unwrap();
+        assert_eq!(r.returned, Some(ReturnOutcome::FastForwarded { sha: result_sha.clone() }));
+        assert!(r.return_error.is_none(), "{:?}", r.return_error);
+        assert_eq!(r.origin_chat_id.as_deref(), Some("chat-1"));
+        // Local branch and origin both carry the cloud commit now.
+        assert_eq!(head_sha(&work), result_sha);
+        assert_eq!(git(&remote, &["rev-parse", "refs/heads/main"]).unwrap(), result_sha);
+        // The output branch is gone from the remote after a clean return.
+        assert!(branch_missing(&remote, run_id), "output branch should be deleted");
+        // The VM released as usual (return does not block it).
+        assert_eq!(r.machine, MachineState::Released);
+    }
+
+    #[test]
+    fn a_local_commit_during_the_run_diverges_and_leaves_the_branch_untouched() {
+        let (dir, work, remote) = temp_repo_with(false);
+        let fake = base_fake();
+        let mgr = manager(fake.clone(), dir.path());
+        let run_id = "11111111-2222-4333-8444-555555555555";
+        let (_source_sha, result_sha, rec) = completed_return_setup(&work, run_id, &fake);
+        mgr.store.lock().unwrap().put(rec).unwrap();
+        // The user commits locally while the run is in flight.
+        std::fs::write(Path::new(&work).join("local.txt"), "mine").unwrap();
+        let local_head = git_commit(&work, "local work");
+        fake.on_exec("inspect", Ok(snap_json(run_id, "completed", 20, 2, false)));
+        fake.on_exec("events", Ok(events_json(run_id, &[1, 2])));
+        fake.on_exec("result", Ok(result_json(run_id, Some(&result_sha), true)));
+        fake.on_exec("diff", Ok(diff_json()));
+        let r = do_sync(&mgr, None, run_id, false).unwrap();
+        match r.returned {
+            Some(ReturnOutcome::Diverged { reason }) => assert!(reason.contains("moved"), "{reason}"),
+            other => panic!("expected diverged, got {other:?}"),
+        }
+        // Branch untouched; the output branch survives for the review import.
+        assert_eq!(head_sha(&work), local_head);
+        assert!(!branch_missing(&remote, run_id), "output branch kept when diverged");
+        assert_eq!(git(&remote, &["rev-parse", "refs/heads/main"]).unwrap(), _source_sha);
+    }
+
+    #[test]
+    fn a_dirty_worktree_diverges_without_moving_the_branch() {
+        let (dir, work, remote) = temp_repo_with(false);
+        let fake = base_fake();
+        let mgr = manager(fake.clone(), dir.path());
+        let run_id = "11111111-2222-4333-8444-555555555555";
+        let (source_sha, result_sha, rec) = completed_return_setup(&work, run_id, &fake);
+        mgr.store.lock().unwrap().put(rec).unwrap();
+        std::fs::write(Path::new(&work).join("a.txt"), "uncommitted edit").unwrap();
+        fake.on_exec("inspect", Ok(snap_json(run_id, "completed", 20, 2, false)));
+        fake.on_exec("events", Ok(events_json(run_id, &[1, 2])));
+        fake.on_exec("result", Ok(result_json(run_id, Some(&result_sha), true)));
+        fake.on_exec("diff", Ok(diff_json()));
+        let r = do_sync(&mgr, None, run_id, false).unwrap();
+        match r.returned {
+            Some(ReturnOutcome::Diverged { reason }) => assert!(reason.contains("uncommitted"), "{reason}"),
+            other => panic!("expected diverged, got {other:?}"),
+        }
+        assert_eq!(git(Path::new(&work), &["rev-parse", "HEAD"]).unwrap(), source_sha);
+        assert!(!branch_missing(&remote, run_id));
+    }
+
+    #[test]
+    fn a_failed_run_reports_to_chat_without_touching_git() {
+        let (dir, work, remote) = temp_repo_with(false);
+        let fake = base_fake();
+        let mgr = manager(fake.clone(), dir.path());
+        let run_id = "11111111-2222-4333-8444-555555555555";
+        let vm = task_vm_name(None, run_id);
+        fake.machine(&vm, "running");
+        let source_sha = head_sha(&work);
+        let mut rec = accepted_record(&work, run_id);
+        rec.source_branch = Some("main".into());
+        rec.origin_chat_id = Some("chat-1".into());
+        mgr.store.lock().unwrap().put(rec).unwrap();
+        fake.on_exec("inspect", Ok(snap_json(run_id, "failed", 20, 2, false)));
+        fake.on_exec("events", Ok(events_json(run_id, &[1, 2])));
+        fake.on_exec("result", Ok(result_json(run_id, Some("b"), false)));
+        fake.on_exec("diff", Ok(diff_json()));
+        let r = do_sync(&mgr, None, run_id, false).unwrap();
+        assert_eq!(r.returned, Some(ReturnOutcome::ReportedOnly));
+        assert_eq!(r.machine, MachineState::Holding);
+        // No integration: branch and origin untouched.
+        assert_eq!(head_sha(&work), source_sha);
+        assert_eq!(git(&remote, &["rev-parse", "refs/heads/main"]).unwrap(), source_sha);
+    }
+
+    #[test]
+    fn importing_a_no_change_result_reports_no_changes_instead_of_a_git_404() {
+        // The agent produced nothing: the result equals the source commit, so no
+        // output branch was ever pushed. Import must say so, not fetch a ghost ref.
+        let (dir, work, _remote) = temp_repo_with(false);
+        let fake = base_fake();
+        let mgr = manager(fake.clone(), dir.path());
+        let run_id = "11111111-2222-4333-8444-555555555555";
+        let source_sha = head_sha(&work);
+        let mut rec = accepted_record(&work, run_id);
+        rec.manifest.source.commit_sha = source_sha.clone();
+        rec.result = Some(
+            serde_json::from_str::<Response<ResultManifest>>(&result_json(run_id, Some(&source_sha), true))
+                .unwrap()
+                .into_result()
+                .unwrap(),
+        );
+        rec.remote_verified = true;
+        mgr.store.lock().unwrap().put(rec).unwrap();
+        let err = do_import(&mgr, None, run_id).unwrap_err();
+        assert!(err.contains("no changes") || err.contains("nothing to fetch"), "{err}");
+    }
+
+    #[test]
+    fn a_run_that_finished_while_the_app_was_closed_returns_on_the_next_tick() {
+        let (dir, work, remote) = temp_repo_with(false);
+        let fake = base_fake();
+        let mgr = manager(fake.clone(), dir.path());
+        let run_id = "11111111-2222-4333-8444-555555555555";
+        let (_source_sha, result_sha, mut rec) = completed_return_setup(&work, run_id, &fake);
+        // The run finished, the VM was already released, but the return never ran.
+        rec.snapshot = Some(snapshot_of(run_id, "completed"));
+        rec.result = Some(
+            serde_json::from_str::<Response<ResultManifest>>(&result_json(run_id, Some(&result_sha), true))
+                .unwrap()
+                .into_result()
+                .unwrap(),
+        );
+        rec.remote_verified = true;
+        rec.diff_cached = Some(DiffMeta { bytes: 1, truncated: false });
+        rec.machine = MachineState::Released;
+        rec.vm_released = true;
+        mgr.store.lock().unwrap().put(rec).unwrap();
+        let actions = do_lifecycle_tick(&mgr, None).unwrap();
+        assert!(actions.iter().any(|a| a.contains("fast-forwarded")), "{actions:?}");
+        let r = load(&mgr, run_id).unwrap();
+        assert_eq!(r.returned, Some(ReturnOutcome::FastForwarded { sha: result_sha.clone() }));
+        assert_eq!(head_sha(&work), result_sha);
+        assert!(branch_missing(&remote, run_id));
     }
 
     #[test]
@@ -2713,6 +3074,7 @@ mod e2e {
             fake_script: (provider == "fake").then(|| script.clone()),
             brief: format!("# Plan\n\n1. Read the repository layout.\n2. {task}\n3. Make the acceptance check pass: it verifies {expect_file} exists.\n"),
             env_names: vec![],
+            chat_id: None,
         };
         let t0 = Instant::now();
         let rec = do_submit(&mgr, None, req).expect("submit");

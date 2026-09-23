@@ -153,6 +153,16 @@ describe("hydrate with a pre-cloud powerhouse.json", () => {
     expect(cloud.machineCeiling).toBe(18);
   });
 
+  it("falls back to the default when a stored base snapshot is blank", () => {
+    const tree = structuredClone(LEGACY_TREE) as { settings: Record<string, unknown> };
+    tree.settings.cloud = { baseSnapshot: "", deadlineMinutes: 10 };
+    useAppStore.getState().hydrate(tree as never);
+    const cloud = cloudSettingsOf(useAppStore.getState().settings);
+    expect(cloud.baseSnapshot).toBe("powerhouse-base");
+    // Other stored values are still honoured.
+    expect(cloud.deadlineMinutes).toBe(10);
+  });
+
   it("drops the fork-era base VM setting in favour of the snapshot default", () => {
     const tree = structuredClone(LEGACY_TREE) as { settings: Record<string, unknown> };
     tree.settings.cloud = { baseVm: "powerhouse-cloud-base" };
@@ -172,5 +182,23 @@ describe("cloud run mirror", () => {
     expect(useAppStore.getState().cloudRuns["r1"]).toBe(rec);
     useAppStore.getState().removeCloudRun("r1");
     expect(useAppStore.getState().cloudRuns).toEqual({});
+  });
+});
+
+describe("chat activity", () => {
+  it("sets, replaces, and clears a chat's activity", () => {
+    useAppStore.setState({ chatActivity: {} });
+    const { setChatActivity } = useAppStore.getState();
+    setChatActivity("c1", "working");
+    setChatActivity("c1", "done");
+    expect(useAppStore.getState().chatActivity).toEqual({ c1: "done" });
+    setChatActivity("c1", null);
+    expect(useAppStore.getState().chatActivity).toEqual({});
+  });
+
+  it("drops the activity of a removed chat", () => {
+    useAppStore.setState({ repos: [], chatActivity: { c1: "done", c2: "working" } });
+    useAppStore.getState().removeChat("r", "b", "c1");
+    expect(useAppStore.getState().chatActivity).toEqual({ c2: "working" });
   });
 });

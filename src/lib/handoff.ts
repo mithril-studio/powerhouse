@@ -65,7 +65,7 @@ export async function startHandoff(repoId: string, branchId: string) {
     s.updateChatAcpTranscript(repoId, branchId, chatId, (items) =>
       appendUserMessage(items, HANDOFF_INSTRUCTION),
     );
-    void sendAcpPrompt(chatId, HANDOFF_INSTRUCTION).catch(async (error) => {
+    void sendAcpPrompt(chatId, [{ type: "text", text: HANDOFF_INSTRUCTION }]).catch(async (error) => {
       cancelHandoff(branchId);
       useAppStore.getState().updateChatAcpTranscript(repoId, branchId, chatId, (items) =>
         appendSystemMessage(items, `Handoff failed: ${String(error)}`, "error"),

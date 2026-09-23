@@ -1,4 +1,6 @@
 import type {
+  ContentBlock,
+  Cost,
   PlanEntry,
   SessionUpdate,
   ToolCallContent,
@@ -6,6 +8,7 @@ import type {
   ToolCallStatus,
   ToolKind,
 } from "@agentclientprotocol/sdk";
+import { registerAttachment, type AttachmentRef } from "./attachments";
 
 export type AcpMessageRole = "user" | "assistant" | "thought" | "system";
 
@@ -17,6 +20,8 @@ export type AcpTranscriptItem =
       text: string;
       messageId?: string;
       tone?: "normal" | "error";
+      /** Images sent with (user) or returned in (assistant) this message. */
+      attachments?: AttachmentRef[];
     }
   | {
       id: string;
@@ -34,15 +39,59 @@ export type AcpTranscriptItem =
       id: "plan";
       type: "plan";
       entries: PlanEntry[];
-    };
+    }
+  | {
+      /** `cloud-result-<runId>` — the run id is the dedupe key across restarts. */
+      id: string;
+      type: "cloud-result";
+      runId: string;
+      /** True when appended at boot for a run that had already finished. */
+      late: boolean;
+    }
+  | AcpUsageItem;
+
+/** Context-window snapshot reported by the agent after a model call. */
+export interface AcpUsageItem {
+  id: string;
+  type: "usage";
+  /** Tokens currently in the model's context. */
+  used: number;
+  /** Total context window size in tokens. */
+  size: number;
+  /** Cumulative session cost when the agent reports it. */
+  cost?: Cost | null;
+}
 
 const newId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
+
+/** Append the cloud-result card for a run once. The run id keys the dedupe, so
+ *  replayed record updates and restarts never double-post. */
+export function appendCloudResult(
+  transcript: AcpTranscriptItem[],
+  runId: string,
+  late: boolean,
+): AcpTranscriptItem[] {
+  if (transcript.some((item) => item.type === "cloud-result" && item.runId === runId)) {
+    return transcript;
+  }
+  return [...transcript, { id: `cloud-result-${runId}`, type: "cloud-result", runId, late }];
+}
 
 export function appendUserMessage(
   transcript: AcpTranscriptItem[],
   text: string,
+  attachments: AttachmentRef[] = [],
 ): AcpTranscriptItem[] {
-  return [...transcript, { id: newId("user"), type: "message", role: "user", text }];
+  return [
+    ...transcript,
+    {
+      id: newId("user"),
+      type: "message",
+      role: "user",
+      text,
+      ...(attachments.length ? { attachments } : {}),
+    },
+  ];
 }
 
 export function appendSystemMessage(
@@ -56,34 +105,95 @@ export function appendSystemMessage(
   ];
 }
 
-function appendTextChunk(
+type Chunk =
+  | { type: "text"; text: string }
+  | { type: "image"; mimeType: string; data: string; uri?: string | null };
+
+function toChunk(content: ContentBlock): Chunk | null {
+  if (content.type === "text") return content.text ? content : null;
+  if (content.type === "image") return content;
+  return null;
+}
+
+/** Merges a streamed chunk into the open message of the same role, or opens one. */
+function appendChunk(
   transcript: AcpTranscriptItem[],
   role: "user" | "assistant" | "thought",
-  text: string,
+  chunk: Chunk,
   messageId?: string | null,
 ): AcpTranscriptItem[] {
-  if (!text) return transcript;
   const index = messageId
     ? transcript.findIndex(
         (item) => item.type === "message" && item.messageId === messageId,
       )
     : transcript.length - 1;
   const current = transcript[index];
+  const merge = (item: Extract<AcpTranscriptItem, { type: "message" }>) => {
+    if (chunk.type === "text") return { ...item, text: item.text + chunk.text };
+    const ref = registerAttachment({
+      name: chunk.uri ? chunk.uri.split(/[\\/]/).pop() ?? "image" : "image",
+      mimeType: chunk.mimeType,
+      data: chunk.data,
+    });
+    return { ...item, attachments: [...(item.attachments ?? []), ref] };
+  };
   if (current?.type === "message" && current.role === role) {
     return transcript.map((item, itemIndex) =>
-      itemIndex === index ? { ...current, text: current.text + text } : item,
+      itemIndex === index ? merge(current) : item,
     );
   }
   return [
     ...transcript,
-    {
+    merge({
       id: messageId ?? newId(role),
       type: "message",
       role,
-      text,
+      text: "",
       ...(messageId ? { messageId } : {}),
+    }),
+  ];
+}
+
+/**
+ * Records the agent's latest context-window reading at the end of the
+ * current turn. Agents emit usage after every model call, so a single turn
+ * can produce many readings; only the newest one per turn is kept and it is
+ * always the last item of that turn.
+ */
+function recordUsage(
+  transcript: AcpTranscriptItem[],
+  usage: { used: number; size: number; cost?: Cost | null },
+): AcpTranscriptItem[] {
+  let turnStart = -1;
+  for (let index = transcript.length - 1; index >= 0; index -= 1) {
+    const item = transcript[index];
+    if (item.type === "message" && item.role === "user") {
+      turnStart = index;
+      break;
+    }
+  }
+  const kept = transcript.filter(
+    (item, index) => !(item.type === "usage" && index > turnStart),
+  );
+  return [
+    ...kept,
+    {
+      id: newId("usage"),
+      type: "usage",
+      used: usage.used,
+      size: usage.size,
+      ...(usage.cost != null ? { cost: usage.cost } : {}),
     },
   ];
+}
+
+/** The most recent context-window reading in the transcript, if any. */
+export function latestUsage(transcript: AcpTranscriptItem[]): AcpUsageItem | null {
+  for (let index = transcript.length - 1; index >= 0; index -= 1) {
+    const item = transcript[index];
+    if (item.type === "usage") return item;
+  }
+  return null;
 }
 
 export function applyAcpUpdate(
@@ -92,21 +202,22 @@ export function applyAcpUpdate(
   options: { acceptUserMessageChunks?: boolean } = {},
 ): AcpTranscriptItem[] {
   switch (update.sessionUpdate) {
-    case "agent_message_chunk":
-      return update.content.type === "text"
-        ? appendTextChunk(transcript, "assistant", update.content.text, update.messageId)
-        : transcript;
-    case "agent_thought_chunk":
-      return update.content.type === "text"
-        ? appendTextChunk(transcript, "thought", update.content.text, update.messageId)
-        : transcript;
-    case "user_message_chunk":
+    case "agent_message_chunk": {
+      const chunk = toChunk(update.content);
+      return chunk ? appendChunk(transcript, "assistant", chunk, update.messageId) : transcript;
+    }
+    case "agent_thought_chunk": {
+      const chunk = toChunk(update.content);
+      return chunk ? appendChunk(transcript, "thought", chunk, update.messageId) : transcript;
+    }
+    case "user_message_chunk": {
       // Powerhouse records submitted prompts immediately. Ignoring echoed user
       // chunks avoids duplicates. During session/load, the agent is the source
       // of truth and replays the complete transcript, including user messages.
-      return options.acceptUserMessageChunks && update.content.type === "text"
-        ? appendTextChunk(transcript, "user", update.content.text, update.messageId)
-        : transcript;
+      if (!options.acceptUserMessageChunks) return transcript;
+      const chunk = toChunk(update.content);
+      return chunk ? appendChunk(transcript, "user", chunk, update.messageId) : transcript;
+    }
     case "tool_call":
       return [
         ...transcript,
@@ -142,6 +253,8 @@ export function applyAcpUpdate(
       const withoutPlan = transcript.filter((item) => item.type !== "plan");
       return [...withoutPlan, { id: "plan", type: "plan", entries: update.entries }];
     }
+    case "usage_update":
+      return recordUsage(transcript, update);
     default:
       return transcript;
   }

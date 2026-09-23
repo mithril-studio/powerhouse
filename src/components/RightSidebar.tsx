@@ -17,7 +17,7 @@ import { QueuePane } from "./QueuePane";
 import { CloudPane } from "./CloudPane";
 
 const TABS: { id: RightTab; label: string }[] = [
-  { id: "files", label: "All files" },
+  { id: "files", label: "Files" },
   { id: "changes", label: "Changes" },
   { id: "diff", label: "Diff" },
   { id: "merge", label: "Merge" },
