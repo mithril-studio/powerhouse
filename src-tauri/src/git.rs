@@ -101,9 +101,18 @@ fn repo_name_from_url(url: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.to_string())
 }
 
+/// Whether a clone URL is an HTTPS github.com remote — the only case where it's
+/// safe to attach the stored GitHub token (attaching it to another host would
+/// leak the credential). SSH remotes (`git@github.com:...`) authenticate via
+/// keys, so they're excluded.
+fn is_github_https(url: &str) -> bool {
+    let u = url.trim();
+    (u.starts_with("https://github.com/") || u.starts_with("https://www.github.com/"))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::repo_name_from_url;
+    use super::{is_github_https, repo_name_from_url};
 
     #[test]
     fn parses_repo_name_from_various_url_shapes() {
@@ -114,6 +123,15 @@ mod tests {
         assert_eq!(repo_name_from_url("  https://github.com/owner/My-Repo.git  ").as_deref(), Some("My-Repo"));
         assert_eq!(repo_name_from_url(""), None);
         assert_eq!(repo_name_from_url("   "), None);
+    }
+
+    #[test]
+    fn recognizes_github_https_remotes_only() {
+        assert!(is_github_https("https://github.com/owner/repo.git"));
+        assert!(is_github_https("  https://github.com/owner/repo  "));
+        assert!(!is_github_https("git@github.com:owner/repo.git"));
+        assert!(!is_github_https("https://gitlab.com/owner/repo.git"));
+        assert!(!is_github_https("https://evil.com/github.com/x.git"));
     }
 }
 
@@ -137,9 +155,21 @@ pub fn git_clone_repo(url: String, dest_parent: Option<String>) -> Result<RepoIn
         return Err(format!("{} already exists — pick another location.", target.display()));
     }
     let target_str = target.to_string_lossy().to_string();
-    let output = Command::new(GIT)
-        .args(["clone", "--", &url, &target_str])
-        .env("GIT_TERMINAL_PROMPT", "0")
+    // Inject a transient GitHub-token Authorization header for HTTPS github.com
+    // remotes so private-repo clones work without ambient credentials. Scoped to
+    // github.com so the token never leaks to another host; no-op for SSH remotes
+    // or when disconnected. Passed via `-c` so it never lands in repo config.
+    let auth = is_github_https(&url)
+        .then(crate::github::token)
+        .flatten()
+        .map(|t| format!("http.extraheader=AUTHORIZATION: {}", crate::github::basic_auth_header(&t)));
+    let mut cmd = Command::new(GIT);
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
+    if let Some(cfg) = &auth {
+        cmd.arg("-c").arg(cfg);
+    }
+    cmd.args(["clone", "--", &url, &target_str]);
+    let output = cmd
         .output()
         .map_err(|e| format!("failed to run git: {e}"))?;
     if !output.status.success() {
