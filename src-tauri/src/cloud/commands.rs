@@ -423,7 +423,7 @@ pub fn build_manifest(req: &SubmitRequest, run_id: &str, source: &SourceInfo, ba
         },
         output_branch: RunManifest::expected_output_branch(run_id),
         workspace: WorkspaceSpec::from_snapshot(&base.name, base.version.clone()),
-        agent: AgentSpec {
+        agent: Some(AgentSpec {
             provider,
             model: req.model.clone().filter(|m| !m.trim().is_empty()),
             permission_mode: req.permission_mode.clone(),
@@ -431,7 +431,8 @@ pub fn build_manifest(req: &SubmitRequest, run_id: &str, source: &SourceInfo, ba
             max_turns: req.max_turns,
             max_budget_usd: req.max_budget_usd,
             fake_script: req.fake_script.clone(),
-        },
+        }),
+        script: None,
         checks: req.checks.iter().filter(|c| !c.command.trim().is_empty()).cloned().collect(),
         context: ContextSpec { brief_markdown: req.brief.chars().take(MAX_BRIEF_BYTES).collect() },
         deadline_seconds: req.deadline_seconds,
@@ -503,7 +504,7 @@ pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest
     let digest = manifest.digest();
     // Credentials are Powerhouse's own, per run, and must exist before any
     // machine is touched. Git publication needs a token only for HTTPS remotes.
-    let need_claude = manifest.agent.provider == AgentProvider::Claude;
+    let need_claude = manifest.agent.as_ref().is_some_and(|a| a.provider == AgentProvider::Claude);
     let git_remote = manifest.source.remote_url.starts_with("https://").then_some(manifest.source.remote_url.as_str());
     let project_env = secrets::project_env_values(mgr.secrets.as_ref(), &req.repo_id, &req.env_names)?;
     let credentials_text = secrets::render_run_credentials(mgr.secrets.as_ref(), need_claude, git_remote, &project_env)?;

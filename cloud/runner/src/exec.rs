@@ -2,6 +2,9 @@
 //! and owns every state transition: workspace preparation, agent supervision,
 //! checks, snapshot, publication, and terminal outcome.
 
+#[path = "script.rs"]
+mod script;
+
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -310,6 +313,7 @@ fn empty_result(ctx: &Ctx) -> ResultManifest {
         provider_session_id: None,
         usage: None,
         agent_exit_code: None,
+        script: None,
         partial_work_preserved: false,
     }
 }
@@ -367,6 +371,10 @@ fn run_stages(ctx: &mut Ctx) -> Result<(), String> {
         "workspace.ready",
         serde_json::json!({ "sha": ctx.row.manifest.source.commit_sha, "path": ctx.workspace }),
     );
+
+    if ctx.row.manifest.script.is_some() {
+        return run_script(ctx, result);
+    }
 
     // ---- running ---------------------------------------------------------
     ctx.stage(RunState::Running, "agent")?;
@@ -437,6 +445,35 @@ fn run_stages(ctx: &mut Ctx) -> Result<(), String> {
         return finish(ctx, RunState::Failed, Some(RunError { stage: "publishing".into(), message: e }), &result);
     }
     finish(ctx, RunState::Completed, None, &result)
+}
+
+/// A script is one terminal job: no model invocation, checks, snapshot commit,
+/// or publication. Any retry must use a new run identity.
+fn run_script(ctx: &mut Ctx, mut result: ResultManifest) -> Result<(), String> {
+    ctx.stage(RunState::Running, "script")?;
+    let spec = ctx.row.manifest.script.as_ref().ok_or("script spec missing")?;
+    let env = ctx.secrets.project_env.clone();
+    let mut cmd = ctx.agent_command(script::build_command(
+        &spec.command, &ctx.workspace, &paths::agent_home(&ctx.row.run_id),
+        &ctx.row.run_id, &env,
+    ));
+    let log_path = ctx.results.join("script.log");
+    let (script_result, stop) = script::run(&mut cmd, &log_path, &env, ctx)?;
+    let code = script_result.exit_code;
+    ctx.event("script.exited", serde_json::json!({
+        "exit_code": code, "stopped_by": stop.map(|s| format!("{s:?}")),
+        "output_truncated": script_result.output_truncated, "log_bytes": script_result.log_bytes,
+    }));
+    result.script = Some(script_result);
+    let (state, error) = if let Some(stop) = stop {
+        stop_to_outcome(stop, "script")
+    } else if code == Some(0) {
+        (RunState::Completed, None)
+    } else {
+        let message = code.map_or_else(|| "script terminated by signal".into(), |code| format!("script exited with code {code}"));
+        (RunState::Failed, Some(RunError { stage: "script".into(), message }))
+    };
+    finish(ctx, state, error, &result)
 }
 
 fn prepare_workspace(ctx: &mut Ctx) -> Result<(), String> {
@@ -519,10 +556,11 @@ pub fn render_brief(m: &powerhouse_cloud_protocol::RunManifest) -> String {
 /// Spawn the agent under the unprivileged identity and stream its output.
 fn run_agent(ctx: &mut Ctx) -> Result<(AgentOutcome, Option<i32>, Option<Stop>), String> {
     let m = ctx.row.manifest.clone();
+    let agent_spec = m.agent.as_ref().ok_or("agent workload is missing")?;
     // The fake provider walks the same delivery path as the real one, so tests
     // prove what the agent process can and cannot see.
     let mut secrets: Vec<(String, String)> = ctx.secrets.claude.clone();
-    if m.agent.provider == AgentProvider::Claude && secrets.is_empty() {
+    if agent_spec.provider == AgentProvider::Claude && secrets.is_empty() {
         return Ok((
             AgentOutcome::default(),
             Some(78),
@@ -535,14 +573,14 @@ fn run_agent(ctx: &mut Ctx) -> Result<(AgentOutcome, Option<i32>, Option<Stop>),
     }
     secrets.extend(ctx.secrets.project_env.iter().cloned());
     let home = paths::agent_home(&m.run_id);
-    let mut cmd = agent::build_command(&m, &ctx.self_bin, &ctx.workspace, &home, &secrets);
+    let mut cmd = agent::build_command(&m, agent_spec, &ctx.self_bin, &ctx.workspace, &home, &secrets);
     cmd.env("POWERHOUSE_RUNNER_ROOT", paths::root());
     let stderr_path = ctx.results.join("agent.stderr.log");
     let stderr_file = std::fs::File::create(&stderr_path).map_err(|e| e.to_string())?;
     let mut cmd = ctx.agent_command(cmd);
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::from(stderr_file));
     let mut child = cmd.spawn().map_err(|e| format!("could not start agent: {e}"))?;
-    ctx.event("agent.started", serde_json::json!({ "pid": child.id(), "provider": m.agent.provider }));
+    ctx.event("agent.started", serde_json::json!({ "pid": child.id(), "provider": agent_spec.provider }));
 
     let stdout = child.stdout.take().ok_or("agent stdout missing")?;
     let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
@@ -883,6 +921,7 @@ pub fn finalize(run_id: &str) -> Result<(), String> {
             provider_session_id: None,
             usage: None,
             agent_exit_code: None,
+            script: None,
             partial_work_preserved: paths::workspace_dir(run_id).exists(),
         };
         r.checks = row
