@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { WorkflowDraft } from "../features/workflows/workflowDrafts";
 import type { AcpTranscriptItem } from "../lib/acpTranscript";
 
 export type AgentTransport = "acp" | "pty";
@@ -198,6 +199,7 @@ export interface PersistedTree {
   queues: Record<string, QueueEntry[]>;
   /** MRU of opened projects, for the Add-project menu's Recents. */
   recentRepos: RecentRepo[];
+  workflowDrafts: WorkflowDraft[];
 }
 
 /** Prepend a project to the MRU, dedupe by path, cap the length. */
@@ -211,6 +213,9 @@ interface LegacyTree {
 }
 
 interface AppState extends PersistedTree {
+  workspaceView: "home" | "workflows";
+  setWorkspaceView: (view: "home" | "workflows") => void;
+  saveWorkflowDraft: (draft: WorkflowDraft) => void;
   hydrated: boolean;
   chatStatus: Record<string, ChatStatus>;
   branchModalRepoId: string | null;
@@ -481,6 +486,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   selection: { repoId: null, branchId: null },
   settings: seedSettings(),
   queues: {},
+  workflowDrafts: [],
+  workspaceView: "home",
+  setWorkspaceView: (workspaceView) => set({ workspaceView, settingsOpen: false, telemetryOpen: false }),
+  saveWorkflowDraft: (draft) => set((s) => ({
+    workflowDrafts: s.workflowDrafts.some((d) => d.id === draft.id)
+      ? s.workflowDrafts.map((d) => d.id === draft.id ? draft : d)
+      : [...s.workflowDrafts, draft],
+  })),
   hydrated: false,
   chatStatus: {},
   branchModalRepoId: null,
@@ -500,6 +513,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   hydrate: (tree) =>
     set({
+      workflowDrafts: tree?.workflowDrafts ?? [],
       // Migration: default the queue-config fields for repos persisted before
       // they existed.
       repos: (tree?.repos ?? []).map((r) => ({
@@ -662,8 +676,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     })),
 
   // Selecting a project/branch is a navigation — it also leaves the telemetry
-  // page (which otherwise covers the main area).
-  select: (repoId, branchId) => set({ selection: { repoId, branchId }, telemetryOpen: false }),
+  // page and the workflows view (which otherwise cover the main area).
+  select: (repoId, branchId) =>
+    set({ selection: { repoId, branchId }, telemetryOpen: false, workspaceView: "home" }),
 
   setChatStatus: (chatId, status) =>
     set((s) => ({ chatStatus: { ...s.chatStatus, [chatId]: status } })),

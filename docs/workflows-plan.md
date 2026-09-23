@@ -1,6 +1,6 @@
 # DBOS workflows in Powerhouse
 
-Implementation plan, updated 2026-09-23 after pulling `origin/main` through `d92d9f3`. The script-job foundation is implemented on `feature/workflow-script-jobs`; the DBOS service and workflow UI are not yet implemented. No infrastructure was provisioned by this increment.
+Implementation plan, updated 2026-09-23 after pulling `origin/main` through `d92d9f3`. The script-job foundation and local draft page are implemented on `feature/workflow-script-jobs`; the DBOS service and live run UI are not yet implemented. No infrastructure was provisioned by these increments.
 
 ## Product outcome and assumptions
 
@@ -12,7 +12,7 @@ Start with one owner and repository-scoped workflows. Include ownership in store
 
 ## What already exists
 
-- [Sidebar](../src/components/Sidebar.tsx) has an unconnected Workflows navigation item.
+- [Sidebar](../src/components/Sidebar.tsx) opens the [Workflows page](../src/features/workflows/WorkflowsPage.tsx) beside the persistent project navigation. Home or project/branch selection returns to the existing workspace without unmounting chats or terminals.
 - [App](../src/App.tsx) renders terminals and the existing repository inspectors. Changing views must preserve mounted terminal instances.
 - [WorkflowModal](../src/components/WorkflowModal.tsx) edits a repository's ordered merge-check commands.
 - [Queue engine](../src-tauri/src/queue.rs) runs those checks in a throwaway local worktree, then lands the tested commit and optionally pushes. It keeps execution state and logs in memory.
@@ -32,6 +32,8 @@ There is no DBOS coordinator, server-side workflow database or React Flow depend
 2. **Before deployment:** run the extended Linux/systemd integration suite on a dedicated test VM; publish a new clean runner snapshot and verify `probe.script_protocol_version == 3`. Current snapshots do not gain script support automatically.
 3. **Next implementation increment:** add `server/` with pinned DBOS/boxd dependencies, owner authentication, Postgres migrations and a hard-coded two-script sequence. Persist stable machine/job identities, submit existing runner manifests through short remote commands, and poll/reconcile those same jobs. No canvas or generic graph interpreter yet.
 4. **Acceptance gate:** admit once, disconnect the desktop, restart the coordinator between nodes, recover the original job, stop on nonzero exit, and cancel the active remote process. Prove resource cleanup independently of desktop uptime.
+
+The desktop also has a local-only draft builder: create named workflows per project, edit/reorder/remove script steps, and persist them in `powerhouse.json`. The page uses a simple sequence view, not React Flow. It explicitly disables Run until the server exists; drafts are neither published immutable versions nor executable workflows. Existing merge-check configuration is unchanged. The main sidebar remains outside the page and mounted; hidden project content is inert and project shortcuts cannot act on hidden chats. Settings and Telemetry retain their existing overlay behavior.
 
 ## Architecture
 
