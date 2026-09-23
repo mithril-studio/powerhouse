@@ -25,6 +25,7 @@ import {
   appendUserMessage,
   applyAcpUpdate,
 } from "../lib/acpTranscript";
+import { activityFromStopReason } from "../lib/chatActivity";
 import { consumeAutoSpawn } from "../lib/terminalRegistry";
 import { handoffWatchStart, telemetryAnnotateRun } from "../lib/ipc";
 import type { AgentControlState, ApplyOp } from "../lib/agentControls";
@@ -48,6 +49,8 @@ interface Params {
 export function useAcpSession({ repoId, branch, chat, active }: Params) {
   const settings = useAppStore((state) => state.settings);
   const setChatStatus = useAppStore((state) => state.setChatStatus);
+  const setChatActivity = useAppStore((state) => state.setChatActivity);
+  const activity = useAppStore((state) => state.chatActivity[chat.id]);
   const setChatAgentSession = useAppStore((state) => state.setChatAgentSession);
   const updateTranscript = useAppStore((state) => state.updateChatAcpTranscript);
   const profile = resolveAgent(settings, chat.agentId);
@@ -64,6 +67,17 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
   const [supportsImages, setSupportsImages] = useState(false);
   const closingRef = useRef(false);
   const replayingRef = useRef(false);
+  const activeRef = useRef(active);
+  activeRef.current = active;
+
+  /** Marks a finished turn unseen, unless the user is looking at this chat. */
+  const finishTurn = useCallback(
+    (outcome: ReturnType<typeof activityFromStopReason>) => {
+      const seen = activeRef.current && document.hasFocus();
+      setChatActivity(chat.id, seen ? null : outcome);
+    },
+    [chat.id, setChatActivity],
+  );
 
   const mutateTranscript = useCallback(
     (update: Parameters<typeof updateTranscript>[3]) =>
@@ -79,14 +93,16 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
         appendUserMessage(items, prompt, attachments.map(toRef)),
       );
       try {
-        await sendAcpPrompt(chat.id, promptBlocks(prompt, attachments));
+        const response = await sendAcpPrompt(chat.id, promptBlocks(prompt, attachments));
+        finishTurn(activityFromStopReason(response.stopReason));
       } catch (cause) {
+        finishTurn("error");
         mutateTranscript((items) =>
           appendSystemMessage(items, `Prompt failed: ${String(cause)}`, "error"),
         );
       }
     },
-    [chat.id, mutateTranscript],
+    [chat.id, mutateTranscript, finishTurn],
   );
 
   const start = useCallback(
@@ -140,7 +156,10 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
               replayingRef.current = replaying;
               if (replaying) mutateTranscript(() => []);
             },
-            onBusyChange: (working) => setBusy(working),
+            onBusyChange: (working) => {
+              setBusy(working);
+              if (working) setChatActivity(chat.id, "working");
+            },
             onStderr: (chunk) =>
               setDiagnostics((current) => `${current}${chunk}`.slice(-4_000)),
             onExit: (code) => {
@@ -150,6 +169,9 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
                 return null;
               });
               setBusy(false);
+              if (useAppStore.getState().chatActivity[chat.id] === "working") {
+                finishTurn("error");
+              }
               setConnection("exited");
               setChatStatus(chat.id, "exited");
               if (code !== 0) {
@@ -212,9 +234,23 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
       mutateTranscript,
       setChatAgentSession,
       setChatStatus,
+      setChatActivity,
+      finishTurn,
       submitPrompt,
     ],
   );
+
+  // A finished turn counts as seen once its chat is on screen and focused.
+  useEffect(() => {
+    if (!active || !activity || activity === "working") return;
+    const clear = () => setChatActivity(chat.id, null);
+    if (document.hasFocus()) {
+      clear();
+      return;
+    }
+    window.addEventListener("focus", clear, { once: true });
+    return () => window.removeEventListener("focus", clear);
+  }, [active, activity, chat.id, setChatActivity]);
 
   // Chats created this session auto-connect; restored ones wait for Resume/Start.
   useEffect(() => {

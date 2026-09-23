@@ -164,3 +164,21 @@ describe("cloud run mirror", () => {
     expect(useAppStore.getState().cloudRuns).toEqual({});
   });
 });
+
+describe("chat activity", () => {
+  it("sets, replaces, and clears a chat's activity", () => {
+    useAppStore.setState({ chatActivity: {} });
+    const { setChatActivity } = useAppStore.getState();
+    setChatActivity("c1", "working");
+    setChatActivity("c1", "done");
+    expect(useAppStore.getState().chatActivity).toEqual({ c1: "done" });
+    setChatActivity("c1", null);
+    expect(useAppStore.getState().chatActivity).toEqual({});
+  });
+
+  it("drops the activity of a removed chat", () => {
+    useAppStore.setState({ repos: [], chatActivity: { c1: "done", c2: "working" } });
+    useAppStore.getState().removeChat("r", "b", "c1");
+    expect(useAppStore.getState().chatActivity).toEqual({ c2: "working" });
+  });
+});

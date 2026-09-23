@@ -194,6 +194,9 @@ const RECENTS_CAP = 8;
 /** Runtime-only; terminals/PTYs are never persisted. */
 export type ChatStatus = "idle" | "running" | "exited";
 
+/** Runtime-only agent turn state: working, or finished and not yet viewed. */
+export type ChatActivity = "working" | "done" | "error";
+
 export interface PersistedTree {
   repos: Repo[];
   selection: Selection;
@@ -220,6 +223,8 @@ interface AppState extends PersistedTree {
   saveWorkflowDraft: (draft: WorkflowDraft) => void;
   hydrated: boolean;
   chatStatus: Record<string, ChatStatus>;
+  /** chatId → agent turn state; absent means idle or already seen. */
+  chatActivity: Record<string, ChatActivity>;
   branchModalRepoId: string | null;
   workflowModalRepoId: string | null;
   rightSidebarOpen: boolean;
@@ -277,6 +282,7 @@ interface AppState extends PersistedTree {
   ) => void;
   select: (repoId: string | null, branchId: string | null) => void;
   setChatStatus: (chatId: string, status: ChatStatus) => void;
+  setChatActivity: (chatId: string, activity: ChatActivity | null) => void;
   openBranchModal: (repoId: string) => void;
   closeBranchModal: () => void;
 
@@ -484,6 +490,12 @@ const updateBranch = (
     branches: r.branches.map((b) => (b.id === branchId ? fn(b) : b)),
   }));
 
+function withoutKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  if (!(key in record)) return record;
+  const { [key]: _removed, ...rest } = record;
+  return rest;
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
   repos: [],
   recentRepos: [],
@@ -500,6 +512,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   })),
   hydrated: false,
   chatStatus: {},
+  chatActivity: {},
   branchModalRepoId: null,
   workflowModalRepoId: null,
   rightSidebarOpen: false,
@@ -663,6 +676,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
         return { ...b, chats, activeChatId };
       }),
+      chatActivity: withoutKey(s.chatActivity, chatId),
     })),
 
   setActiveChat: (repoId, branchId, chatId) =>
@@ -716,6 +730,13 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setChatStatus: (chatId, status) =>
     set((s) => ({ chatStatus: { ...s.chatStatus, [chatId]: status } })),
+
+  setChatActivity: (chatId, activity) =>
+    set((s) => ({
+      chatActivity: activity
+        ? { ...s.chatActivity, [chatId]: activity }
+        : withoutKey(s.chatActivity, chatId),
+    })),
 
   openBranchModal: (repoId) => set({ branchModalRepoId: repoId }),
   closeBranchModal: () => set({ branchModalRepoId: null }),
