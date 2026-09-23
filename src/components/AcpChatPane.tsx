@@ -9,6 +9,7 @@ import { cycleMode } from "../lib/agentControls";
 import { buildPalette } from "../lib/acpCommandPalette";
 import { useAcpSession } from "../hooks/useAcpSession";
 import { useAgentShortcuts } from "../hooks/useAgentShortcuts";
+import { usePromptAttachments } from "../hooks/usePromptAttachments";
 import { AcpTranscript } from "./acp/AcpTranscript";
 import { AcpPermissionCard } from "./acp/AcpPermissionCard";
 import { AcpComposer } from "./acp/AcpComposer";
@@ -36,6 +37,12 @@ export function AcpChatPane({ repoId, branch, chat, active }: Props) {
 
   const { profile } = session;
   const connected = session.connection === "ready";
+  const attachments = usePromptAttachments({
+    active: active && connected,
+    supportsImages: session.supportsImages,
+    agentName: session.agentLabel,
+    note: session.note,
+  });
   const paletteView = useMemo(
     () => buildPalette(session.controlState),
     [session.controlState],
@@ -121,11 +128,19 @@ export function AcpChatPane({ repoId, branch, chat, active }: Props) {
           draft={draft}
           onDraftChange={setDraft}
           onSubmit={(prompt) => {
+            const files = attachments.attachments;
             setDraft("");
-            void session.submitPrompt(prompt);
+            attachments.clear();
+            void session.submitPrompt(prompt, files);
           }}
           onOpenCommands={() => setPaletteOpen(true)}
           thinkingLevel={session.thinkingLevel}
+          attachments={attachments.attachments}
+          supportsImages={session.supportsImages}
+          dragging={attachments.dragging}
+          onPasteFiles={(files) => void attachments.addFiles(files)}
+          onPickFiles={() => void attachments.pick()}
+          onRemoveAttachment={attachments.remove}
         />
       )}
       {connected && (

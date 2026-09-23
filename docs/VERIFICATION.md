@@ -41,6 +41,14 @@ Start the app with `pnpm tauri dev`, then:
 - [ ] **Live run.** Open a Claude (ACP) chat, send a prompt. Telemetry → Runs
       shows the run with a pulsing dot; when the reply finishes, the turn has
       a stop reason and tool calls show durations.
+- [ ] **Markdown.** Ask the agent for "a 3-column markdown table and a bullet
+      list". The reply shows a bordered table and real bullets, not pipes and
+      dashes. Fenced code keeps its indentation.
+- [ ] **Images.** In a Claude chat, paste a screenshot (⌃⇧⌘4 then ⌘V), drop a
+      PNG from Finder, and use **+**. Each shows a thumbnail chip; send with
+      "what is this?" and the agent describes the image. The chip persists
+      across a restart as a labelled placeholder. A `.txt` drop is refused with
+      a transcript note.
 - [ ] **Crash retention.** Kill the app mid-turn (`kill -9` the process).
       Relaunch → the run shows an `interrupted` badge and its Evidence tab
       still contains every event up to the kill.

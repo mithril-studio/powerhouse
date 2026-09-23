@@ -2,6 +2,7 @@ import { resolveAgent, useAppStore, type Branch, type Repo } from "../store/appS
 import { deleteChat } from "../lib/actions";
 import { startHandoff } from "../lib/handoff";
 import { quickSubmitBranch } from "../lib/quickSubmit";
+import { ActivityDot } from "./ActivityDot";
 
 interface Props {
   repo: Repo | null;
@@ -17,6 +18,7 @@ export function TabBar({ repo, branch }: Props) {
   const pending = useAppStore((s) =>
     branch ? branch.id in s.pendingHandoff : false,
   );
+  const chatActivity = useAppStore((s) => s.chatActivity);
   const activeRunning = useAppStore((s) =>
     branch?.activeChatId
       ? (s.chatStatus[branch.activeChatId] ?? "idle") === "running"
@@ -39,6 +41,7 @@ export function TabBar({ repo, branch }: Props) {
           {branch.chats.map((chat) => {
             const active = chat.id === branch.activeChatId;
             const agent = resolveAgent(settings, chat.agentId);
+            const activity = chatActivity[chat.id];
             return (
               <div
                 key={chat.id}
@@ -49,6 +52,7 @@ export function TabBar({ repo, branch }: Props) {
                     : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
                 }`}
               >
+                {activity && <ActivityDot activity={activity} />}
                 <span className="max-w-32 truncate">{chat.title}</span>
                 <span className="max-w-20 truncate text-[10px] text-muted-foreground/60">
                   {agent.name}

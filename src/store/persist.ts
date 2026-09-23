@@ -24,13 +24,15 @@ export function startPersistence() {
       s.selection === prev.selection &&
       s.settings === prev.settings &&
       s.queues === prev.queues &&
-      s.recentRepos === prev.recentRepos
+      s.recentRepos === prev.recentRepos &&
+      s.workflowDrafts === prev.workflowDrafts
     ) {
       return;
     }
     window.clearTimeout(timer);
     timer = window.setTimeout(async () => {
-      const { repos, selection, settings, queues, recentRepos } = useAppStore.getState();
+      const { repos, selection, settings, queues, recentRepos, workflowDrafts } =
+        useAppStore.getState();
       const store = await getStore();
       await store.set("tree", {
         repos,
@@ -38,6 +40,7 @@ export function startPersistence() {
         settings,
         queues,
         recentRepos,
+        workflowDrafts,
       } satisfies PersistedTree);
       await store.save();
     }, 300);

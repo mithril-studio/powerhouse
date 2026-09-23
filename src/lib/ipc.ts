@@ -90,6 +90,18 @@ export const gitListFiles = (worktreePath: string) =>
 export const gitFileContent = (worktreePath: string, path: string) =>
   invoke<string>("git_file_content", { worktreePath, path });
 
+export interface ImageFile {
+  name: string;
+  mimeType: string;
+  /** Base64 payload, no data-URL prefix. */
+  data: string;
+  bytes: number;
+}
+
+/** Reads an image from disk for an ACP prompt; rejects non-images and >10 MB. */
+export const readImageFile = (path: string) =>
+  invoke<ImageFile>("read_image_file", { path });
+
 // --- merge queue ---
 type StepInput = Pick<WorkflowStep, "name" | "command" | "type">;
 

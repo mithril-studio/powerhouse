@@ -6,7 +6,7 @@ import { AddProjectModal, type AddProjectMode } from "./AddProjectModal";
 
 const NAV_ITEMS = [
   { label: "Home", soon: false },
-  { label: "Workflows", soon: true },
+  { label: "Workflows", soon: false },
   { label: "Memory", soon: true },
   { label: "Telemetry", soon: false },
 ] as const;
@@ -52,6 +52,8 @@ export function Sidebar() {
   const closeTelemetry = useAppStore((s) => s.closeTelemetry);
   const closeSettings = useAppStore((s) => s.closeSettings);
   const telemetryOpen = useAppStore((s) => s.telemetryOpen);
+  const workspaceView = useAppStore((s) => s.workspaceView);
+  const setWorkspaceView = useAppStore((s) => s.setWorkspaceView);
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
@@ -67,9 +69,9 @@ export function Sidebar() {
     return () => window.removeEventListener("keydown", onKey);
   }, [menuOpen]);
 
-  // Home leaves the telemetry and settings pages; Telemetry toggles itself.
-  // Without this, an open overlay could only be dismissed via its close button.
-  // Workflows and Memory are disabled placeholders until those pages exist.
+  // Home leaves the telemetry/settings overlays and the workflows view;
+  // Workflows switches the workspace view; Telemetry toggles its overlay.
+  // Memory stays a disabled placeholder until that page exists.
   const navAction = (label: (typeof NAV_ITEMS)[number]["label"]) => {
     if (label === "Telemetry") {
       closeSettings();
@@ -77,6 +79,7 @@ export function Sidebar() {
     }
     closeTelemetry();
     closeSettings();
+    setWorkspaceView(label === "Workflows" ? "workflows" : "home");
   };
 
   const openPaths = new Set(repos.map((r) => r.path));
@@ -92,10 +95,10 @@ export function Sidebar() {
   };
 
   return (
-    <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-background">
+    <aside aria-label="Main sidebar" className="flex w-60 shrink-0 flex-col border-r border-border bg-background">
       {/* Traffic-light strip (titleBarStyle: Overlay) — draggable. */}
       <div data-tauri-drag-region className="h-11 shrink-0" />
-      <nav className="flex flex-col gap-0.5 px-2 pb-2">
+      <nav aria-label="Main navigation" className="flex flex-col gap-0.5 px-2 pb-2">
         {NAV_ITEMS.map((item) => {
           if (item.soon) {
             return (
@@ -111,7 +114,10 @@ export function Sidebar() {
               </button>
             );
           }
-          const active = item.label === "Telemetry" && telemetryOpen;
+          const active =
+            item.label === "Telemetry"
+              ? telemetryOpen
+              : !telemetryOpen && item.label.toLowerCase() === workspaceView;
           return (
             <button
               key={item.label}
