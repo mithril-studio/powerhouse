@@ -73,5 +73,12 @@ gh release create "$TAG" \
   --prerelease \
   --target "$(git rev-parse HEAD)" \
   --title "Powerhouse Beta ${VERSION} (${SHORT_SHA})" \
-  --notes "${NOTES:-Beta build of ${VERSION} from ${SHORT_SHA}. Pre-release: not shipped to users.}" \
-  "$DMG_OUT"
+  --notes "${NOTES:-Beta build of ${VERSION} from ${SHORT_SHA}. Pre-release: not shipped to users.}"
+
+echo "==> Uploading DMG"
+gh release upload "$TAG" "$DMG_OUT" --repo "$REPO" --clobber
+
+echo "==> Verifying the DMG is attached"
+ASSET_COUNT="$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets | length')"
+[ "${ASSET_COUNT:-0}" -ge 1 ] || fail "release ${TAG} has no attached DMG after upload"
+echo "==> Beta published with ${ASSET_COUNT} asset(s): ${TAG}"
