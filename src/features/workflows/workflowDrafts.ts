@@ -1,4 +1,4 @@
-/** Local drafts only. Publishing and remote runs belong to the future service. */
+/** Drafts are edited locally; publishing pins them to the coordinator. */
 export interface ScriptDraft {
   id: string;
   name: string;
@@ -10,6 +10,13 @@ export interface WorkflowDraft {
   repoId: string;
   name: string;
   steps: ScriptDraft[];
+  /** Set once the draft has been published to the coordinator. */
+  serverWorkflowId?: string;
+  publishedVersion?: number;
+  /** Content fingerprint at last publish — detects unpublished edits. */
+  publishedKey?: string;
+  /** Coordinator run ids started from this draft, newest first. */
+  runIds?: string[];
 }
 
 export const newScriptDraft = (): ScriptDraft => ({

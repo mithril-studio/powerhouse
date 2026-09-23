@@ -1,5 +1,6 @@
 mod acp;
 mod cloud;
+mod coordinator;
 mod git;
 mod github;
 mod handoff;
@@ -92,6 +93,10 @@ pub fn run() {
             cloud::commands::cloud_set_secret,
             cloud::commands::cloud_project_env_status,
             cloud::commands::cloud_latest_handoff,
+            coordinator::coordinator_token_status,
+            coordinator::coordinator_set_token,
+            coordinator::coordinator_request,
+            coordinator::coordinator_repo_head,
             telemetry::commands::telemetry_list_runs,
             telemetry::commands::telemetry_run_detail,
             telemetry::commands::telemetry_run_events,

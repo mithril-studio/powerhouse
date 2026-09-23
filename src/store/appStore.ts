@@ -106,6 +106,8 @@ export interface Settings {
   theme: Theme;
   connections: Connections;
   cloud?: CloudSettings;
+  /** Base URL of the always-on workflow coordinator; token lives in the Keychain. */
+  coordinatorUrl?: string;
 }
 
 export interface Branch {
@@ -303,6 +305,7 @@ interface AppState extends PersistedTree {
   setCloudRun: (run: CloudRunRecord) => void;
   removeCloudRun: (runId: string) => void;
   setCloudSettings: (cloud: CloudSettings) => void;
+  setCoordinatorUrl: (coordinatorUrl: string) => void;
   setCloudQuickStage: (repoId: string, branch: string, stage: string | null) => void;
   setCloudQuickError: (repoId: string, branch: string, reason: string | null) => void;
 }
@@ -822,6 +825,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { cloudQuickErrors: { ...s.cloudQuickErrors, [key]: reason } };
     }),
   setCloudSettings: (cloud) => set((s) => ({ settings: { ...s.settings, cloud } })),
+  setCoordinatorUrl: (coordinatorUrl) =>
+    set((s) => ({ settings: { ...s.settings, coordinatorUrl: coordinatorUrl.trim() } })),
 }));
 
 export const cloudSettingsOf = (s: Settings): CloudSettings => {
