@@ -60,6 +60,14 @@ export const ptyKillAll = () => invoke<void>("pty_kill_all");
 export const gitValidateRepo = (path: string) =>
   invoke<RepoInfo>("git_validate_repo", { path });
 
+/** Clone a git URL into `destParent` (default ~/conductor/repos) and validate it. */
+export const gitCloneRepo = (url: string, destParent?: string | null) =>
+  invoke<RepoInfo>("git_clone_repo", { url, destParent: destParent ?? null });
+
+/** Create a new git project (init + initial commit) under `destParent`. */
+export const gitInitRepo = (name: string, destParent?: string | null) =>
+  invoke<RepoInfo>("git_init_repo", { name, destParent: destParent ?? null });
+
 export const gitCreateWorktree = (repoPath: string, branch: string, base: string) =>
   invoke<string>("git_create_worktree", { repoPath, branch, base });
 

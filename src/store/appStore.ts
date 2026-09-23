@@ -179,6 +179,15 @@ export interface Selection {
   branchId: string | null;
 }
 
+/** A recently-opened project, shown in the Add-project menu's Recents list. */
+export interface RecentRepo {
+  name: string;
+  path: string;
+  defaultBranch: string;
+}
+
+const RECENTS_CAP = 8;
+
 /** Runtime-only; terminals/PTYs are never persisted. */
 export type ChatStatus = "idle" | "running" | "exited";
 
@@ -187,6 +196,13 @@ export interface PersistedTree {
   selection: Selection;
   settings: Settings;
   queues: Record<string, QueueEntry[]>;
+  /** MRU of opened projects, for the Add-project menu's Recents. */
+  recentRepos: RecentRepo[];
+}
+
+/** Prepend a project to the MRU, dedupe by path, cap the length. */
+function pushRecent(list: RecentRepo[], r: RecentRepo): RecentRepo[] {
+  return [r, ...list.filter((x) => x.path !== r.path)].slice(0, RECENTS_CAP);
 }
 
 /** Old persisted shape (pre agent-profiles) — read only during migration. */
@@ -226,6 +242,7 @@ interface AppState extends PersistedTree {
   openTelemetry: () => void;
   closeTelemetry: () => void;
   addRepo: (repo: Omit<Repo, "id" | "branches" | "workflow" | "pushOnMerge">) => Repo;
+  removeRecentRepo: (path: string) => void;
   addBranch: (repoId: string, branch: Branch) => void;
   removeBranch: (repoId: string, branchId: string) => void;
   addChat: (repoId: string, branchId: string, chat: Chat) => void;
@@ -460,6 +477,7 @@ const updateBranch = (
 
 export const useAppStore = create<AppState>((set, get) => ({
   repos: [],
+  recentRepos: [],
   selection: { repoId: null, branchId: null },
   settings: seedSettings(),
   queues: {},
@@ -490,6 +508,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         pushOnMerge: r.pushOnMerge ?? true,
       })),
       selection: tree?.selection ?? { repoId: null, branchId: null },
+      recentRepos: tree?.recentRepos ?? [],
       settings: migrateSettings(tree),
       // The Rust engine starts empty, so any entry persisted in a live state
       // was cut short by a crash/quit — surface it as `interrupted`.
@@ -530,9 +549,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   closeTelemetry: () => set({ telemetryOpen: false }),
 
   addRepo: (repo) => {
+    const recent: RecentRepo = {
+      name: repo.name,
+      path: repo.path,
+      defaultBranch: repo.defaultBranch,
+    };
     const existing = get().repos.find((r) => r.path === repo.path);
     if (existing) {
-      set({ selection: { repoId: existing.id, branchId: null } });
+      set((s) => ({
+        selection: { repoId: existing.id, branchId: null },
+        recentRepos: pushRecent(s.recentRepos, recent),
+      }));
       return existing;
     }
     const created: Repo = {
@@ -545,9 +572,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({
       repos: [...s.repos, created],
       selection: { repoId: created.id, branchId: null },
+      recentRepos: pushRecent(s.recentRepos, recent),
     }));
     return created;
   },
+
+  removeRecentRepo: (path) =>
+    set((s) => ({ recentRepos: s.recentRepos.filter((r) => r.path !== path) })),
 
   addBranch: (repoId, branch) =>
     set((s) => ({

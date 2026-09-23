@@ -165,7 +165,7 @@ export function TelemetryPage() {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-background">
+    <div className="fixed inset-y-0 right-0 left-60 z-40 flex flex-col border-l border-border bg-background">
       {/* Draggable title strip (traffic-light overlay) with a close affordance. */}
       <div
         data-tauri-drag-region

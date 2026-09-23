@@ -85,6 +85,100 @@ pub fn git_validate_repo(path: String) -> Result<RepoInfo, String> {
     })
 }
 
+/// Default parent directory for cloned/created projects: `~/conductor/repos`.
+fn default_projects_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("conductor")
+        .join("repos")
+}
+
+/// Repository name from a clone URL: the last path segment without `.git`.
+fn repo_name_from_url(url: &str) -> Option<String> {
+    let trimmed = url.trim().trim_end_matches('/');
+    let tail = trimmed.rsplit(['/', ':']).next()?.trim();
+    let name = tail.strip_suffix(".git").unwrap_or(tail).trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::repo_name_from_url;
+
+    #[test]
+    fn parses_repo_name_from_various_url_shapes() {
+        assert_eq!(repo_name_from_url("https://github.com/owner/repo").as_deref(), Some("repo"));
+        assert_eq!(repo_name_from_url("https://github.com/owner/repo.git").as_deref(), Some("repo"));
+        assert_eq!(repo_name_from_url("https://github.com/owner/repo/").as_deref(), Some("repo"));
+        assert_eq!(repo_name_from_url("git@github.com:owner/repo.git").as_deref(), Some("repo"));
+        assert_eq!(repo_name_from_url("  https://github.com/owner/My-Repo.git  ").as_deref(), Some("My-Repo"));
+        assert_eq!(repo_name_from_url(""), None);
+        assert_eq!(repo_name_from_url("   "), None);
+    }
+}
+
+/// Clone a git URL into `dest_parent` (default `~/conductor/repos`) and return
+/// the new repository's info. Never overwrites an existing directory.
+#[tauri::command]
+pub fn git_clone_repo(url: String, dest_parent: Option<String>) -> Result<RepoInfo, String> {
+    let url = url.trim().to_string();
+    if url.is_empty() {
+        return Err("Enter a repository URL to clone.".to_string());
+    }
+    let name = repo_name_from_url(&url)
+        .ok_or("Could not read a repository name from that URL.".to_string())?;
+    let parent = dest_parent
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(default_projects_dir);
+    std::fs::create_dir_all(&parent).map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+    let target = parent.join(&name);
+    if target.exists() {
+        return Err(format!("{} already exists — pick another location.", target.display()));
+    }
+    let target_str = target.to_string_lossy().to_string();
+    let output = Command::new(GIT)
+        .args(["clone", "--", &url, &target_str])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|e| format!("failed to run git: {e}"))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if err.is_empty() { "git clone failed".into() } else { err });
+    }
+    git_validate_repo(target_str)
+}
+
+/// Create a fresh project directory under `dest_parent` (default
+/// `~/conductor/repos`), `git init` it with an initial commit, and return its
+/// info. Never overwrites an existing directory.
+#[tauri::command]
+pub fn git_init_repo(name: String, dest_parent: Option<String>) -> Result<RepoInfo, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Enter a name for the new project.".to_string());
+    }
+    if name.contains('/') || name.contains('\\') || name == "." || name == ".." {
+        return Err("Use a plain folder name without slashes.".to_string());
+    }
+    let parent = dest_parent
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(default_projects_dir);
+    std::fs::create_dir_all(&parent).map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+    let target = parent.join(name);
+    if target.exists() {
+        return Err(format!("{} already exists — pick another name.", target.display()));
+    }
+    std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+    std::fs::write(target.join("README.md"), format!("# {name}\n"))
+        .map_err(|e| e.to_string())?;
+    git(&target, &["init", "-b", "main"])?;
+    git(&target, &["add", "-A"])?;
+    git(&target, &["-c", "user.name=Powerhouse", "-c", "user.email=powerhouse@local", "commit", "-m", "Initial commit"])?;
+    git_validate_repo(target.to_string_lossy().to_string())
+}
+
 #[tauri::command]
 pub fn git_create_worktree(
     repo_path: String,

@@ -7,7 +7,9 @@ import {
   type QueueEntry,
 } from "../store/appStore";
 import {
+  gitCloneRepo,
   gitCreateWorktree,
+  gitInitRepo,
   gitRemoveWorktree,
   gitValidateRepo,
   queueCancel,
@@ -21,7 +23,7 @@ import { disposeAcp } from "./acpRegistry";
 import { cloudImport, cloudSync } from "./cloud";
 
 export async function pickAndAddRepo() {
-  const dir = await open({ directory: true, multiple: false, title: "Add project" });
+  const dir = await open({ directory: true, multiple: false, title: "Open project" });
   if (!dir) return;
   try {
     const info = await gitValidateRepo(dir);
@@ -31,7 +33,44 @@ export async function pickAndAddRepo() {
       defaultBranch: info.default_branch,
     });
   } catch (err) {
-    await message(String(err), { title: "Cannot add project", kind: "error" });
+    await message(String(err), { title: "Cannot open project", kind: "error" });
+  }
+}
+
+/** Clone a git/GitHub URL into `destParent` (default ~/conductor/repos) and add
+ *  it. Throws with git's message so the modal can show it inline. */
+export async function cloneGithubProject(url: string, destParent?: string | null) {
+  const info = await gitCloneRepo(url, destParent ?? null);
+  useAppStore.getState().addRepo({
+    name: info.name,
+    path: info.root,
+    defaultBranch: info.default_branch,
+  });
+}
+
+/** Create a brand-new project (git init + initial commit) and add it. Throws
+ *  on failure so the modal can show it inline. */
+export async function quickStartProject(name: string, destParent?: string | null) {
+  const info = await gitInitRepo(name, destParent ?? null);
+  useAppStore.getState().addRepo({
+    name: info.name,
+    path: info.root,
+    defaultBranch: info.default_branch,
+  });
+}
+
+/** Re-open a project from the Recents list; drops it from Recents if it's gone. */
+export async function openRecentRepo(path: string) {
+  try {
+    const info = await gitValidateRepo(path);
+    useAppStore.getState().addRepo({
+      name: info.name,
+      path: info.root,
+      defaultBranch: info.default_branch,
+    });
+  } catch (err) {
+    useAppStore.getState().removeRecentRepo(path);
+    await message(`${path}\n\n${String(err)}`, { title: "Cannot open project", kind: "error" });
   }
 }
 
