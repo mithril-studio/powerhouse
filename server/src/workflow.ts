@@ -54,7 +54,7 @@ type NodeOutcome = "succeeded" | "failed" | "canceled" | "interrupted";
 
 async function runNode(run: RunRow, nodeIndex: number): Promise<NodeOutcome> {
   const { db, adapter, pollIntervalMs } = deps();
-  const command = nodeIndex === 1 ? run.script_1 : run.script_2;
+  const command = run.nodes[nodeIndex - 1]!.command;
 
   // Stable identities (job UUID, machine name, manifest timestamp) are
   // durable before any external action; replays adopt them.
@@ -186,9 +186,10 @@ async function runNode(run: RunRow, nodeIndex: number): Promise<NodeOutcome> {
 }
 
 function buildManifestForNode(run: RunRow, node: NodeRunRow, command: string) {
+  const name = run.nodes[node.node_index - 1]?.name ?? `script-${node.node_index}`;
   return buildScriptManifest({
     runId: node.id,
-    taskText: `Workflow ${run.id} script ${node.node_index}`,
+    taskText: `Workflow ${run.id} node ${node.node_index} (${name})`,
     repoName: run.repo_name,
     remoteUrl: run.remote_url,
     commitSha: run.commit_sha,
@@ -217,21 +218,28 @@ async function markSkipped(runId: string, nodeIndex: number): Promise<void> {
 }
 
 /**
- * The hard-coded two-script sequence: script 1, then script 2 if and only
- * if script 1 succeeded. DBOS is the execution authority; the application
- * tables written through steps are projections.
+ * The sequence interpreter: run each script node in order, and a node runs
+ * only when every predecessor succeeded (fail-fast). The node list comes
+ * from the admitted run row, which pinned it (and any published workflow
+ * version) at admission — publishing a later version never changes an
+ * active run. DBOS is the execution authority; the application tables
+ * written through steps are projections.
  */
-async function twoScriptWorkflowImpl(runId: string): Promise<{ status: string }> {
+async function sequenceWorkflowImpl(runId: string): Promise<{ status: string }> {
   const { db } = deps();
   const run = await DBOS.runStep(() => getRunById(db, runId), { name: "loadRun" });
   if (!run) return { status: "missing" };
+  const nodeCount = run.nodes.length;
+
+  const skipFrom = async (firstSkipped: number): Promise<void> => {
+    for (let i = firstSkipped; i <= nodeCount; i += 1) await markSkipped(runId, i);
+  };
 
   const preCanceled = await DBOS.runStep(() => isCancelRequested(db, run.id), {
     name: "checkCancelAtStart",
   });
   if (preCanceled) {
-    await markSkipped(runId, 1);
-    await markSkipped(runId, 2);
+    await skipFrom(1);
     await DBOS.runStep(() => setRunStatus(db, runId, "canceled"), { name: "finalizeCanceled" });
     return { status: "canceled" };
   }
@@ -242,29 +250,26 @@ async function twoScriptWorkflowImpl(runId: string): Promise<{ status: string }>
     status: "succeeded",
   };
   try {
-    const first = await runNode(run, 1);
-    if (first !== "succeeded") {
-      // Fail-fast: script 2 is never submitted after a failed script 1.
-      await markSkipped(runId, 2);
-      final =
-        first === "canceled"
-          ? { status: "canceled" }
-          : { status: "failed", error: `script 1 ${first}` };
-    } else {
-      const midCancel = await DBOS.runStep(() => isCancelRequested(db, run.id), {
-        name: "checkCancelBetweenNodes",
-      });
-      if (midCancel) {
-        await markSkipped(runId, 2);
-        final = { status: "canceled" };
-      } else {
-        const second = await runNode(run, 2);
-        if (second !== "succeeded") {
-          final =
-            second === "canceled"
-              ? { status: "canceled" }
-              : { status: "failed", error: `script 2 ${second}` };
+    for (let nodeIndex = 1; nodeIndex <= nodeCount; nodeIndex += 1) {
+      if (nodeIndex > 1) {
+        const midCancel = await DBOS.runStep(() => isCancelRequested(db, run.id), {
+          name: "checkCancelBetweenNodes",
+        });
+        if (midCancel) {
+          await skipFrom(nodeIndex);
+          final = { status: "canceled" };
+          break;
         }
+      }
+      const outcome = await runNode(run, nodeIndex);
+      if (outcome !== "succeeded") {
+        // Fail-fast: nothing downstream of a failed node is ever submitted.
+        await skipFrom(nodeIndex + 1);
+        final =
+          outcome === "canceled"
+            ? { status: "canceled" }
+            : { status: "failed", error: `node ${nodeIndex} ${outcome}` };
+        break;
       }
     }
   } catch (err) {
@@ -282,6 +287,6 @@ async function twoScriptWorkflowImpl(runId: string): Promise<{ status: string }>
 }
 
 /** Registered once per process; DBOS keys recovery to this workflow name. */
-export const twoScriptWorkflow = DBOS.registerWorkflow(twoScriptWorkflowImpl, {
-  name: "twoScriptWorkflow",
+export const sequenceWorkflow = DBOS.registerWorkflow(sequenceWorkflowImpl, {
+  name: "sequenceWorkflow",
 });

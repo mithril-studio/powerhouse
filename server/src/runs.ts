@@ -25,6 +25,12 @@ export type NodeState =
   | "interrupted"
   | "skipped";
 
+/** One script node of a sequence: ordered, named, fail-fast. */
+export interface SequenceNode {
+  name: string;
+  command: string;
+}
+
 export interface RunRequest {
   owner: string;
   idempotencyKey: string;
@@ -33,8 +39,11 @@ export interface RunRequest {
   commitSha: string;
   snapshotName: string;
   snapshotVersion: string | null;
-  scripts: [string, string];
+  nodes: SequenceNode[];
   deadlineSeconds: number;
+  /** Set when the run executes a published workflow version. */
+  workflowId?: string;
+  workflowVersion?: number;
 }
 
 export interface RunRow {
@@ -48,8 +57,9 @@ export interface RunRow {
   commit_sha: string;
   snapshot_name: string;
   snapshot_version: string | null;
-  script_1: string;
-  script_2: string;
+  nodes: SequenceNode[];
+  workflow_id: string | null;
+  workflow_version: number | null;
   deadline_seconds: string | number;
   status: RunStatus;
   cancel_requested: boolean;
@@ -87,8 +97,10 @@ function requestDigest(req: RunRequest): string {
     req.commitSha,
     req.snapshotName,
     req.snapshotVersion,
-    req.scripts,
+    req.nodes.map((n) => [n.name, n.command]),
     req.deadlineSeconds,
+    req.workflowId ?? null,
+    req.workflowVersion ?? null,
   ]);
   return createHash("sha256").update(canonical).digest("hex");
 }
@@ -160,26 +172,31 @@ export async function admitRun(db: Db, req: RunRequest): Promise<{ run: RunRow; 
       `INSERT INTO workflow_runs
          (id, owner, idempotency_key, request_digest, dbos_workflow_id,
           repo_name, remote_url, commit_sha, snapshot_name, snapshot_version,
-          script_1, script_2, deadline_seconds, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending_dispatch')
+          nodes, workflow_id, workflow_version, deadline_seconds, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,'pending_dispatch')
        RETURNING *`,
       [
         id,
         req.owner,
         req.idempotencyKey,
         digest,
-        `two-script-${id}`,
+        `run-${id}`,
         req.repoName,
         req.remoteUrl,
         req.commitSha,
         req.snapshotName,
         req.snapshotVersion,
-        req.scripts[0],
-        req.scripts[1],
+        JSON.stringify(req.nodes),
+        req.workflowId ?? null,
+        req.workflowVersion ?? null,
         req.deadlineSeconds,
       ],
     );
-    await appendEvent(tx, id, "run.admitted", { idempotencyKey: req.idempotencyKey });
+    await appendEvent(tx, id, "run.admitted", {
+      idempotencyKey: req.idempotencyKey,
+      nodeCount: req.nodes.length,
+      ...(req.workflowId ? { workflowId: req.workflowId, workflowVersion: req.workflowVersion } : {}),
+    });
     return { run: inserted.rows[0]!, created: true };
   });
 }

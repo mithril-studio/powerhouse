@@ -63,6 +63,44 @@ const MIGRATIONS: { name: string; sql: string }[] = [
       );
     `,
   },
+  {
+    // Increment 1: user-defined sequences. Published versions are immutable;
+    // runs pin a version (or carry ad-hoc nodes) as a JSONB node list, which
+    // replaces the hard-coded script_1/script_2 pair.
+    name: "002_workflow_versions",
+    sql: `
+      CREATE TABLE workflows (
+        id UUID PRIMARY KEY,
+        owner TEXT NOT NULL,
+        name TEXT NOT NULL,
+        latest_version INT NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (owner, name)
+      );
+
+      CREATE TABLE workflow_versions (
+        workflow_id UUID NOT NULL REFERENCES workflows(id),
+        version INT NOT NULL,
+        content JSONB NOT NULL,
+        content_hash TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (workflow_id, version)
+      );
+
+      ALTER TABLE workflow_runs ADD COLUMN workflow_id UUID REFERENCES workflows(id);
+      ALTER TABLE workflow_runs ADD COLUMN workflow_version INT;
+      ALTER TABLE workflow_runs ADD COLUMN nodes JSONB;
+      UPDATE workflow_runs
+        SET nodes = jsonb_build_array(
+          jsonb_build_object('name', 'script-1', 'command', script_1),
+          jsonb_build_object('name', 'script-2', 'command', script_2)
+        );
+      ALTER TABLE workflow_runs ALTER COLUMN nodes SET NOT NULL;
+      ALTER TABLE workflow_runs DROP COLUMN script_1;
+      ALTER TABLE workflow_runs DROP COLUMN script_2;
+    `,
+  },
 ];
 
 export type Db = pg.Pool;

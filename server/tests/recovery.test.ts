@@ -123,12 +123,13 @@ describe("coordinator recovery", () => {
       `INSERT INTO workflow_runs
          (id, owner, idempotency_key, request_digest, dbos_workflow_id,
           repo_name, remote_url, commit_sha, snapshot_name, snapshot_version,
-          script_1, script_2, deadline_seconds, status)
+          nodes, deadline_seconds, status)
        VALUES ($1,'owner-a','crashed-key','digest',$2,
                'powerhouse','https://github.com/mithril-studio/powerhouse.git',
                $3,'powerhouse-base','v1',
-               'printf one','printf two',300,'pending_dispatch')`,
-      [id, `two-script-${id}`, "db2b7c51b4cb9f64816e15675f2453fdb86a977f"],
+               '[{"name":"script-1","command":"printf one"},{"name":"script-2","command":"printf two"}]'::jsonb,
+               300,'pending_dispatch')`,
+      [id, `run-${id}`, "db2b7c51b4cb9f64816e15675f2453fdb86a977f"],
     );
     await stack.stop();
     await stack.restart();

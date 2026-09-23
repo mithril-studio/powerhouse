@@ -6,7 +6,7 @@ import { buildApp } from "./api.js";
 import type { ServerConfig } from "./config.js";
 import { createPool, migrate, type Db } from "./db.js";
 import { markDispatched, undispatchedRuns, type RunRow } from "./runs.js";
-import { setWorkflowDeps, twoScriptWorkflow } from "./workflow.js";
+import { setWorkflowDeps, sequenceWorkflow } from "./workflow.js";
 
 export interface Coordinator {
   app: FastifyInstance;
@@ -39,7 +39,7 @@ export async function createCoordinator(
   const dispatch = async (run: RunRow): Promise<void> => {
     // The DBOS workflow ID was committed with the run; starting again with
     // the same ID and function is idempotent and adopts the existing workflow.
-    await DBOS.startWorkflow(twoScriptWorkflow, {
+    await DBOS.startWorkflow(sequenceWorkflow, {
       workflowID: run.dbos_workflow_id,
     })(run.id);
     await markDispatched(db, run.id);

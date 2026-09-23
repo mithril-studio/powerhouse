@@ -90,7 +90,10 @@ export class BoxdExecutionAdapter implements ExecutionAdapter {
     ensureOwned(input.name);
     try {
       const existing = await this.boxd.machines.get(input.name);
-      return { machineId: existing.id, name: existing.name, created: false };
+      // Adoption (recovery / retry): the machine may still be booting from
+      // the create we never heard back about.
+      const ready = await this.boxd.machines.waitUntilReady(existing.id, { timeout: 180_000 });
+      return { machineId: ready.id, name: ready.name, created: false };
     } catch (err) {
       if (!(err instanceof NotFoundError)) {
         throw new AdapterTransportError(`machine lookup ${input.name}: ${String(err)}`);
