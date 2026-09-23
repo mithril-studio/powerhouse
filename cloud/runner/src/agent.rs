@@ -78,16 +78,17 @@ pub enum AgentVerdict {
 /// into the child's environment only.
 pub fn build_command(
     manifest: &RunManifest,
+    spec: &powerhouse_cloud_protocol::AgentSpec,
     self_bin: &str,
     workspace: &Path,
     home: &Path,
     secrets: &[(String, String)],
 ) -> Command {
-    let mut cmd = match manifest.agent.provider {
+    let mut cmd = match spec.provider {
         AgentProvider::Fake => {
             let mut c = Command::new(self_bin);
             c.arg("fake-agent")
-                .arg(manifest.agent.fake_script.clone().unwrap_or_else(|| "complete".into()));
+                .arg(spec.fake_script.clone().unwrap_or_else(|| "complete".into()));
             c
         }
         AgentProvider::Claude => {
@@ -97,20 +98,20 @@ pub fn build_command(
                 .arg("--output-format")
                 .arg("stream-json")
                 .arg("--permission-mode")
-                .arg(&manifest.agent.permission_mode)
+                .arg(&spec.permission_mode)
                 .arg("--session-id")
                 .arg(uuid::Uuid::new_v4().to_string());
-            if let Some(m) = &manifest.agent.model {
+            if let Some(m) = &spec.model {
                 c.arg("--model").arg(m);
             }
-            if let Some(n) = manifest.agent.max_turns {
+            if let Some(n) = spec.max_turns {
                 c.arg("--max-turns").arg(n.to_string());
             }
-            if let Some(b) = manifest.agent.max_budget_usd {
+            if let Some(b) = spec.max_budget_usd {
                 c.arg("--max-budget-usd").arg(format!("{b}"));
             }
-            if !manifest.agent.allowed_tools.is_empty() {
-                c.arg("--allowedTools").arg(manifest.agent.allowed_tools.join(","));
+            if !spec.allowed_tools.is_empty() {
+                c.arg("--allowedTools").arg(spec.allowed_tools.join(","));
             }
             c.arg("--").arg(build_prompt(manifest));
             c

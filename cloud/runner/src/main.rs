@@ -200,6 +200,7 @@ fn probe() -> Result<ProbeInfo, RunnerError> {
         .unwrap_or(0);
     Ok(ProbeInfo {
         protocol_version: PROTOCOL_VERSION,
+        script_protocol_version: Some(powerhouse_cloud_protocol::SCRIPT_PROTOCOL_VERSION),
         runner_version: RUNNER_VERSION.to_string(),
         agents: vec![AgentProvider::Claude, AgentProvider::Fake],
         os,

@@ -240,6 +240,37 @@ check "credentials present during run" '[[ -e $POWERHOUSE_RUNNER_ROOT/credential
 "$RUNNER" cancel "$ID" >/dev/null; S=$(wait_terminal "$ID" 40)
 check "cancelled ($S) and credentials gone" '[[ $S == cancelled && ! -e $POWERHOUSE_RUNNER_ROOT/credentials/$ID.env ]]'
 
+echo; echo "## 20. script job: unprivileged, durable output, no model or publication"
+check "probe advertises script protocol 3" '[[ $(echo "$P" | j .ok.script_protocol_version) == 3 ]]'
+script_manifest() {
+  manifest "$1" complete 300 '[]' | jq -c --arg command "$2" 'del(.agent) | .protocol_version = 3 | .output_branch = "" | .script = {command: $command}'
+}
+ID=$(newid); M=$(script_manifest "$ID" 'test "$(id -u)" -ne 0 && test "$(git rev-parse HEAD)" = "'"$SHA"'" && printf script-output')
+submit "$M" >/dev/null
+S=$(wait_terminal "$ID"); RES=$("$RUNNER" result "$ID")
+check "script completed with exit 0 ($S)" '[[ $S == completed && $(echo "$RES" | j .ok.script.exit_code) == 0 ]]'
+check "script output persisted" '[[ $(echo "$RES" | j .ok.script.output_tail) == script-output ]]'
+check "output event is readable via existing cursor API" '[[ $(events "$ID" | jq -r "select(.kind==\"script.output\") | .payload.text") == script-output ]]'
+check "no publication" '[[ $(echo "$RES" | j .ok.published) == false && -z $(git ls-remote "$REMOTE" "refs/heads/powerhouse/cloud/$ID") ]]'
+check "no agent invocation" '! kinds "$ID" | grep -q "^agent\."'
+R=$(submit "$M")
+check "repeated script submit returns same run without execution" '[[ $(echo "$R" | j .ok.duplicate) == true && $(kinds "$ID" | grep -c "^script.started$") == 1 ]]'
+
+echo; echo "## 21. script nonzero exit is terminal failure"
+ID=$(newid); submit "$(script_manifest "$ID" 'printf failure >&2; exit 23')" >/dev/null
+S=$(wait_terminal "$ID"); RES=$("$RUNNER" result "$ID")
+check "script exit 23 captured ($S)" '[[ $S == failed && $(echo "$RES" | j .ok.script.exit_code) == 23 && $(echo "$RES" | j .ok.script.output_tail) == failure ]]'
+
+echo; echo "## 22. cancelled script reaps detached descendants"
+ID=$(newid); submit "$(script_manifest "$ID" 'set -m; sleep 900 & echo $! > child.pid; wait')" >/dev/null
+CHILD_FILE=/var/lib/powerhouse-runner-work/$ID/repo/child.pid
+for _ in $(seq 1 30); do [[ -f $CHILD_FILE ]] && break; sleep 1; done
+CHILD=$(cat "$CHILD_FILE")
+"$RUNNER" cancel "$ID" >/dev/null; S=$(wait_terminal "$ID" 40)
+for _ in $(seq 1 30); do systemctl is-active --quiet "powerhouse-run-$ID.service" || break; sleep 1; done
+check "script cancellation retained ($S)" '[[ $S == cancelled ]]'
+check "detached script child gone after unit cleanup" '! kill -0 "$CHILD" 2>/dev/null'
+
 echo; echo "## summary: $pass passed, $fail failed"
 pkill -f "git daemon --base-path=$SRV" || true
 [[ $fail == 0 ]]
