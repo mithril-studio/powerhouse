@@ -66,6 +66,22 @@ struct UserResp {
     avatar_url: String,
 }
 
+/// A repository the signed-in user can clone, for the Add-project autocomplete.
+#[derive(Serialize)]
+pub struct RepoSummary {
+    full_name: String,
+    clone_url: String,
+    private: bool,
+}
+
+#[derive(Deserialize)]
+struct RepoResp {
+    full_name: String,
+    clone_url: String,
+    #[serde(default)]
+    private: bool,
+}
+
 /// The non-sensitive display profile. Never carries the token.
 #[derive(Serialize)]
 pub struct Account {
@@ -230,6 +246,45 @@ pub async fn github_account() -> Result<Option<Account>, String> {
             Ok(None)
         }
     }
+}
+
+/// Lists repositories the signed-in user can access (owned, collaborator, and
+/// org member), most-recently-updated first, for the Add-project autocomplete.
+/// Errors if no token is stored so the UI can prompt to connect GitHub.
+#[tauri::command]
+pub async fn github_list_repos() -> Result<Vec<RepoSummary>, String> {
+    let token = read_token().ok_or("Connect your GitHub account in Settings first.".to_string())?;
+    let client = reqwest::Client::new();
+    let mut out: Vec<RepoSummary> = Vec::new();
+    // A few pages of 100 covers all but the largest accounts; stop early when a
+    // short page signals the end.
+    for page in 1..=5 {
+        let url = format!(
+            "https://api.github.com/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member&page={page}"
+        );
+        let resp = client
+            .get(&url)
+            .header("User-Agent", USER_AGENT)
+            .header("Accept", "application/vnd.github+json")
+            .bearer_auth(&token)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        if !resp.status().is_success() {
+            return Err(format!("GitHub /user/repos returned {}", resp.status()));
+        }
+        let repos: Vec<RepoResp> = resp.json().await.map_err(|e| e.to_string())?;
+        let page_len = repos.len();
+        out.extend(repos.into_iter().map(|r| RepoSummary {
+            full_name: r.full_name,
+            clone_url: r.clone_url,
+            private: r.private,
+        }));
+        if page_len < 100 {
+            break;
+        }
+    }
+    Ok(out)
 }
 
 /// Deletes the local keychain token. Note: this is local-only — server-side

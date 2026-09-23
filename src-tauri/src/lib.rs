@@ -71,6 +71,7 @@ pub fn run() {
             github::github_device_start,
             github::github_poll,
             github::github_account,
+            github::github_list_repos,
             github::github_disconnect,
             cloud::commands::cloud_list_runs,
             cloud::commands::cloud_inspect_source,

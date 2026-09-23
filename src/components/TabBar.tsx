@@ -91,7 +91,7 @@ export function TabBar({ repo, branch }: Props) {
             {cloudStage && (
               <span className="size-2 animate-pulse rounded-full bg-background/70" />
             )}
-            {cloudStage ? "Sending…" : "Send to cloud"}
+            {cloudStage ? "Sending…" : "Cloud"}
           </button>
           <button
             onClick={() => void startHandoff(repo.id, branch.id)}
@@ -101,7 +101,7 @@ export function TabBar({ repo, branch }: Props) {
                 ? "Cancel handoff"
                 : "Hand off this chat to a fresh agent session"
             }
-            className="flex h-7 items-center gap-1.5 rounded-md bg-foreground px-2.5 text-xs font-medium text-background hover:bg-foreground/90 disabled:opacity-40"
+            className="flex h-7 items-center gap-1.5 rounded-md bg-foreground px-2.5 text-xs font-medium text-background hover:bg-foreground/90 disabled:opacity-50"
           >
             {pending && (
               <span className="size-2 animate-pulse rounded-full bg-background/70" />

@@ -661,7 +661,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       })),
     })),
 
-  select: (repoId, branchId) => set({ selection: { repoId, branchId } }),
+  // Selecting a project/branch is a navigation — it also leaves the telemetry
+  // page (which otherwise covers the main area).
+  select: (repoId, branchId) => set({ selection: { repoId, branchId }, telemetryOpen: false }),
 
   setChatStatus: (chatId, status) =>
     set((s) => ({ chatStatus: { ...s.chatStatus, [chatId]: status } })),

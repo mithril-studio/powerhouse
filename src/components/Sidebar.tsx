@@ -49,6 +49,8 @@ export function Sidebar() {
   const recentRepos = useAppStore((s) => s.recentRepos);
   const openSettings = useAppStore((s) => s.openSettings);
   const openTelemetry = useAppStore((s) => s.openTelemetry);
+  const closeTelemetry = useAppStore((s) => s.closeTelemetry);
+  const telemetryOpen = useAppStore((s) => s.telemetryOpen);
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
@@ -63,8 +65,14 @@ export function Sidebar() {
     return () => window.removeEventListener("keydown", onKey);
   }, [menuOpen]);
 
-  const navAction: Partial<Record<(typeof NAV_ITEMS)[number]["label"], () => void>> = {
-    Telemetry: openTelemetry,
+  // Every nav item is a navigation: the placeholders simply leave the telemetry
+  // page, and Telemetry itself toggles it. Without this, an open telemetry page
+  // could only be dismissed via its close button.
+  const navAction: Record<(typeof NAV_ITEMS)[number]["label"], () => void> = {
+    Home: closeTelemetry,
+    Workflows: closeTelemetry,
+    Memory: closeTelemetry,
+    Telemetry: () => (telemetryOpen ? closeTelemetry() : openTelemetry()),
   };
 
   const openPaths = new Set(repos.map((r) => r.path));
@@ -82,16 +90,22 @@ export function Sidebar() {
       {/* Traffic-light strip (titleBarStyle: Overlay) — draggable. */}
       <div data-tauri-drag-region className="h-11 shrink-0" />
       <nav className="flex flex-col gap-0.5 px-2 pb-2">
-        {NAV_ITEMS.map((item) => (
-          <button
-            key={item.label}
-            type="button"
-            onClick={navAction[item.label]}
-            className="flex items-center rounded-md px-2 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:bg-muted hover:text-foreground"
-          >
-            {item.label}
-          </button>
-        ))}
+        {NAV_ITEMS.map((item) => {
+          const active = item.label === "Telemetry" && telemetryOpen;
+          return (
+            <button
+              key={item.label}
+              type="button"
+              onClick={navAction[item.label]}
+              aria-current={active ? "page" : undefined}
+              className={`flex items-center rounded-md px-2 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider hover:bg-muted hover:text-foreground ${
+                active ? "bg-muted text-foreground" : "text-muted-foreground"
+              }`}
+            >
+              {item.label}
+            </button>
+          );
+        })}
       </nav>
       <div className="mx-2 mb-1 border-t border-border" />
 
@@ -182,8 +196,9 @@ export function Sidebar() {
         )}
       </div>
 
-      {/* Bottom-left corner: settings entry point. */}
-      <div className="mt-auto border-t border-border p-2">
+      {/* Bottom-left corner: settings entry point. Fixed height so its bar
+          lines up with the chat's status bar across the divider. */}
+      <div className="mt-auto flex h-12 shrink-0 items-center border-t border-border px-2">
         <button
           onClick={() => openSettings()}
           title="Settings"

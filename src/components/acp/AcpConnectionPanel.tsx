@@ -32,22 +32,14 @@ export function AcpConnectionPanel({
           : "Agent is not running";
 
   return (
-    <div className="border-t border-border bg-background px-3 py-3 font-mono">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <p className="text-xs text-foreground">
-            <span className="mr-2 text-accent-brand">!</span>
-            {title}
-          </p>
-          {(error || diagnostics) && (
-            <details className="mt-1 max-w-2xl text-xs text-destructive">
-              <summary className="cursor-default">Details</summary>
-              <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap font-mono">
-                {[error, diagnostics.trim()].filter(Boolean).join("\n")}
-              </pre>
-            </details>
-          )}
-        </div>
+    <div className="border-t border-border bg-background font-mono">
+      {/* Fixed-height base row so this bar lines up with the sidebar's Settings
+          bar regardless of whether a Resume button is present. */}
+      <div className="flex h-12 items-center justify-between gap-4 px-3">
+        <p className="min-w-0 truncate text-xs text-foreground">
+          <span className="mr-2 text-accent-brand">!</span>
+          {title}
+        </p>
         <div className="flex shrink-0 gap-2">
           {resumable && (
             <button disabled={state === "starting"} onClick={onResume} className={buttonClass}>
@@ -63,6 +55,14 @@ export function AcpConnectionPanel({
           </button>
         </div>
       </div>
+      {(error || diagnostics) && (
+        <details className="max-w-2xl px-3 pb-2 text-xs text-destructive">
+          <summary className="cursor-default">Details</summary>
+          <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap font-mono">
+            {[error, diagnostics.trim()].filter(Boolean).join("\n")}
+          </pre>
+        </details>
+      )}
     </div>
   );
 }

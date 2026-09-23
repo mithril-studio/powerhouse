@@ -450,4 +450,15 @@ export const githubPoll = (deviceCode: string) =>
 export const githubAccount = () =>
   invoke<GithubAccount | null>("github_account");
 
+/** A repository the signed-in user can clone. */
+export interface GithubRepoSummary {
+  full_name: string;
+  clone_url: string;
+  private: boolean;
+}
+
+/** Repos the signed-in user can access, newest first (for Add-project autocomplete). */
+export const githubListRepos = () =>
+  invoke<GithubRepoSummary[]>("github_list_repos");
+
 export const githubDisconnect = () => invoke<void>("github_disconnect");
