@@ -13,22 +13,27 @@ export function Sidebar() {
   const repos = useAppStore((s) => s.repos);
   const openSettings = useAppStore((s) => s.openSettings);
   const openTelemetry = useAppStore((s) => s.openTelemetry);
+  const workspaceView = useAppStore((s) => s.workspaceView);
+  const setWorkspaceView = useAppStore((s) => s.setWorkspaceView);
 
   const navAction: Partial<Record<(typeof NAV_ITEMS)[number]["label"], () => void>> = {
+    Home: () => setWorkspaceView("home"),
+    Workflows: () => setWorkspaceView("workflows"),
     Telemetry: openTelemetry,
   };
 
   return (
-    <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-background">
+    <aside aria-label="Main sidebar" className="flex w-60 shrink-0 flex-col border-r border-border bg-background">
       {/* Traffic-light strip (titleBarStyle: Overlay) — draggable. */}
       <div data-tauri-drag-region className="h-11 shrink-0" />
-      <nav className="flex flex-col gap-0.5 px-2 pb-2">
+      <nav aria-label="Main navigation" className="flex flex-col gap-0.5 px-2 pb-2">
         {NAV_ITEMS.map((item) => (
           <button
             key={item.label}
             type="button"
             onClick={navAction[item.label]}
-            className="flex items-center rounded-md px-2 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-current={item.label.toLowerCase() === workspaceView ? "page" : undefined}
+            className={`flex items-center rounded-md px-2 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring ${item.label.toLowerCase() === workspaceView ? "bg-muted text-foreground" : "text-muted-foreground"}`}
           >
             {item.label}
           </button>
