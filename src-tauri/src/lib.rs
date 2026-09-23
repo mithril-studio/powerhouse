@@ -1,5 +1,6 @@
 mod acp;
 mod cloud;
+mod files;
 mod git;
 mod github;
 mod handoff;
@@ -61,6 +62,7 @@ pub fn run() {
             git::git_file_diff,
             git::git_list_files,
             git::git_file_content,
+            files::read_image_file,
             queue::queue_enqueue,
             queue::queue_cancel,
             queue::queue_state,

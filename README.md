@@ -38,9 +38,11 @@ or a workflow needs direct CLI access, press **⌘⇧P** and choose **Open termi
 - **⌘T** opens another chat on the current branch. Claude, Codex, and Pi default
   to ACP; legacy/custom profiles default to a PTY.
 - The ACP pane renders messages, reasoning, plans, tool calls, diffs, and permission
-  requests in one Pi-inspired terminal UI. Press **⌘⇧P** (or type `/`) to choose
-  agent-provided commands and skills, modes, model/config options, or the terminal
-  fallback. Unsupported controls simply do not appear.
+  requests in one Pi-inspired terminal UI. Agent replies render as GitHub-flavoured
+  markdown (tables, lists, fenced code). When the agent advertises image support,
+  paste, drop, or **+** attaches images to the next prompt. Press **⌘⇧P** (or type
+  `/`) to choose agent-provided commands and skills, modes, model/config options,
+  or the terminal fallback. Unsupported controls simply do not appear.
 - Structured ACP transcripts and session IDs persist. Restored chats can resume
   when the backend supports it.
 - **Open terminal** switches only that chat to its agent's real CLI. Tab switches keep

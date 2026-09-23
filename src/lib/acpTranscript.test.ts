@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
-import { appendCloudResult, applyAcpUpdate, type AcpTranscriptItem } from "./acpTranscript";
+import { appendCloudResult, appendUserMessage, applyAcpUpdate, type AcpTranscriptItem } from "./acpTranscript";
 
 describe("appendCloudResult", () => {
   it("posts a run's card once and never again (restart-safe by run id)", () => {
@@ -96,5 +96,47 @@ describe("applyAcpUpdate", () => {
     expect(applyAcpUpdate([], update, { acceptUserMessageChunks: true })).toEqual([
       expect.objectContaining({ role: "user", text: "Restore this prompt" }),
     ]);
+  });
+});
+
+describe("image content", () => {
+  it("records a submitted prompt's attachments on the user message", () => {
+    const ref = { id: "att-1", name: "shot.png", mimeType: "image/png", bytes: 2 };
+    const [item] = appendUserMessage([], "what is this?", [ref]);
+    expect(item).toEqual(
+      expect.objectContaining({ role: "user", text: "what is this?", attachments: [ref] }),
+    );
+    expect(appendUserMessage([], "plain")[0]).not.toHaveProperty("attachments");
+  });
+
+  it("attaches replayed user image chunks to the same message as their text", () => {
+    const text: SessionUpdate = {
+      sessionUpdate: "user_message_chunk",
+      content: { type: "text", text: "see attached" },
+    };
+    const image: SessionUpdate = {
+      sessionUpdate: "user_message_chunk",
+      content: { type: "image", mimeType: "image/png", data: "aGk=", uri: "file:///x/shot.png" },
+    };
+    const options = { acceptUserMessageChunks: true };
+    const transcript = applyAcpUpdate(applyAcpUpdate([], text, options), image, options);
+
+    expect(transcript).toHaveLength(1);
+    const [item] = transcript;
+    expect(item).toMatchObject({ role: "user", text: "see attached" });
+    expect(item.type === "message" && item.attachments).toEqual([
+      expect.objectContaining({ name: "shot.png", mimeType: "image/png", bytes: 2 }),
+    ]);
+  });
+
+  it("renders images the agent returns inside its message", () => {
+    const image: SessionUpdate = {
+      sessionUpdate: "agent_message_chunk",
+      messageId: "m1",
+      content: { type: "image", mimeType: "image/jpeg", data: "aGk=" },
+    };
+    const [item] = applyAcpUpdate([], image);
+    expect(item).toMatchObject({ role: "assistant", text: "", messageId: "m1" });
+    expect(item.type === "message" && item.attachments?.[0]?.mimeType).toBe("image/jpeg");
   });
 });

@@ -30,6 +30,7 @@ import { handoffWatchStart, telemetryAnnotateRun } from "../lib/ipc";
 import type { AgentControlState, ApplyOp } from "../lib/agentControls";
 import type { AcpConnectionState } from "../components/acp/AcpConnectionPanel";
 import type { PendingPermission } from "../components/acp/AcpPermissionCard";
+import { promptBlocks, toRef, type Attachment } from "../lib/attachments";
 
 interface Params {
   repoId: string;
@@ -60,6 +61,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
   const [configOptions, setConfigOptions] = useState<SessionConfigOption[]>([]);
   const [commands, setCommands] = useState<AvailableCommand[]>([]);
   const [agentLabel, setAgentLabel] = useState(profile.name);
+  const [supportsImages, setSupportsImages] = useState(false);
   const closingRef = useRef(false);
   const replayingRef = useRef(false);
 
@@ -70,12 +72,14 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
   );
 
   const submitPrompt = useCallback(
-    async (text: string) => {
+    async (text: string, attachments: Attachment[] = []) => {
       const prompt = text.trim();
-      if (!prompt) return;
-      mutateTranscript((items) => appendUserMessage(items, prompt));
+      if (!prompt && attachments.length === 0) return;
+      mutateTranscript((items) =>
+        appendUserMessage(items, prompt, attachments.map(toRef)),
+      );
       try {
-        await sendAcpPrompt(chat.id, prompt);
+        await sendAcpPrompt(chat.id, promptBlocks(prompt, attachments));
       } catch (cause) {
         mutateTranscript((items) =>
           appendSystemMessage(items, `Prompt failed: ${String(cause)}`, "error"),
@@ -181,6 +185,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
         setModes(result.modes ?? null);
         setConfigOptions(result.configOptions ?? []);
         setAgentLabel(result.agentInfo?.name ?? profile.name);
+        setSupportsImages(result.capabilities.promptCapabilities?.image === true);
         setConnection("ready");
         setChatStatus(chat.id, "running");
         void handoffWatchStart(branch.id, branch.worktreePath).catch(() => {});
@@ -289,6 +294,8 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
     configOptions,
     commands,
     agentLabel,
+    /** Whether the connected agent advertised `promptCapabilities.image`. */
+    supportsImages,
     controlState,
     thinkingLevel,
     start,

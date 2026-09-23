@@ -211,3 +211,127 @@
     background: var(--muted);
   }
 }
+
+/* Agent markdown inside the ACP transcript: keeps the mono palette, uses
+ * hairlines rather than filled blocks, and stays compact (13px rhythm). */
+.acp-md {
+  line-height: 1.5;
+}
+.acp-md > * + * {
+  margin-top: 0.6em;
+}
+.acp-md h1,
+.acp-md h2,
+.acp-md h3,
+.acp-md h4,
+.acp-md h5,
+.acp-md h6 {
+  color: var(--accent-brand);
+  font-weight: 600;
+  line-height: 1.3;
+}
+.acp-md h1 { font-size: 1.15em; }
+.acp-md h2 { font-size: 1.08em; }
+.acp-md h3,
+.acp-md h4,
+.acp-md h5,
+.acp-md h6 { font-size: 1em; }
+.acp-md p {
+  white-space: pre-wrap;
+}
+.acp-md strong {
+  color: var(--foreground);
+  font-weight: 600;
+}
+.acp-md em {
+  font-style: italic;
+}
+.acp-md del {
+  color: var(--muted-foreground);
+}
+.acp-md a {
+  color: var(--accent-brand);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.acp-md ul,
+.acp-md ol {
+  padding-left: 1.5em;
+}
+.acp-md ul { list-style: disc; }
+.acp-md ol { list-style: decimal; }
+.acp-md li + li {
+  margin-top: 0.2em;
+}
+.acp-md li > ul,
+.acp-md li > ol {
+  margin-top: 0.2em;
+}
+.acp-md li > p {
+  white-space: normal;
+}
+.acp-md li:has(> input[type="checkbox"]) {
+  list-style: none;
+  margin-left: -1.5em;
+}
+.acp-md input[type="checkbox"] {
+  margin-right: 0.5em;
+  vertical-align: -1px;
+}
+.acp-md blockquote {
+  border-left: 1px solid var(--border);
+  padding-left: 0.75em;
+  color: var(--muted-foreground);
+}
+.acp-md hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+.acp-md code {
+  background: var(--card);
+  border: 1px solid var(--border);
+  padding: 0 0.3em;
+  font-size: 0.95em;
+}
+.acp-md pre {
+  background: var(--card);
+  border-left: 1px solid var(--border);
+  padding: 0.5em 0.75em;
+  overflow-x: auto;
+  white-space: pre;
+  font-size: 12px;
+}
+.acp-md pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+}
+.acp-md table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.acp-md th,
+.acp-md td {
+  border: 1px solid var(--border);
+  padding: 0.25em 0.6em;
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+.acp-md td {
+  white-space: normal;
+  min-width: 6ch;
+}
+.acp-md th {
+  background: var(--card);
+  color: var(--accent-brand);
+  font-weight: 600;
+}
+.acp-md img {
+  max-width: 100%;
+  border: 1px solid var(--border);
+}

@@ -1,7 +1,9 @@
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import type { ToolCallContent } from "@agentclientprotocol/sdk";
 import type { AcpTranscriptItem } from "../../lib/acpTranscript";
 import { CloudResultCard } from "../CloudResultCard";
+import { dataUrl, formatBytes, type AttachmentRef } from "../../lib/attachments";
+import { AcpMarkdown } from "./AcpMarkdown";
 
 const statusGlyph: Record<string, string> = {
   pending: "·",
@@ -105,7 +107,38 @@ function ToolItem({ item }: { item: Extract<AcpTranscriptItem, { type: "tool" }>
   );
 }
 
-function TranscriptItem({ item }: { item: AcpTranscriptItem }) {
+/** Thumbnails for images sent or received; a labelled chip once the bytes are
+ *  gone (they are runtime-only, never persisted). */
+function Attachments({ items }: { items?: AttachmentRef[] }) {
+  if (!items?.length) return null;
+  return (
+    <ul className="mt-2 flex flex-wrap gap-2" aria-label="Images">
+      {items.map((ref) => {
+        const src = dataUrl(ref);
+        return (
+          <li key={ref.id} className="text-[11px] text-muted-foreground">
+            {src ? (
+              <img
+                src={src}
+                alt={ref.name}
+                title={`${ref.name} · ${formatBytes(ref.bytes)}`}
+                className="max-h-48 max-w-72 border border-border object-contain"
+              />
+            ) : (
+              <span className="inline-flex items-center gap-1 border border-border px-1.5 py-0.5">
+                ▣ {ref.name} · {formatBytes(ref.bytes)}
+              </span>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+// Memoised so a streaming chunk re-renders only the message it lands in, not
+// every markdown block above it.
+const TranscriptItem = memo(function TranscriptItem({ item }: { item: AcpTranscriptItem }) {
   if (item.type === "tool") return <ToolItem item={item} />;
   if (item.type === "cloud-result") return <CloudResultCard runId={item.runId} late={item.late} />;
   if (item.type === "plan") {
@@ -135,7 +168,7 @@ function TranscriptItem({ item }: { item: AcpTranscriptItem }) {
         <summary className="cursor-default outline-none focus-visible:bg-muted">
           ◇ thinking
         </summary>
-        <p className="mt-2 whitespace-pre-wrap border-l border-border pl-3">{item.text}</p>
+        <AcpMarkdown text={item.text} className="mt-2 border-l border-border pl-3" />
       </details>
     );
   }
@@ -143,7 +176,12 @@ function TranscriptItem({ item }: { item: AcpTranscriptItem }) {
     return (
       <article className="flex gap-2 bg-muted/60 px-2 py-2">
         <span className="shrink-0 text-accent-brand" aria-hidden>&gt;</span>
-        <p className="select-text whitespace-pre-wrap break-words">{item.text}</p>
+        <div className="min-w-0 flex-1">
+          {item.text && (
+            <p className="select-text whitespace-pre-wrap break-words">{item.text}</p>
+          )}
+          <Attachments items={item.attachments} />
+        </div>
       </article>
     );
   }
@@ -163,10 +201,11 @@ function TranscriptItem({ item }: { item: AcpTranscriptItem }) {
   }
   return (
     <article>
-      <p className="select-text whitespace-pre-wrap break-words leading-5">{item.text}</p>
+      <AcpMarkdown text={item.text} />
+      <Attachments items={item.attachments} />
     </article>
   );
-}
+});
 
 export function AcpTranscript({
   items,
