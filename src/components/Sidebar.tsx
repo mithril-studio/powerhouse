@@ -50,6 +50,7 @@ export function Sidebar() {
   const openSettings = useAppStore((s) => s.openSettings);
   const openTelemetry = useAppStore((s) => s.openTelemetry);
   const closeTelemetry = useAppStore((s) => s.closeTelemetry);
+  const closeSettings = useAppStore((s) => s.closeSettings);
   const telemetryOpen = useAppStore((s) => s.telemetryOpen);
   const workspaceView = useAppStore((s) => s.workspaceView);
   const setWorkspaceView = useAppStore((s) => s.setWorkspaceView);
@@ -57,6 +58,7 @@ export function Sidebar() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
   const [filter, setFilter] = useState("");
+  const [showHidden, setShowHidden] = useState(false);
   const [modal, setModal] = useState<AddProjectMode | null>(null);
 
   // Close the add-project menu on Escape.
@@ -67,19 +69,25 @@ export function Sidebar() {
     return () => window.removeEventListener("keydown", onKey);
   }, [menuOpen]);
 
-  // Home leaves the telemetry page and workflows view; Workflows switches the
-  // workspace view; Telemetry toggles its overlay. Memory stays a disabled
-  // placeholder until that page exists.
+  // Home leaves the telemetry/settings overlays and the workflows view;
+  // Workflows switches the workspace view; Telemetry toggles its overlay.
+  // Memory stays a disabled placeholder until that page exists.
   const navAction = (label: (typeof NAV_ITEMS)[number]["label"]) => {
-    if (label === "Telemetry") return telemetryOpen ? closeTelemetry() : openTelemetry();
+    if (label === "Telemetry") {
+      closeSettings();
+      return telemetryOpen ? closeTelemetry() : openTelemetry();
+    }
     closeTelemetry();
+    closeSettings();
     setWorkspaceView(label === "Workflows" ? "workflows" : "home");
   };
 
   const openPaths = new Set(repos.map((r) => r.path));
   const recents = recentRepos.filter((r) => !openPaths.has(r.path));
   const q = filter.trim().toLowerCase();
-  const shownRepos = q ? repos.filter((r) => r.name.toLowerCase().includes(q)) : repos;
+  const matches = q ? repos.filter((r) => r.name.toLowerCase().includes(q)) : repos;
+  const hiddenCount = matches.filter((r) => r.hidden).length;
+  const shownRepos = showHidden ? matches : matches.filter((r) => !r.hidden);
 
   const choose = (fn: () => void) => {
     setMenuOpen(false);
@@ -208,9 +216,21 @@ export function Sidebar() {
             Add a git repository to get started.
           </p>
         ) : shownRepos.length === 0 ? (
-          <p className="px-1.5 py-2 text-xs text-muted-foreground">No projects match “{filter}”.</p>
+          <p className="px-1.5 py-2 text-xs text-muted-foreground">
+            {q ? `No projects match “${filter}”.` : "All projects are hidden."}
+          </p>
         ) : (
           shownRepos.map((repo) => <RepoItem key={repo.id} repo={repo} />)
+        )}
+
+        {hiddenCount > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowHidden((v) => !v)}
+            className="mt-1 w-full rounded-md px-1.5 py-1 text-left text-[11px] font-medium text-muted-foreground hover:text-foreground"
+          >
+            {showHidden ? "Hide hidden projects" : "Show hidden projects"}
+          </button>
         )}
       </div>
 

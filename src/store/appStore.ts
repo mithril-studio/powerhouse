@@ -173,6 +173,8 @@ export interface Repo {
   pushOnMerge: boolean;
   /** Env var names injected into this repo's cloud runs; values live in the Keychain. */
   cloudEnvNames?: string[];
+  /** Tucked out of the project list until "Show hidden projects" is toggled on. */
+  hidden?: boolean;
 }
 
 export interface Selection {
@@ -247,6 +249,8 @@ interface AppState extends PersistedTree {
   openTelemetry: () => void;
   closeTelemetry: () => void;
   addRepo: (repo: Omit<Repo, "id" | "branches" | "workflow" | "pushOnMerge">) => Repo;
+  removeRepo: (repoId: string) => void;
+  setRepoHidden: (repoId: string, hidden: boolean) => void;
   removeRecentRepo: (path: string) => void;
   addBranch: (repoId: string, branch: Branch) => void;
   removeBranch: (repoId: string, branchId: string) => void;
@@ -591,6 +595,30 @@ export const useAppStore = create<AppState>((set, get) => ({
     return created;
   },
 
+  removeRepo: (repoId) =>
+    set((s) => {
+      const { [repoId]: _dropped, ...queues } = s.queues;
+      return {
+        repos: s.repos.filter((r) => r.id !== repoId),
+        queues,
+        selection:
+          s.selection.repoId === repoId
+            ? { repoId: null, branchId: null }
+            : s.selection,
+      };
+    }),
+
+  setRepoHidden: (repoId, hidden) =>
+    set((s) => ({
+      repos: updateRepo(s.repos, repoId, (r) => ({ ...r, hidden })),
+      // Hiding the selected project clears the selection so the main view
+      // doesn't keep showing a project the user just tucked away.
+      selection:
+        hidden && s.selection.repoId === repoId
+          ? { repoId: null, branchId: null }
+          : s.selection,
+    })),
+
   removeRecentRepo: (path) =>
     set((s) => ({ recentRepos: s.recentRepos.filter((r) => r.path !== path) })),
 
@@ -676,9 +704,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     })),
 
   // Selecting a project/branch is a navigation — it also leaves the telemetry
-  // page and the workflows view (which otherwise cover the main area).
+  // and settings pages and the workflows view (which otherwise cover the
+  // main area).
   select: (repoId, branchId) =>
-    set({ selection: { repoId, branchId }, telemetryOpen: false, workspaceView: "home" }),
+    set({
+      selection: { repoId, branchId },
+      telemetryOpen: false,
+      settingsOpen: false,
+      workspaceView: "home",
+    }),
 
   setChatStatus: (chatId, status) =>
     set((s) => ({ chatStatus: { ...s.chatStatus, [chatId]: status } })),
@@ -793,7 +827,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 export const cloudSettingsOf = (s: Settings): CloudSettings => {
   // `baseVm` belonged to the fork-era settings; a snapshot name replaces it.
   const { baseVm: _legacy, ...stored } = (s.cloud ?? {}) as Partial<CloudSettings> & { baseVm?: string };
-  return { ...DEFAULT_CLOUD_SETTINGS, ...stored };
+  const merged = { ...DEFAULT_CLOUD_SETTINGS, ...stored };
+  // A persisted blank must not shadow the default: `{...def, baseSnapshot: ""}`
+  // spreads to `""`, which would fail submit with "base snapshot `` not found".
+  if (!merged.baseSnapshot?.trim()) merged.baseSnapshot = DEFAULT_CLOUD_SETTINGS.baseSnapshot;
+  return merged;
 };
 
 export const selectedRepo = (s: AppState) =>

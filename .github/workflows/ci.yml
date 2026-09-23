@@ -1,0 +1,41 @@
+name: CI
+
+# Lightweight gate on pull requests into main and test: typecheck + bundle the
+# frontend and run the test suite. Intentionally does NOT do the full Tauri/Rust
+# build (that runs in Beta/Release) so PR feedback stays fast. Wired in as a
+# required status check on `main`, so a broken build cannot merge.
+
+on:
+  pull_request:
+    branches:
+      - main
+      - test
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: build-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build (typecheck + bundle)
+        run: pnpm build
+
+      - name: Test
+        run: pnpm test

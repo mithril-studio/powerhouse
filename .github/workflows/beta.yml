@@ -1,0 +1,74 @@
+name: Beta
+
+# Builds a signed + notarized beta on every push to `test` and publishes it as a
+# GitHub pre-release (never served to users via the updater). This is the
+# staging gate: verify the installed beta, then PR `test` -> `main` and tag v*.
+
+on:
+  push:
+    branches:
+      - test
+  workflow_dispatch:
+
+concurrency:
+  group: beta-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-publish-beta:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Write updater signing key
+        run: |
+          mkdir -p ~/.tauri
+          printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" > ~/.tauri/powerhouse_updater.key
+          chmod 600 ~/.tauri/powerhouse_updater.key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+
+      - name: Write Apple notarization key
+        run: |
+          KEY_DIR="$RUNNER_TEMP/apple-notarization"
+          mkdir -p "$KEY_DIR"
+          printf '%s' "$APPLE_API_KEY_BASE64" | base64 -D > "$KEY_DIR/AuthKey_${APPLE_API_KEY_ID}.p8"
+          chmod 600 "$KEY_DIR/AuthKey_${APPLE_API_KEY_ID}.p8"
+        env:
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+
+      - name: Build and publish beta
+        env:
+          TAURI_SIGNING_PRIVATE_KEY_PATH: /Users/runner/.tauri/powerhouse_updater.key
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: Joost Dolstra (3P87HV73Y6)"
+          NOTARY_API_KEY_PATH: ${{ runner.temp }}/apple-notarization/AuthKey_${{ secrets.APPLE_API_KEY_ID }}.p8
+          NOTARY_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          NOTARY_API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/beta.sh "Automated beta from $(git rev-parse --short HEAD) on test"
