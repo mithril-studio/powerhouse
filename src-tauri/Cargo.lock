@@ -2942,6 +2942,7 @@ dependencies = [
  "base64 0.22.1",
  "dirs 7.0.0",
  "keyring",
+ "libc",
  "portable-pty",
  "powerhouse-cloud-protocol",
  "reqwest 0.12.28",

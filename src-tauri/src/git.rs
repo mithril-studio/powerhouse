@@ -64,14 +64,7 @@ pub fn git_validate_repo(path: String) -> Result<RepoInfo, String> {
     git(&root_path, &["rev-parse", "HEAD"])
         .map_err(|_| "Repository has no commits yet — make an initial commit first".to_string())?;
 
-    let default_branch = git(
-        &root_path,
-        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-    )
-    .ok()
-    .map(|s| s.strip_prefix("origin/").unwrap_or(&s).to_string())
-    .or_else(|| git(&root_path, &["symbolic-ref", "--short", "HEAD"]).ok())
-    .unwrap_or_else(|| "HEAD".to_string());
+    let default_branch = detect_target_branch(&root_path);
 
     let name = root_path
         .file_name()
@@ -110,9 +103,81 @@ fn is_github_https(url: &str) -> bool {
     (u.starts_with("https://github.com/") || u.starts_with("https://www.github.com/"))
 }
 
+/// The staging trunk. When a project has `origin/test`, that branch is what
+/// new worktrees are cut from and what the merge queue lands on — the test
+/// server deploys from it. See AGENTS.md, "Branch & release flow".
+pub(crate) const STAGING_BRANCH: &str = "test";
+
+/// Resolve a project's target branch: `origin/test` when it exists, else the
+/// remote's default (origin/HEAD), else the local HEAD. Stored on the repo at
+/// add time and editable in the merge workflow modal.
+pub(crate) fn detect_target_branch(root: &Path) -> String {
+    let staging_ref = format!("refs/remotes/origin/{STAGING_BRANCH}");
+    if git(root, &["rev-parse", "--verify", "--quiet", &staging_ref]).is_ok() {
+        return STAGING_BRANCH.to_string();
+    }
+    git(root, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+        .ok()
+        .map(|s| s.strip_prefix("origin/").unwrap_or(&s).to_string())
+        .or_else(|| git(root, &["symbolic-ref", "--short", "HEAD"]).ok())
+        .unwrap_or_else(|| "HEAD".to_string())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{is_github_https, repo_name_from_url};
+    use super::{detect_target_branch, git, is_github_https, repo_name_from_url};
+    use std::path::Path;
+
+    /// A repo with one commit on `main`, pushed to a bare `origin`.
+    fn repo_with_origin(dir: &Path) -> std::path::PathBuf {
+        let origin = dir.join("origin.git");
+        let work = dir.join("work");
+        git(dir, &["init", "--bare", "-b", "main", origin.to_str().unwrap()]).unwrap();
+        git(dir, &["init", "-b", "main", work.to_str().unwrap()]).unwrap();
+        std::fs::write(work.join("README"), "hi").unwrap();
+        git(&work, &["add", "."]).unwrap();
+        git(&work, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"]).unwrap();
+        git(&work, &["remote", "add", "origin", origin.to_str().unwrap()]).unwrap();
+        git(&work, &["push", "-q", "-u", "origin", "main"]).unwrap();
+        work
+    }
+
+    #[test]
+    fn target_branch_is_the_remote_default_without_a_test_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = repo_with_origin(dir.path());
+        git(&work, &["remote", "set-head", "origin", "main"]).unwrap();
+        assert_eq!(detect_target_branch(&work), "main");
+    }
+
+    #[test]
+    fn target_branch_prefers_origin_test_when_it_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = repo_with_origin(dir.path());
+        git(&work, &["remote", "set-head", "origin", "main"]).unwrap();
+        git(&work, &["branch", "test"]).unwrap();
+        git(&work, &["push", "-q", "origin", "test"]).unwrap();
+        assert_eq!(detect_target_branch(&work), "test");
+    }
+
+    #[test]
+    fn a_local_test_branch_alone_does_not_count() {
+        // Only the remote staging branch is the convention; a stray local
+        // `test` must not redirect the queue.
+        let dir = tempfile::tempdir().unwrap();
+        let work = repo_with_origin(dir.path());
+        git(&work, &["remote", "set-head", "origin", "main"]).unwrap();
+        git(&work, &["branch", "test"]).unwrap();
+        assert_eq!(detect_target_branch(&work), "main");
+    }
+
+    #[test]
+    fn target_branch_falls_back_to_local_head_without_a_remote() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().join("solo");
+        git(dir.path(), &["init", "-b", "trunk", work.to_str().unwrap()]).unwrap();
+        assert_eq!(detect_target_branch(&work), "trunk");
+    }
 
     #[test]
     fn parses_repo_name_from_various_url_shapes() {

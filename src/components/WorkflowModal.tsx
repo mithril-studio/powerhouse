@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useAppStore, type WorkflowStep } from "../store/appStore";
 import { RepoEnvEditor } from "./RepoEnvEditor";
+import { normalizeWorkflowSteps, validateWorkflowSteps } from "../lib/workflowSteps";
 
 const newStep = (): WorkflowStep => ({
   id: crypto.randomUUID(),
@@ -16,14 +17,19 @@ export function WorkflowModal() {
   );
   const closeWorkflowModal = useAppStore((s) => s.closeWorkflowModal);
   const setWorkflow = useAppStore((s) => s.setWorkflow);
+  const setDefaultBranch = useAppStore((s) => s.setDefaultBranch);
 
   const [steps, setSteps] = useState<WorkflowStep[]>([]);
   const [pushOnMerge, setPushOnMerge] = useState(true);
+  const [target, setTarget] = useState("");
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (repo) {
       setSteps(repo.workflow.map((s) => ({ ...s })));
       setPushOnMerge(repo.pushOnMerge);
+      setTarget(repo.defaultBranch);
+      setError(null);
     }
   }, [repoId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -45,9 +51,15 @@ export function WorkflowModal() {
     setSteps((prev) => prev.filter((s) => s.id !== id));
 
   const save = () => {
-    const cleaned = steps
-      .map((s) => ({ ...s, name: s.name.trim(), command: s.command.trim() }))
-      .filter((s) => s.name || s.command);
+    const branch = target.trim();
+    const cleaned = normalizeWorkflowSteps(steps);
+    const problems = validateWorkflowSteps(cleaned);
+    if (!branch) problems.unshift("target branch is required");
+    if (problems.length > 0) {
+      setError(problems.join(" · "));
+      return;
+    }
+    if (branch !== repo.defaultBranch) setDefaultBranch(repoId, branch);
     setWorkflow(repoId, cleaned, pushOnMerge);
     closeWorkflowModal();
   };
@@ -65,8 +77,21 @@ export function WorkflowModal() {
         <p className="mb-3 text-xs text-muted-foreground">
           Check steps run in a throwaway worktree for {repo.name}. All green →
           the tested commit lands on{" "}
-          <span className="font-mono">{repo.defaultBranch}</span>.
+          <span className="font-mono">{target.trim() || repo.defaultBranch}</span>.
         </p>
+
+        <label className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
+          <span className="shrink-0">Target branch</span>
+          <input
+            value={target}
+            onChange={(e) => setTarget(e.target.value)}
+            placeholder="test"
+            spellCheck={false}
+            aria-label="Target branch"
+            className="h-8 w-40 rounded-lg border border-input bg-background px-2.5 font-mono text-xs outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+          />
+          <span className="min-w-0 truncate">new worktrees branch from it; the queue lands on it</span>
+        </label>
 
         <div className="flex-1 space-y-1.5 overflow-y-auto">
           {steps.length === 0 && (
@@ -139,6 +164,12 @@ export function WorkflowModal() {
           <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Cloud env vars</p>
           <RepoEnvEditor repo={repo} />
         </div>
+
+        {error && (
+          <p role="alert" className="mt-3 text-xs text-destructive">
+            {error}
+          </p>
+        )}
 
         <div className="mt-3 flex justify-end gap-2">
           <button

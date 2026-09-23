@@ -7,6 +7,7 @@ mod handoff;
 mod pty;
 mod queue;
 mod telemetry;
+mod workflow;
 
 use acp::AcpManager;
 use cloud::commands::CloudManager;

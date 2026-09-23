@@ -4,16 +4,14 @@
 // commit is fast-forwarded onto main (then pushed). One worker thread per repo
 // = single writer on main. Mirrors the streaming/cancel pattern from pty.rs.
 use crate::git::{git, slugify};
+use crate::workflow::{self, RunOutcome, Runner, Sink, StepState, LOG_CAP};
 use std::collections::HashMap;
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
-
-const LOG_CAP: usize = 256 * 1024;
 
 #[derive(Clone, Copy, PartialEq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -37,25 +35,6 @@ impl QState {
     fn is_terminal(self) -> bool {
         !self.is_live()
     }
-}
-
-#[derive(Clone, Copy, PartialEq, serde::Serialize)]
-#[serde(rename_all = "lowercase")]
-enum StepStatus {
-    Pending,
-    Running,
-    Passed,
-    Failed,
-    Skipped,
-}
-
-#[derive(Clone, serde::Serialize)]
-pub struct StepState {
-    name: String,
-    command: String,
-    status: StepStatus,
-    exit_code: Option<i32>,
-    duration_ms: Option<u64>,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -123,8 +102,8 @@ impl QueueManager {
             if let Some(c) = &q.cancel {
                 c.store(true, Ordering::Relaxed);
             }
-            if let Some(child) = q.child.lock().unwrap().as_mut() {
-                let _ = child.kill();
+            if let Some(child) = q.child.lock().unwrap().as_ref() {
+                workflow::stop_now(child, Duration::from_millis(500));
             }
         }
     }
@@ -229,14 +208,7 @@ fn append_log(app: &AppHandle, repo_id: &str, entry_id: &str, idx: usize, chunk:
     let mut map = mgr.0.lock().unwrap();
     if let Some(q) = map.get_mut(repo_id) {
         let buf = q.logs.entry((entry_id.to_string(), idx)).or_default();
-        buf.push_str(chunk);
-        if buf.len() > LOG_CAP {
-            let mut cut = buf.len() - LOG_CAP;
-            while cut < buf.len() && !buf.is_char_boundary(cut) {
-                cut += 1;
-            }
-            buf.drain(..cut);
-        }
+        workflow::append_capped(buf, chunk, LOG_CAP);
     }
 }
 
@@ -271,13 +243,7 @@ pub fn queue_enqueue(
 
         let steps = workflow
             .into_iter()
-            .map(|s| StepState {
-                name: s.name,
-                command: s.command,
-                status: StepStatus::Pending,
-                exit_code: None,
-                duration_ms: None,
-            })
+            .map(|s| StepState::pending(s.name, s.command))
             .collect();
         let e = QueueEntry {
             id: gen_id(),
@@ -324,8 +290,8 @@ pub fn queue_cancel(
                         if let Some(c) = &q.cancel {
                             c.store(true, Ordering::Relaxed);
                         }
-                        if let Some(child) = q.child.lock().unwrap().as_mut() {
-                            let _ = child.kill();
+                        if let Some(child) = q.child.lock().unwrap().as_ref() {
+                            workflow::request_stop(child);
                         }
                     }
                     _ => {}
@@ -610,47 +576,17 @@ fn run_pipeline(app: &AppHandle, repo_id: &str, job: &Job) -> Outcome {
     }
 
     // Run check steps in the merged worktree.
-    for (idx, (name, cmd)) in job.steps.iter().enumerate() {
-        if cancelled() {
+    let mut sink = QueueSink { app, repo_id, entry_id: &job.entry_id };
+    let (outcome, _) = Runner::default().run_steps(&job.steps, &wt, &job.cancel, &job.child, &mut sink);
+    match outcome {
+        RunOutcome::Passed => {}
+        RunOutcome::Failed { error, .. } => {
+            cleanup_worktree(repo, &wt);
+            return Outcome::Failed(error);
+        }
+        RunOutcome::Canceled => {
             cleanup_worktree(repo, &wt);
             return Outcome::Canceled;
-        }
-        update_entry(app, repo_id, &job.entry_id, |e| {
-            e.steps[idx].status = StepStatus::Running;
-        });
-        let start = Instant::now();
-        let res = execute_step(app, repo_id, &job.entry_id, idx, cmd, &wt, &job.cancel, &job.child);
-        let dur = start.elapsed().as_millis() as u64;
-        match res {
-            StepResult::Passed => update_entry(app, repo_id, &job.entry_id, |e| {
-                e.steps[idx].status = StepStatus::Passed;
-                e.steps[idx].exit_code = Some(0);
-                e.steps[idx].duration_ms = Some(dur);
-            }),
-            StepResult::Failed(code) => {
-                update_entry(app, repo_id, &job.entry_id, |e| {
-                    e.steps[idx].status = StepStatus::Failed;
-                    e.steps[idx].exit_code = Some(code);
-                    e.steps[idx].duration_ms = Some(dur);
-                    for j in (idx + 1)..e.steps.len() {
-                        e.steps[j].status = StepStatus::Skipped;
-                    }
-                });
-                cleanup_worktree(repo, &wt);
-                return Outcome::Failed(format!("step “{name}” failed (exit {code})"));
-            }
-            StepResult::Canceled => {
-                cleanup_worktree(repo, &wt);
-                return Outcome::Canceled;
-            }
-            StepResult::SpawnError(err) => {
-                update_entry(app, repo_id, &job.entry_id, |e| {
-                    e.steps[idx].status = StepStatus::Failed;
-                    e.steps[idx].duration_ms = Some(dur);
-                });
-                cleanup_worktree(repo, &wt);
-                return Outcome::Failed(format!("could not run step “{name}”: {err}"));
-            }
         }
     }
 
@@ -689,111 +625,22 @@ fn run_pipeline(app: &AppHandle, repo_id: &str, job: &Job) -> Outcome {
     Outcome::Merged(m)
 }
 
-enum StepResult {
-    Passed,
-    Failed(i32),
-    Canceled,
-    SpawnError(String),
+/// Mirrors runner events into the queue entry and the live log stream.
+struct QueueSink<'a> {
+    app: &'a AppHandle,
+    repo_id: &'a str,
+    entry_id: &'a str,
 }
 
-fn execute_step(
-    app: &AppHandle,
-    repo_id: &str,
-    entry_id: &str,
-    idx: usize,
-    cmd: &str,
-    cwd: &Path,
-    cancel: &Arc<AtomicBool>,
-    child_slot: &Arc<Mutex<Option<Child>>>,
-) -> StepResult {
-    let mut child = match Command::new("/bin/zsh")
-        .args(["-lc", cmd])
-        .current_dir(cwd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => return StepResult::SpawnError(e.to_string()),
-    };
-
-    let pipes: Vec<Box<dyn Read + Send>> = [
-        child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>),
-        child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-    *child_slot.lock().unwrap() = Some(child);
-
-    let readers: Vec<_> = pipes
-        .into_iter()
-        .map(|mut pipe| {
-            let app = app.clone();
-            let repo_id = repo_id.to_string();
-            let entry_id = entry_id.to_string();
-            std::thread::spawn(move || {
-                let mut buf = [0u8; 8192];
-                loop {
-                    match pipe.read(&mut buf) {
-                        Ok(0) | Err(_) => break,
-                        Ok(n) => {
-                            let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
-                            append_log(&app, &repo_id, &entry_id, idx, &chunk);
-                            let _ = app.emit(
-                                &format!("queue-log-{entry_id}"),
-                                LogChunk { step: idx, chunk },
-                            );
-                        }
-                    }
-                }
-            })
-        })
-        .collect();
-
-    // Poll for exit; kill on cancel.
-    let status = loop {
-        if cancel.load(Ordering::Relaxed) {
-            if let Some(c) = child_slot.lock().unwrap().as_mut() {
-                let _ = c.kill();
-            }
-        }
-        let done = {
-            let mut guard = child_slot.lock().unwrap();
-            match guard.as_mut() {
-                Some(c) => match c.try_wait() {
-                    Ok(Some(s)) => Some(Ok(s)),
-                    Ok(None) => None,
-                    Err(e) => Some(Err(e.to_string())),
-                },
-                None => Some(Err("check process vanished".to_string())),
-            }
-        };
-        if let Some(res) = done {
-            break res;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    };
-
-    for r in readers {
-        let _ = r.join();
+impl Sink for QueueSink<'_> {
+    fn steps_changed(&mut self, steps: &[StepState]) {
+        update_entry(self.app, self.repo_id, self.entry_id, |e| e.steps = steps.to_vec());
     }
-    *child_slot.lock().unwrap() = None;
-
-    if cancel.load(Ordering::Relaxed) {
-        return StepResult::Canceled;
-    }
-    match status {
-        Ok(s) => {
-            let code = s.code().unwrap_or(-1);
-            if code == 0 {
-                StepResult::Passed
-            } else {
-                StepResult::Failed(code)
-            }
-        }
-        Err(e) => StepResult::SpawnError(e),
+    fn log(&mut self, idx: usize, chunk: &str) {
+        append_log(self.app, self.repo_id, self.entry_id, idx, chunk);
+        let _ = self.app.emit(
+            &format!("queue-log-{}", self.entry_id),
+            LogChunk { step: idx, chunk: chunk.to_string() },
+        );
     }
 }
-
