@@ -79,6 +79,13 @@ echo "==> Uploading DMG"
 gh release upload "$TAG" "$DMG_OUT" --repo "$REPO" --clobber
 
 echo "==> Verifying the DMG is attached"
-ASSET_COUNT="$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets | length')"
-[ "${ASSET_COUNT:-0}" -ge 1 ] || fail "release ${TAG} has no attached DMG after upload"
-echo "==> Beta published with ${ASSET_COUNT} asset(s): ${TAG}"
+# Read the authoritative per-release assets endpoint, not the embedded
+# `.assets` field returned by `gh release view` / `releases/tags/*` — that
+# embedded field is eventually-consistent and intermittently returns an empty
+# array for a release that does have assets, which would false-fail a good
+# build. Require the asset to be fully "uploaded" (not a "starter" stub).
+RELEASE_ID="$(gh api "repos/${REPO}/releases/tags/${TAG}" --jq '.id')"
+ASSET_COUNT="$(gh api "repos/${REPO}/releases/${RELEASE_ID}/assets" \
+  --jq '[.[] | select(.name | endswith(".dmg")) | select(.state == "uploaded")] | length')"
+[ "${ASSET_COUNT:-0}" -ge 1 ] || fail "release ${TAG} has no fully-uploaded DMG after upload"
+echo "==> Beta published with ${ASSET_COUNT} uploaded DMG(s): ${TAG}"
