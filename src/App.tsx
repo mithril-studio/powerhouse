@@ -7,6 +7,7 @@ import { hydrateFromDisk, startPersistence } from "./store/persist";
 import { startQueueSync } from "./lib/queueSync";
 import { acpKillAll, githubAccount, ptyKillAll } from "./lib/ipc";
 import { initHandoff } from "./lib/handoff";
+import { startDockBadge } from "./lib/attention";
 import { startCloudSync } from "./lib/cloud";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { Sidebar } from "./components/Sidebar";
@@ -87,6 +88,7 @@ export default function App() {
       await hydrateFromDisk();
       startPersistence();
       startQueueSync();
+      startDockBadge();
       void initHandoff();
       void reconcileGithub();
       // Cloud runs live in their VMs; this only observes and reconciles.

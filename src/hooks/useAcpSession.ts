@@ -25,6 +25,7 @@ import {
   appendUserMessage,
   applyAcpUpdate,
 } from "../lib/acpTranscript";
+import { notifyTurnFinished } from "../lib/attention";
 import { activityFromStopReason } from "../lib/chatActivity";
 import { consumeAutoSpawn } from "../lib/terminalRegistry";
 import { handoffWatchStart, telemetryAnnotateRun } from "../lib/ipc";
@@ -73,10 +74,15 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
   /** Marks a finished turn unseen, unless the user is looking at this chat. */
   const finishTurn = useCallback(
     (outcome: ReturnType<typeof activityFromStopReason>) => {
+      // A turn ends once: a crash mid-turn reaches here via both exit and the prompt.
+      if (useAppStore.getState().chatActivity[chat.id] !== "working") return;
       const seen = activeRef.current && document.hasFocus();
       setChatActivity(chat.id, seen ? null : outcome);
+      if (outcome && outcome !== "working") {
+        void notifyTurnFinished(outcome, `${branch.name} · ${chat.title}`);
+      }
     },
-    [chat.id, setChatActivity],
+    [chat.id, chat.title, branch.name, setChatActivity],
   );
 
   const mutateTranscript = useCallback(
@@ -169,9 +175,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
                 return null;
               });
               setBusy(false);
-              if (useAppStore.getState().chatActivity[chat.id] === "working") {
-                finishTurn("error");
-              }
+              finishTurn("error");
               setConnection("exited");
               setChatStatus(chat.id, "exited");
               if (code !== 0) {

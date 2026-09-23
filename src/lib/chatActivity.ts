@@ -16,6 +16,11 @@ export function activityFromStopReason(stopReason: StopReason): ChatActivity | n
   }
 }
 
+/** Chats with a finished turn nobody has looked at yet. */
+export function unseenCount(activity: Record<string, ChatActivity>): number {
+  return Object.values(activity).filter((state) => state !== "working").length;
+}
+
 const PRIORITY: ChatActivity[] = ["working", "error", "done"];
 
 /** The most urgent activity across a set of chats (e.g. a worktree's chats). */

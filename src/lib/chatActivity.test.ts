@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityFromStopReason, rollupActivity } from "./chatActivity";
+import { activityFromStopReason, rollupActivity, unseenCount } from "./chatActivity";
 
 describe("activityFromStopReason", () => {
   it("marks completed turns done, refusals as errors, and cancels as nothing", () => {
@@ -21,5 +21,12 @@ describe("rollupActivity", () => {
   it("ignores chats outside the set and is null when idle", () => {
     expect(rollupActivity(["a"], { b: "working" })).toBeNull();
     expect(rollupActivity([], {})).toBeNull();
+  });
+});
+
+describe("unseenCount", () => {
+  it("counts finished and errored chats, not working ones", () => {
+    expect(unseenCount({ a: "done", b: "error", c: "working" })).toBe(2);
+    expect(unseenCount({})).toBe(0);
   });
 });
