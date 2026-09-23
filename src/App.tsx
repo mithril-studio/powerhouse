@@ -19,6 +19,7 @@ import { RightSidebar } from "./components/RightSidebar";
 import { NewChatPicker } from "./components/NewChatPicker";
 import { SettingsPage } from "./components/SettingsPage";
 import { TelemetryPage } from "./components/telemetry/TelemetryPage";
+import { WorkflowsPage } from "./features/workflows/WorkflowsPage";
 
 let booted = false;
 
@@ -64,6 +65,8 @@ export default function App() {
   const branch = useAppStore(selectedBranch);
   const rightSidebarOpen = useAppStore((s) => s.rightSidebarOpen);
   const theme = useAppStore((s) => s.settings.theme);
+  const workspaceView = useAppStore((s) => s.workspaceView);
+  const homeVisible = workspaceView === "home";
 
   useShortcuts();
 
@@ -95,7 +98,8 @@ export default function App() {
   return (
     <div className="flex h-screen overflow-hidden">
       <Sidebar />
-      <main className="flex min-w-0 flex-1 flex-col">
+      {/* Keep chats and terminals mounted while another workspace is visible. */}
+      <main aria-label="Project workspace" inert={!homeVisible} className={`${homeVisible ? "flex" : "hidden"} min-w-0 flex-1 flex-col`}>
         <TabBar repo={repo} branch={branch} />
         <div className="relative flex-1 overflow-hidden">
           {hydrated &&
@@ -108,6 +112,7 @@ export default function App() {
                     branch={b}
                     chat={chat}
                     active={
+                      homeVisible &&
                       r.id === repo?.id &&
                       b.id === branch?.id &&
                       chat.id === b.activeChatId
@@ -132,7 +137,8 @@ export default function App() {
         </div>
         <BottomPanel />
       </main>
-      {hydrated && rightSidebarOpen && <RightSidebar repo={repo} branch={branch} />}
+      {!homeVisible && <WorkflowsPage />}
+      {homeVisible && hydrated && rightSidebarOpen && <RightSidebar repo={repo} branch={branch} />}
       <NewBranchModal />
       <WorkflowModal />
       <NewChatPicker />

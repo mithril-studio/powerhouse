@@ -512,7 +512,7 @@ mod tests {
             },
             output_branch: RunManifest::expected_output_branch(id),
             workspace: WorkspaceSpec::from_snapshot("base", Some("v1".into())),
-            agent: AgentSpec {
+            agent: Some(AgentSpec {
                 provider: AgentProvider::Fake,
                 model: None,
                 permission_mode: "dontAsk".into(),
@@ -520,7 +520,8 @@ mod tests {
                 max_turns: None,
                 max_budget_usd: None,
                 fake_script: Some("complete".into()),
-            },
+            }),
+            script: None,
             checks: vec![],
             context: ContextSpec::default(),
             deadline_seconds: 300,
