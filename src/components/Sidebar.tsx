@@ -55,6 +55,7 @@ export function Sidebar() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
   const [filter, setFilter] = useState("");
+  const [showHidden, setShowHidden] = useState(false);
   const [modal, setModal] = useState<AddProjectMode | null>(null);
 
   // Close the add-project menu on Escape.
@@ -76,7 +77,9 @@ export function Sidebar() {
   const openPaths = new Set(repos.map((r) => r.path));
   const recents = recentRepos.filter((r) => !openPaths.has(r.path));
   const q = filter.trim().toLowerCase();
-  const shownRepos = q ? repos.filter((r) => r.name.toLowerCase().includes(q)) : repos;
+  const matches = q ? repos.filter((r) => r.name.toLowerCase().includes(q)) : repos;
+  const hiddenCount = matches.filter((r) => r.hidden).length;
+  const shownRepos = showHidden ? matches : matches.filter((r) => !r.hidden);
 
   const choose = (fn: () => void) => {
     setMenuOpen(false);
@@ -202,9 +205,21 @@ export function Sidebar() {
             Add a git repository to get started.
           </p>
         ) : shownRepos.length === 0 ? (
-          <p className="px-1.5 py-2 text-xs text-muted-foreground">No projects match “{filter}”.</p>
+          <p className="px-1.5 py-2 text-xs text-muted-foreground">
+            {q ? `No projects match “${filter}”.` : "All projects are hidden."}
+          </p>
         ) : (
           shownRepos.map((repo) => <RepoItem key={repo.id} repo={repo} />)
+        )}
+
+        {hiddenCount > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowHidden((v) => !v)}
+            className="mt-1 w-full rounded-md px-1.5 py-1 text-left text-[11px] font-medium text-muted-foreground hover:text-foreground"
+          >
+            {showHidden ? "Hide hidden projects" : "Show hidden projects"}
+          </button>
         )}
       </div>
 

@@ -172,6 +172,8 @@ export interface Repo {
   pushOnMerge: boolean;
   /** Env var names injected into this repo's cloud runs; values live in the Keychain. */
   cloudEnvNames?: string[];
+  /** Tucked out of the project list until "Show hidden projects" is toggled on. */
+  hidden?: boolean;
 }
 
 export interface Selection {
@@ -242,6 +244,8 @@ interface AppState extends PersistedTree {
   openTelemetry: () => void;
   closeTelemetry: () => void;
   addRepo: (repo: Omit<Repo, "id" | "branches" | "workflow" | "pushOnMerge">) => Repo;
+  removeRepo: (repoId: string) => void;
+  setRepoHidden: (repoId: string, hidden: boolean) => void;
   removeRecentRepo: (path: string) => void;
   addBranch: (repoId: string, branch: Branch) => void;
   removeBranch: (repoId: string, branchId: string) => void;
@@ -576,6 +580,30 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
     return created;
   },
+
+  removeRepo: (repoId) =>
+    set((s) => {
+      const { [repoId]: _dropped, ...queues } = s.queues;
+      return {
+        repos: s.repos.filter((r) => r.id !== repoId),
+        queues,
+        selection:
+          s.selection.repoId === repoId
+            ? { repoId: null, branchId: null }
+            : s.selection,
+      };
+    }),
+
+  setRepoHidden: (repoId, hidden) =>
+    set((s) => ({
+      repos: updateRepo(s.repos, repoId, (r) => ({ ...r, hidden })),
+      // Hiding the selected project clears the selection so the main view
+      // doesn't keep showing a project the user just tucked away.
+      selection:
+        hidden && s.selection.repoId === repoId
+          ? { repoId: null, branchId: null }
+          : s.selection,
+    })),
 
   removeRecentRepo: (path) =>
     set((s) => ({ recentRepos: s.recentRepos.filter((r) => r.path !== path) })),
