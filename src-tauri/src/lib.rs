@@ -55,6 +55,7 @@ pub fn run() {
             git::git_clone_repo,
             git::git_init_repo,
             git::git_create_worktree,
+            git::git_list_branches,
             git::git_remove_worktree,
             git::git_changed_files,
             git::git_file_diff,

@@ -127,11 +127,15 @@ export function createHandoffChat(
 }
 
 /** Creates the worktree + branch row + its first chat. Throws with git's stderr. */
-export async function createBranch(repoId: string, name: string) {
+export async function createBranch(repoId: string, name: string, base?: string) {
   const s = useAppStore.getState();
   const repo = s.repos.find((r) => r.id === repoId);
   if (!repo) throw new Error("repository not found");
-  const worktreePath = await gitCreateWorktree(repo.path, name, repo.defaultBranch);
+  const worktreePath = await gitCreateWorktree(
+    repo.path,
+    name,
+    base?.trim() || repo.defaultBranch,
+  );
   const branch: Branch = {
     id: crypto.randomUUID(),
     name,
