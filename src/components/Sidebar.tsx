@@ -50,6 +50,7 @@ export function Sidebar() {
   const openSettings = useAppStore((s) => s.openSettings);
   const openTelemetry = useAppStore((s) => s.openTelemetry);
   const closeTelemetry = useAppStore((s) => s.closeTelemetry);
+  const closeSettings = useAppStore((s) => s.closeSettings);
   const telemetryOpen = useAppStore((s) => s.telemetryOpen);
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -66,12 +67,16 @@ export function Sidebar() {
     return () => window.removeEventListener("keydown", onKey);
   }, [menuOpen]);
 
-  // Home leaves the telemetry page; Telemetry toggles it. Without this, an open
-  // telemetry page could only be dismissed via its close button. Workflows and
-  // Memory are disabled placeholders until those pages exist.
+  // Home leaves the telemetry and settings pages; Telemetry toggles itself.
+  // Without this, an open overlay could only be dismissed via its close button.
+  // Workflows and Memory are disabled placeholders until those pages exist.
   const navAction = (label: (typeof NAV_ITEMS)[number]["label"]) => {
-    if (label === "Telemetry") return telemetryOpen ? closeTelemetry() : openTelemetry();
+    if (label === "Telemetry") {
+      closeSettings();
+      return telemetryOpen ? closeTelemetry() : openTelemetry();
+    }
     closeTelemetry();
+    closeSettings();
   };
 
   const openPaths = new Set(repos.map((r) => r.path));
