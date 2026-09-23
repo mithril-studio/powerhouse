@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 
 interface Props {
   active: boolean;
@@ -28,6 +28,14 @@ export function AcpComposer({
     inputRef.current?.focus();
     inputRef.current?.setSelectionRange(draft.length, draft.length);
   }, [active, busy]);
+
+  // Grow with the draft; CSS max-height caps it at 7 lines, then it scrolls.
+  useLayoutEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    input.style.height = "auto";
+    input.style.height = `${input.scrollHeight}px`;
+  }, [draft]);
 
   return (
     <form
@@ -64,7 +72,7 @@ export function AcpComposer({
               event.currentTarget.form?.requestSubmit();
             }
           }}
-          className="max-h-40 min-h-9 flex-1 resize-none bg-transparent py-1 text-sm leading-5 outline-none placeholder:text-muted-foreground/60 disabled:opacity-60"
+          className="max-h-[148px] min-h-9 flex-1 overflow-y-auto resize-none bg-transparent py-1 text-sm leading-5 outline-none placeholder:text-muted-foreground/60 disabled:opacity-60"
         />
       </div>
       <p className="mt-1 px-1 text-[10px] text-muted-foreground/60">
