@@ -4,6 +4,21 @@ import type { AcpTranscriptItem } from "../../lib/acpTranscript";
 import { CloudResultCard } from "../CloudResultCard";
 import { dataUrl, formatBytes, type AttachmentRef } from "../../lib/attachments";
 import { AcpMarkdown } from "./AcpMarkdown";
+import { ContextUsageMeter } from "./ContextUsageMeter";
+
+/** Context-window reading at the end of a turn: how full the model's memory is. */
+function UsageItem({ item }: { item: Extract<AcpTranscriptItem, { type: "usage" }> }) {
+  return (
+    <p role="status" className="flex justify-end text-[10px]">
+      <ContextUsageMeter
+        used={item.used}
+        size={item.size}
+        cost={item.cost}
+        label="context"
+      />
+    </p>
+  );
+}
 
 const statusGlyph: Record<string, string> = {
   pending: "·",
@@ -141,6 +156,7 @@ function Attachments({ items }: { items?: AttachmentRef[] }) {
 const TranscriptItem = memo(function TranscriptItem({ item }: { item: AcpTranscriptItem }) {
   if (item.type === "tool") return <ToolItem item={item} />;
   if (item.type === "cloud-result") return <CloudResultCard runId={item.runId} late={item.late} />;
+  if (item.type === "usage") return <UsageItem item={item} />;
   if (item.type === "plan") {
     return (
       <section className="border-l border-accent-brand/40 pl-3" aria-label="Agent plan">
