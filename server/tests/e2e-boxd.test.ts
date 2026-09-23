@@ -65,6 +65,8 @@ describe.runIf(enabled)("boxd real-infrastructure gate", () => {
 
       try {
         const view = await waitForStatus(stack.app, runId, ["succeeded", "failed"], TIMEOUT / 2);
+        const { appendFileSync } = await import("node:fs");
+        appendFileSync("/tmp/ph-e2e-view.json", `${JSON.stringify(view, null, 2)}\n`);
         expect(view.run.status).toBe("succeeded");
         expect(view.nodes.map((n: any) => n.state)).toEqual(["succeeded", "succeeded"]);
         expect(view.nodes[0].exitCode).toBe(0);

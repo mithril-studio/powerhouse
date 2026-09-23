@@ -52,8 +52,29 @@ const TRANSPORT_RETRIES = {
 
 type NodeOutcome = "succeeded" | "failed" | "canceled" | "interrupted";
 
-async function runNode(run: RunRow, nodeIndex: number): Promise<NodeOutcome> {
-  const { db, adapter, pollIntervalMs } = deps();
+/**
+ * A workflow interrupted by executor shutdown/cancellation must not write
+ * product projections: DBOS will re-run it (in this or another process) from
+ * its last checkpoint, and only a genuine execution failure is final. An
+ * interrupted function body may keep running briefly after `DBOS.shutdown()`;
+ * these are the errors its next DBOS call raises.
+ */
+function isDbosLifecycleError(err: unknown): boolean {
+  const name = (err as Error)?.name ?? "";
+  return (
+    name === "DBOSExecutorNotInitializedError" ||
+    name === "DBOSWorkflowCancelledError" ||
+    name === "DBOSAwaitedWorkflowCancelledError" ||
+    name === "DBOSInvalidWorkflowTransitionError" ||
+    // Another instance of this workflow owns the checkpoints (recovery
+    // raced an orphaned instance); this one must die without side effects.
+    name === "DBOSWorkflowConflictError" ||
+    name === "DBOSUnexpectedStepError"
+  );
+}
+
+async function runNode(d: WorkflowDeps, run: RunRow, nodeIndex: number): Promise<NodeOutcome> {
+  const { db, adapter, pollIntervalMs } = d;
   const command = run.nodes[nodeIndex - 1]!.command;
 
   // Stable identities (job UUID, machine name, manifest timestamp) are
@@ -201,8 +222,8 @@ function buildManifestForNode(run: RunRow, node: NodeRunRow, command: string) {
   });
 }
 
-async function markSkipped(runId: string, nodeIndex: number): Promise<void> {
-  const { db } = deps();
+async function markSkipped(d: WorkflowDeps, runId: string, nodeIndex: number): Promise<void> {
+  const { db } = d;
   const node = await DBOS.runStep(
     () => ensureNodeRun(db, runId, nodeIndex, Date.now()),
     { name: "ensureSkippedNodeRun" },
@@ -226,13 +247,17 @@ async function markSkipped(runId: string, nodeIndex: number): Promise<void> {
  * written through steps are projections.
  */
 async function sequenceWorkflowImpl(runId: string): Promise<{ status: string }> {
-  const { db } = deps();
+  // Capture the container once: if this instance is orphaned by a
+  // coordinator restart, it keeps the old (closed) pool and cannot poison
+  // the projections the recovered instance is writing.
+  const d = deps();
+  const { db } = d;
   const run = await DBOS.runStep(() => getRunById(db, runId), { name: "loadRun" });
   if (!run) return { status: "missing" };
   const nodeCount = run.nodes.length;
 
   const skipFrom = async (firstSkipped: number): Promise<void> => {
-    for (let i = firstSkipped; i <= nodeCount; i += 1) await markSkipped(runId, i);
+    for (let i = firstSkipped; i <= nodeCount; i += 1) await markSkipped(d, runId, i);
   };
 
   const preCanceled = await DBOS.runStep(() => isCancelRequested(db, run.id), {
@@ -261,7 +286,7 @@ async function sequenceWorkflowImpl(runId: string): Promise<{ status: string }> 
           break;
         }
       }
-      const outcome = await runNode(run, nodeIndex);
+      const outcome = await runNode(d, run, nodeIndex);
       if (outcome !== "succeeded") {
         // Fail-fast: nothing downstream of a failed node is ever submitted.
         await skipFrom(nodeIndex + 1);
@@ -273,10 +298,32 @@ async function sequenceWorkflowImpl(runId: string): Promise<{ status: string }> 
       }
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    await DBOS.runStep(() => setRunStatus(db, runId, "failed", message), {
-      name: "finalizeError",
-    });
+    // Shutdown/cancellation interruptions are not run failures: DBOS
+    // recovers the workflow from its last checkpoint, and the recovered
+    // instance owns the projection from here.
+    if (isDbosLifecycleError(err)) throw err;
+    if (process.env.PH_WORKFLOW_TRACE) {
+      const { appendFileSync } = await import("node:fs");
+      appendFileSync(
+        "/tmp/ph-wf-trace.log",
+        `catch: name=${(err as Error)?.name} msg=${(err as Error)?.message} ` +
+          `depsCurrent=${d === currentDeps} stack=${(err as Error)?.stack?.split("\n").slice(0, 6).join(" | ")}\n`,
+      );
+    }
+    // Deliberately NOT a DBOS step: an error-path step would be recorded at
+    // a position the recovered instance replays differently, corrupting the
+    // deterministic step sequence. The workflow is terminal (ERROR) after
+    // this throw, so the plain projection write is never replayed.
+    //
+    // Guarded by container identity: only the instance belonging to the
+    // live coordinator may write projections. An instance orphaned by a
+    // coordinator restart fails its next checkpoint with a plain pool
+    // error while the old app pool can still be open for a moment — its
+    // run is being recovered, not failing.
+    if (d === currentDeps) {
+      const message = err instanceof Error ? err.message : String(err);
+      await setRunStatus(db, runId, "failed", message).catch(() => {});
+    }
     throw err;
   }
 

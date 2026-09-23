@@ -24,7 +24,11 @@ All routes except `/health` require `Authorization: Bearer <token>`.
 
 | Route | Purpose |
 | --- | --- |
-| `POST /v1/runs` | Admit a run: exactly two scripts, repository, pinned SHA, snapshot identity, caller idempotency key. Returns the stable run ID immediately. |
+| `POST /v1/workflows` | Create a workflow and publish version 1: name, repository, snapshot, 1–10 named script nodes. |
+| `GET /v1/workflows` / `GET /v1/workflows/:id` | List workflows / inspect one with all published versions. |
+| `POST /v1/workflows/:id/versions` | Publish the next immutable version. Existing runs keep the version they pinned. |
+| `POST /v1/workflows/:id/runs` | Admit a run of a published version (default: latest) with a pinned commit SHA and idempotency key. |
+| `POST /v1/runs` | Admit an ad-hoc run: exactly two scripts, repository, pinned SHA, snapshot identity, caller idempotency key. |
 | `GET /v1/runs/:id` | Run, node and event projection (owner-scoped). |
 | `POST /v1/runs/:id/cancel` | Durable cancel intent. |
 | `GET /health` | Liveness + database check. |
@@ -49,7 +53,12 @@ npm test          # spins up a disposable Postgres (needs initdb/pg_ctl on PATH)
 npm run build && npm start
 ```
 
-Tests run entirely against `FakeExecutionAdapter`; the real
-`BoxdExecutionAdapter` requires a published runner snapshot with
-`probe.script_protocol_version == 3` and explicit infrastructure
-authorization (see the plan's real-infrastructure gate).
+The default test run uses `FakeExecutionAdapter`. The real-infrastructure
+acceptance suite (`tests/e2e-boxd.test.ts`) drives `BoxdExecutionAdapter`
+against actual boxd microVMs and the published `powerhouse-base` runner
+snapshot (`probe.script_protocol_version == 3`); it provisions and destroys
+real VMs, so it is opt-in:
+
+```bash
+RUN_BOXD_E2E=1 BOXD_API_KEY=... npm test -- tests/e2e-boxd.test.ts
+```
