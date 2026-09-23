@@ -258,6 +258,27 @@ pub fn git_create_worktree(
     Ok(created)
 }
 
+/// Local branch names for `repo_path`, sorted with the most recently used first.
+/// Used to pick the base branch when creating a new worktree.
+#[tauri::command]
+pub fn git_list_branches(repo_path: String) -> Result<Vec<String>, String> {
+    let repo = PathBuf::from(&repo_path);
+    let out = git(
+        &repo,
+        &[
+            "for-each-ref",
+            "--sort=-committerdate",
+            "--format=%(refname:short)",
+            "refs/heads",
+        ],
+    )?;
+    Ok(out
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect())
+}
+
 #[tauri::command]
 pub fn git_remove_worktree(repo_path: String, worktree_path: String) -> Result<(), String> {
     let repo = PathBuf::from(&repo_path);

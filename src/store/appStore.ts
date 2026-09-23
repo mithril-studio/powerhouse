@@ -546,10 +546,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       },
     })),
 
-  openSettings: () => set({ settingsOpen: true }),
+  openSettings: () => set({ settingsOpen: true, telemetryOpen: false }),
   closeSettings: () => set({ settingsOpen: false }),
 
-  openTelemetry: () => set({ telemetryOpen: true }),
+  openTelemetry: () => set({ telemetryOpen: true, settingsOpen: false }),
   closeTelemetry: () => set({ telemetryOpen: false }),
 
   addRepo: (repo) => {
