@@ -55,7 +55,7 @@ export function AcpComposer({
 
   return (
     <form
-      className="shrink-0 bg-background px-3 pt-2 font-mono"
+      className="shrink-0 bg-background px-3 py-2 font-mono"
       onSubmit={(event) => {
         event.preventDefault();
         if (!canSubmit) return;
@@ -159,10 +159,6 @@ export function AcpComposer({
           </ul>
         )}
       </div>
-      <p className="mt-1 px-1 text-[10px] text-muted-foreground/60">
-        enter send · shift+enter newline · shift+tab mode · esc interrupt · ⌘⇧P commands
-        {supportsImages ? " · paste, drop, or + for images" : ""}
-      </p>
     </form>
   );
 }
