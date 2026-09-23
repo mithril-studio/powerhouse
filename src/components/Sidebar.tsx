@@ -5,10 +5,10 @@ import { RepoItem } from "./RepoItem";
 import { AddProjectModal, type AddProjectMode } from "./AddProjectModal";
 
 const NAV_ITEMS = [
-  { label: "Home" },
-  { label: "Workflows" },
-  { label: "Memory" },
-  { label: "Telemetry" },
+  { label: "Home", soon: false },
+  { label: "Workflows", soon: true },
+  { label: "Memory", soon: true },
+  { label: "Telemetry", soon: false },
 ] as const;
 
 const iconProps = {
@@ -65,14 +65,12 @@ export function Sidebar() {
     return () => window.removeEventListener("keydown", onKey);
   }, [menuOpen]);
 
-  // Every nav item is a navigation: the placeholders simply leave the telemetry
-  // page, and Telemetry itself toggles it. Without this, an open telemetry page
-  // could only be dismissed via its close button.
-  const navAction: Record<(typeof NAV_ITEMS)[number]["label"], () => void> = {
-    Home: closeTelemetry,
-    Workflows: closeTelemetry,
-    Memory: closeTelemetry,
-    Telemetry: () => (telemetryOpen ? closeTelemetry() : openTelemetry()),
+  // Home leaves the telemetry page; Telemetry toggles it. Without this, an open
+  // telemetry page could only be dismissed via its close button. Workflows and
+  // Memory are disabled placeholders until those pages exist.
+  const navAction = (label: (typeof NAV_ITEMS)[number]["label"]) => {
+    if (label === "Telemetry") return telemetryOpen ? closeTelemetry() : openTelemetry();
+    closeTelemetry();
   };
 
   const openPaths = new Set(repos.map((r) => r.path));
@@ -91,12 +89,26 @@ export function Sidebar() {
       <div data-tauri-drag-region className="h-11 shrink-0" />
       <nav className="flex flex-col gap-0.5 px-2 pb-2">
         {NAV_ITEMS.map((item) => {
+          if (item.soon) {
+            return (
+              <button
+                key={item.label}
+                type="button"
+                disabled
+                aria-disabled="true"
+                title="Coming soon"
+                className="flex cursor-not-allowed items-center rounded-md px-2 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/40"
+              >
+                {item.label}
+              </button>
+            );
+          }
           const active = item.label === "Telemetry" && telemetryOpen;
           return (
             <button
               key={item.label}
               type="button"
-              onClick={navAction[item.label]}
+              onClick={() => navAction(item.label)}
               aria-current={active ? "page" : undefined}
               className={`flex items-center rounded-md px-2 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider hover:bg-muted hover:text-foreground ${
                 active ? "bg-muted text-foreground" : "text-muted-foreground"

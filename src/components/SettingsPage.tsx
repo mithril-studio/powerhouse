@@ -439,7 +439,7 @@ function CloudSection() {
               onChange={(e) => setClaudeInput(e.target.value)}
               placeholder={secrets?.claude ? "Claude OAuth token (stored) — paste to replace" : "Claude OAuth token from `claude setup-token`"}
               spellCheck={false}
-              className={`${cloudInput} font-mono`}
+              className={`${cloudInput} min-w-0 font-mono`}
             />
             <button
               onClick={() => void saveSecret("claude_oauth_token", claudeInput, () => setClaudeInput(""))}
@@ -449,27 +449,27 @@ function CloudSection() {
               {claudeInput.trim() ? "Save" : "Clear"}
             </button>
           </div>
+          <input
+            type="password"
+            value={githubInput}
+            onChange={(e) => setGithubInput(e.target.value)}
+            placeholder="GitHub fine-grained token, Contents: read & write"
+            spellCheck={false}
+            className={`${cloudInput} font-mono`}
+          />
           <div className="flex gap-1.5">
-            <input
-              type="password"
-              value={githubInput}
-              onChange={(e) => setGithubInput(e.target.value)}
-              placeholder="GitHub fine-grained token, Contents: read & write"
-              spellCheck={false}
-              className={`${cloudInput} font-mono`}
-            />
             <input
               value={githubScope}
               onChange={(e) => setGithubScope(e.target.value)}
               placeholder="owner or owner/repo (blank = any)"
               spellCheck={false}
               title={`Saves to Keychain slot ${githubSlot}; the most specific slot wins per remote.`}
-              className={`${cloudInput} w-48 shrink-0 grow-0 font-mono`}
+              className={`${cloudInput} min-w-0 font-mono`}
             />
             <button
               onClick={() => void saveSecret(githubSlot, githubInput, () => setGithubInput(""))}
               disabled={!githubInput.trim()}
-              className="h-8 shrink-0 rounded-lg border border-border px-2 text-muted-foreground hover:text-foreground disabled:opacity-50"
+              className="h-8 shrink-0 rounded-lg border border-border px-3 text-muted-foreground hover:text-foreground disabled:opacity-50"
             >
               Save
             </button>
@@ -540,9 +540,13 @@ function CloudSection() {
   );
 }
 
+const TABS = ["Main", "Agents", "Cloud"] as const;
+type Tab = (typeof TABS)[number];
+
 export function SettingsPage() {
   const open = useAppStore((s) => s.settingsOpen);
   const closeSettings = useAppStore((s) => s.closeSettings);
+  const [tab, setTab] = useState<Tab>("Main");
 
   useEffect(() => {
     if (!open) return;
@@ -559,7 +563,7 @@ export function SettingsPage() {
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-background">
+    <div className="fixed inset-y-0 right-0 left-60 z-40 flex flex-col border-l border-border bg-background">
       {/* Draggable title strip (traffic-light overlay) with a close affordance. */}
       <div
         data-tauri-drag-region
@@ -576,37 +580,58 @@ export function SettingsPage() {
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-2xl px-8 pb-16 pt-2">
-          <h1 className="mb-6 text-lg font-semibold text-foreground">Settings</h1>
+        <div className="mx-auto w-full max-w-4xl px-8 pb-16 pt-2">
+          <h1 className="mb-4 text-lg font-semibold text-foreground">Settings</h1>
 
-          <Section title="Account" description="Your Powerhouse identity.">
-            <AccountSection />
-          </Section>
+          <div className="mb-6 flex gap-4 border-b border-border">
+            {TABS.map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setTab(t)}
+                className={`-mb-px border-b pb-1.5 text-[11px] font-semibold uppercase tracking-wider ${
+                  tab === t
+                    ? "border-accent-brand text-foreground"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
 
-          <Section title="Appearance" description="Choose your color theme.">
-            <AppearanceSection />
-          </Section>
+          {tab === "Main" ? (
+            <>
+              <Section title="Account" description="Your Powerhouse identity.">
+                <AccountSection />
+              </Section>
 
-          <Section
-            title="Connections"
-            description="Link external services to Powerhouse."
-          >
-            <ConnectionsSection />
-          </Section>
+              <Section title="Appearance" description="Choose your color theme.">
+                <AppearanceSection />
+              </Section>
 
-          <Section
-            title="Cloud"
-            description="Credentials and defaults for one-click cloud runs."
-          >
-            <CloudSection />
-          </Section>
-
-          <Section
-            title="Agents"
-            description="CLI access — run the login flow for each coding agent."
-          >
-            <AgentsSection />
-          </Section>
+              <Section
+                title="Connections"
+                description="Link external services to Powerhouse."
+              >
+                <ConnectionsSection />
+              </Section>
+            </>
+          ) : tab === "Agents" ? (
+            <Section
+              title="Agents"
+              description="CLI access — run the login flow for each coding agent."
+            >
+              <AgentsSection />
+            </Section>
+          ) : (
+            <Section
+              title="Cloud"
+              description="Credentials and defaults for one-click cloud runs."
+            >
+              <CloudSection />
+            </Section>
+          )}
         </div>
       </div>
     </div>
