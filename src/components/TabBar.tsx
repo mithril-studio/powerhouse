@@ -89,7 +89,7 @@ export function TabBar({ repo, branch }: Props) {
           <button
             onClick={() => void quickSubmitBranch(repo, branch)}
             disabled={!!cloudStage}
-            title="Send this branch to the cloud"
+            title="Send this chat and its branch to the cloud; it comes back here when the run finishes"
             className="flex h-7 items-center gap-1.5 rounded-md bg-foreground px-2.5 text-xs font-medium text-background hover:bg-foreground/90 disabled:opacity-50"
           >
             {cloudStage && (

@@ -33,6 +33,8 @@ export interface AcpCallbacks {
   onAvailableCommandsChange?: (commands: AvailableCommand[]) => void;
   onSessionReplayChange?: (replaying: boolean) => void;
   onBusyChange?: (busy: boolean) => void;
+  /** The connection was handed over (the chat went to the cloud). */
+  onDetached?: () => void;
   onStderr?: (chunk: string) => void;
   onExit: (code: number | null) => void;
 }
@@ -44,6 +46,8 @@ interface Entry {
   unlisten: UnlistenFn[];
   closeInput: () => void;
   busy: boolean;
+  /** Latest config options, for callers outside the chat (cloud send). */
+  configOptions: SessionConfigOption[];
 }
 
 const registry = new Map<string, Entry>();
@@ -75,9 +79,12 @@ export async function startAcp(opts: {
   mcpServers?: McpServer[];
   /** Runtime-specific session options; runtimes ignore keys they don't know. */
   meta?: Record<string, unknown>;
+  /** Prefer `session/load` so the agent replays the whole history (the
+   *  session changed outside this connection). */
+  replay?: boolean;
   callbacks: AcpCallbacks;
 }): Promise<AcpStartResult> {
-  const { chatId, cwd, command, env, resumeSessionId, callbacks } = opts;
+  const { chatId, cwd, command, env, resumeSessionId, replay, callbacks } = opts;
   const mcpServers = opts.mcpServers ?? [];
   const meta = opts.meta ? { _meta: opts.meta } : {};
   await disposeAcp(chatId);
@@ -125,6 +132,7 @@ export async function startAcp(opts: {
         callbacks.onModeChange?.(params.update.currentModeId);
       }
       if (params.update.sessionUpdate === "config_option_update") {
+        entry.configOptions = params.update.configOptions;
         callbacks.onConfigOptionsChange?.(params.update.configOptions);
       }
       if (params.update.sessionUpdate === "available_commands_update") {
@@ -138,6 +146,7 @@ export async function startAcp(opts: {
     unlisten: [unlistenOut, unlistenStderr, unlistenExit],
     closeInput,
     busy: false,
+    configOptions: [],
   };
   registry.set(chatId, entry);
 
@@ -160,8 +169,9 @@ export async function startAcp(opts: {
     let configOptions: SessionConfigOption[] | null | undefined;
     let resumed = false;
 
-    const canResume = capabilities.sessionCapabilities?.resume != null;
     const canLoad = capabilities.loadSession === true;
+    const canResume =
+      capabilities.sessionCapabilities?.resume != null && !(replay && canLoad);
     if (resumeSessionId && (canResume || canLoad)) {
       try {
         if (!canResume) callbacks.onSessionReplayChange?.(true);
@@ -206,6 +216,7 @@ export async function startAcp(opts: {
     }
 
     entry.sessionId = sessionId;
+    entry.configOptions = configOptions ?? [];
     return {
       sessionId,
       resumed,
@@ -276,5 +287,35 @@ export async function setAcpConfigOption(
     "session/set_config_option",
     option,
   )) as SetSessionConfigOptionResponse;
+  entry.configOptions = response.configOptions;
   return response.configOptions;
+}
+
+/** The chat's current model choice as the agent reports it, if connected. */
+export function acpModel(chatId: string): string | null {
+  const option = registry
+    .get(chatId)
+    ?.configOptions.find((o) => o.category === "model");
+  return typeof option?.currentValue === "string" ? option.currentValue : null;
+}
+
+/**
+ * Hand the chat's session over (to the cloud): stop any turn in flight, wait
+ * for it to settle so the transcript on disk is complete, then close the
+ * agent. The chat learns about it through `onDetached`.
+ */
+export async function detachAcp(chatId: string, timeoutMs = 20_000): Promise<void> {
+  const entry = registry.get(chatId);
+  if (!entry) return;
+  if (entry.busy && entry.sessionId) {
+    await entry.connection.agent
+      .notify("session/cancel", { sessionId: entry.sessionId })
+      .catch(() => {});
+    const deadline = Date.now() + timeoutMs;
+    while (entry.busy && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  entry.callbacks.onDetached?.();
+  await disposeAcp(chatId);
 }

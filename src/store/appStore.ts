@@ -36,6 +36,11 @@ export interface Chat {
   transport?: AgentTransport;
   /** Structured ACP history. PTY chats continue to use raw transcript files. */
   acpTranscript?: AcpTranscriptItem[];
+  /** Last cloud run whose continued session was applied to this chat. */
+  cloudSessionRunId?: string;
+  /** The session changed outside ACP (it came back from the cloud): the next
+   *  start replays it with `session/load` so the transcript shows every turn. */
+  replayOnResume?: boolean;
 }
 
 export interface AgentProfile {
@@ -273,6 +278,14 @@ interface AppState extends PersistedTree {
   addChat: (repoId: string, branchId: string, chat: Chat) => void;
   removeChat: (repoId: string, branchId: string, chatId: string) => void;
   setActiveChat: (repoId: string, branchId: string, chatId: string) => void;
+  applyCloudSession: (
+    repoId: string,
+    branchId: string,
+    chatId: string,
+    runId: string,
+    sessionId: string,
+  ) => void;
+  clearChatReplay: (repoId: string, branchId: string, chatId: string) => void;
   setChatAgentSession: (
     repoId: string,
     branchId: string,
@@ -717,6 +730,26 @@ export const useAppStore = create<AppState>((set, get) => ({
       repos: updateBranch(s.repos, repoId, branchId, (b) => ({
         ...b,
         activeChatId: chatId,
+      })),
+    })),
+
+  applyCloudSession: (repoId, branchId, chatId, runId, sessionId) =>
+    set((s) => ({
+      repos: updateBranch(s.repos, repoId, branchId, (b) => ({
+        ...b,
+        chats: b.chats.map((c) =>
+          c.id === chatId
+            ? { ...c, agentSessionId: sessionId, cloudSessionRunId: runId, replayOnResume: true }
+            : c,
+        ),
+      })),
+    })),
+
+  clearChatReplay: (repoId, branchId, chatId) =>
+    set((s) => ({
+      repos: updateBranch(s.repos, repoId, branchId, (b) => ({
+        ...b,
+        chats: b.chats.map((c) => (c.id === chatId ? { ...c, replayOnResume: false } : c)),
       })),
     })),
 

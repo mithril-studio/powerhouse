@@ -149,6 +149,20 @@ export interface CloudRunRecord {
   returned: ReturnOutcome | null;
   /** Retryable return failure (fetch/push), retried by the tick. */
   return_error: string | null;
+  /** The chat's own Claude session, when it travelled with the run. */
+  session?: SessionHandoff | null;
+}
+
+export type SessionReturn =
+  | { kind: "restored"; session_id: string; files: number }
+  | { kind: "unchanged"; reason: string };
+
+export interface SessionHandoff {
+  session_id: string;
+  /** The worktree the session belongs to on this Mac. */
+  cwd: string;
+  /** Null while the cloud owns the conversation (the chat is locked). */
+  returned: SessionReturn | null;
 }
 
 export interface SourceInfo {
@@ -246,6 +260,8 @@ export interface QuickSubmitRequest {
   envNames: string[];
   /** Chat the send came from (`branch.activeChatId`); the result returns here. */
   chatId: string | null;
+  /** That chat's Claude session; its transcript travels with the run. */
+  agentSessionId?: string | null;
 }
 
 export type QuickSubmitOutcome =
@@ -286,6 +302,27 @@ export const cloudImport = (runId: string) =>
   invoke<{ worktree_path: string; branch: string; result_sha: string }>("cloud_import", { runId });
 export const cloudForget = (runId: string, force = false) =>
   invoke<void>("cloud_forget", { runId, force });
+/** Unlock a chat whose session went to the cloud, keeping the local copy. */
+export const cloudKeepSessionLocal = (runId: string) =>
+  invoke<CloudRunRecord>("cloud_keep_session_local", { runId });
+
+/** The run that currently owns `chatId`'s conversation, if any. */
+export function runHoldingChat(
+  runs: Record<string, CloudRunRecord>,
+  chatId: string,
+): CloudRunRecord | null {
+  for (const rec of Object.values(runs)) {
+    if (
+      rec.origin_chat_id === chatId &&
+      rec.session &&
+      !rec.session.returned &&
+      rec.phase !== "submit_failed"
+    ) {
+      return rec;
+    }
+  }
+  return null;
+}
 export const cloudSecretStatus = (remoteUrl?: string | null) =>
   invoke<SecretStatus>("cloud_secret_status", { remoteUrl: remoteUrl ?? null });
 /** `name`: `claude_oauth_token`, `github_token`, or `github_token:<owner>[/<repo>]`. */
@@ -371,13 +408,38 @@ export function returnResultToChat(rec: CloudRunRecord, late: boolean) {
   );
 }
 
+/**
+ * A continued chat came home: point the chat at the returned session and have
+ * it replay the whole conversation (local and cloud turns) on its next start.
+ * Applied once per run; `cloudSessionRunId` is the persisted dedupe.
+ */
+export function applyReturnedSession(rec: CloudRunRecord) {
+  const back = rec.session?.returned;
+  if (back?.kind !== "restored" || !rec.origin_chat_id) return;
+  const location = findChatLocation(rec.origin_chat_id);
+  if (!location) return;
+  const s = useAppStore.getState();
+  const chat = s.repos
+    .find((r) => r.id === location.repoId)
+    ?.branches.find((b) => b.id === location.branchId)
+    ?.chats.find((c) => c.id === rec.origin_chat_id);
+  if (!chat || chat.cloudSessionRunId === rec.run_id) return;
+  s.applyCloudSession(location.repoId, location.branchId, chat.id, rec.run_id, back.session_id);
+}
+
+/** Everything a record update can bring back to a chat. */
+function returnToChat(rec: CloudRunRecord, late: boolean) {
+  applyReturnedSession(rec);
+  returnResultToChat(rec, late);
+}
+
 async function syncOne(runId: string) {
   if (inFlight.has(runId)) return;
   inFlight.add(runId);
   try {
     const rec = await cloudSync(runId);
     useAppStore.getState().setCloudRun(rec);
-    returnResultToChat(rec, false);
+    returnToChat(rec, false);
     nextAllowed.set(runId, Date.now() + (rec.last_sync_error ? RECONNECT_BACKOFF_MS : ACTIVE_POLL_MS));
   } catch {
     nextAllowed.set(runId, Date.now() + RECONNECT_BACKOFF_MS);
@@ -420,13 +482,13 @@ export async function startCloudSync() {
     useAppStore.getState().setCloudRuns(runs);
     // A run already returned at boot finished while the app was closed: its
     // card arrives late.
-    for (const rec of runs) returnResultToChat(rec, true);
+    for (const rec of runs) returnToChat(rec, true);
   } catch (err) {
     console.warn("cloud runs unavailable:", err);
   }
   await listen<CloudRunRecord>("cloud-run-update", (e) => {
     useAppStore.getState().setCloudRun(e.payload);
-    returnResultToChat(e.payload, false);
+    returnToChat(e.payload, false);
   });
   await listen<QuickSubmitStage>("cloud-quick-submit", (e) => {
     useAppStore.getState().setCloudQuickStage(e.payload.repoId, e.payload.branch, e.payload.stage);

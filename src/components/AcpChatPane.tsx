@@ -15,6 +15,7 @@ import { AcpTranscript } from "./acp/AcpTranscript";
 import { AcpPermissionCard } from "./acp/AcpPermissionCard";
 import { AcpComposer } from "./acp/AcpComposer";
 import { AcpConnectionPanel } from "./acp/AcpConnectionPanel";
+import { AcpCloudPanel } from "./acp/AcpCloudPanel";
 import { AcpCommandPalette } from "./acp/AcpCommandPalette";
 import { AcpFooter } from "./acp/AcpFooter";
 
@@ -103,7 +104,9 @@ export function AcpChatPane({ repoId, branch, chat, active }: Props) {
         />
       )}
 
-      {!connected ? (
+      {session.cloudRunId ? (
+        <AcpCloudPanel runId={session.cloudRunId} />
+      ) : !connected ? (
         <AcpConnectionPanel
           state={session.connection}
           agentName={profile.name}
@@ -145,7 +148,7 @@ export function AcpChatPane({ repoId, branch, chat, active }: Props) {
           onRemoveAttachment={attachments.remove}
         />
       )}
-      {connected && (
+      {connected && !session.cloudRunId && (
         <AcpFooter
           branchName={branch.name}
           configOptions={session.configOptions}
