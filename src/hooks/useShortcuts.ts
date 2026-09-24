@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useAppStore } from "../store/appStore";
 import { focusTerminal } from "../lib/terminalRegistry";
 import { deleteBranch, deleteChat } from "../lib/actions";
+import { hasPowerConfirmation } from "../lib/powerConfirm";
 
 /**
  * Cmd+D → new branch modal, Cmd+T → agent picker, Ctrl+` → bottom shell,
@@ -12,8 +13,8 @@ export function useShortcuts() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const s = useAppStore.getState();
-      // Workflow editing must not close or manipulate a hidden chat/worktree.
-      if (s.workspaceView !== "home") return;
+      // Workflow editing or a confirmation dialog must not close or manipulate a hidden chat/worktree.
+      if (s.workspaceView !== "home" || hasPowerConfirmation()) return;
 
       // Ctrl+` toggles the bottom terminal (layout-independent via e.code).
       if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.code === "Backquote") {
