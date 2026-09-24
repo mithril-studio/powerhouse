@@ -126,7 +126,9 @@ export function Sidebar() {
           const active =
             item.label === "Telemetry"
               ? telemetryOpen
-              : !telemetryOpen && item.label.toLowerCase() === workspaceView;
+              : item.label === "Memory"
+                ? memoryOpen
+                : !telemetryOpen && !memoryOpen && item.label.toLowerCase() === workspaceView;
           return (
             <button
               key={item.label}

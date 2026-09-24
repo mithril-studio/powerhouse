@@ -193,6 +193,43 @@ describe("cloud run mirror", () => {
   });
 });
 
+describe("page navigation overlays", () => {
+  it("keeps settings, telemetry, memory and workflows mutually reachable", () => {
+    useAppStore.setState({
+      workspaceView: "home",
+      settingsOpen: false,
+      telemetryOpen: false,
+      memoryOpen: false,
+    });
+
+    useAppStore.getState().openSettings();
+    expect(useAppStore.getState()).toEqual(
+      expect.objectContaining({ settingsOpen: true, memoryOpen: false, telemetryOpen: false }),
+    );
+
+    useAppStore.getState().openMemory();
+    expect(useAppStore.getState()).toEqual(
+      expect.objectContaining({ settingsOpen: false, memoryOpen: true, telemetryOpen: false }),
+    );
+
+    useAppStore.getState().openTelemetry();
+    expect(useAppStore.getState()).toEqual(
+      expect.objectContaining({ settingsOpen: false, memoryOpen: false, telemetryOpen: true }),
+    );
+
+    useAppStore.getState().openMemory();
+    useAppStore.getState().setWorkspaceView("workflows");
+    expect(useAppStore.getState()).toEqual(
+      expect.objectContaining({
+        workspaceView: "workflows",
+        settingsOpen: false,
+        memoryOpen: false,
+        telemetryOpen: false,
+      }),
+    );
+  });
+});
+
 describe("chat activity", () => {
   it("sets, replaces, and clears a chat's activity", () => {
     useAppStore.setState({ chatActivity: {} });

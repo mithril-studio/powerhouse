@@ -133,7 +133,7 @@ export function MemoryPage() {
   const healthy = status === "external" || status === "supervised";
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-background">
+    <div className="fixed inset-y-0 right-0 left-60 z-40 flex flex-col border-l border-border bg-background">
       <div data-tauri-drag-region className="flex h-11 shrink-0 items-center justify-end px-3">
         <button
           onClick={() => closeMemory()}

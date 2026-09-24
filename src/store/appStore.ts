@@ -538,7 +538,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   queues: {},
   workflowDrafts: [],
   workspaceView: "home",
-  setWorkspaceView: (workspaceView) => set({ workspaceView, settingsOpen: false, telemetryOpen: false }),
+  setWorkspaceView: (workspaceView) => set({ workspaceView, settingsOpen: false, telemetryOpen: false, memoryOpen: false }),
   saveWorkflowDraft: (draft) => set((s) => ({
     workflowDrafts: s.workflowDrafts.some((d) => d.id === draft.id)
       ? s.workflowDrafts.map((d) => d.id === draft.id ? draft : d)
@@ -618,12 +618,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       },
     })),
 
-  openSettings: () => set({ settingsOpen: true, telemetryOpen: false }),
+  openSettings: () => set({ settingsOpen: true, telemetryOpen: false, memoryOpen: false }),
   closeSettings: () => set({ settingsOpen: false }),
 
-  openTelemetry: () => set({ telemetryOpen: true, settingsOpen: false }),
+  openTelemetry: () => set({ telemetryOpen: true, settingsOpen: false, memoryOpen: false }),
   closeTelemetry: () => set({ telemetryOpen: false }),
-  openMemory: () => set({ memoryOpen: true }),
+  openMemory: () => set({ memoryOpen: true, settingsOpen: false, telemetryOpen: false }),
   closeMemory: () => set({ memoryOpen: false }),
 
   addRepo: (repo) => {
