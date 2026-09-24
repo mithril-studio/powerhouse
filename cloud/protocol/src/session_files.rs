@@ -1,19 +1,20 @@
-//! Session handoff: install a desktop Claude Code session into the agent's
-//! HOME before the agent resumes it, and pack it up again afterwards so the
-//! desktop can continue the same conversation locally.
+//! Where a Claude Code session lives on disk, shared by both ends of a
+//! session handoff: the desktop packs a chat and the runner installs it into
+//! the agent's HOME; after the agent stops the runner packs it again and the
+//! desktop restores it. The only file I/O in this crate.
 //!
-//! Paths inside the bundle are rewritten twice: from the desktop worktree to
-//! this run's workspace on the way in, and back on the way out.
+//! Paths inside the bundle are rewritten on every hop, so each side sees its
+//! own working directory in the conversation.
 
 use std::path::{Path, PathBuf};
 
-use powerhouse_cloud_protocol::{
+use crate::{
     claude_project_slug, sha256_hex, split_bundle_path, BundleFile, SessionBundle, SessionSpec,
     MAX_SESSION_BUNDLE_BYTES,
 };
 
 /// Brief written by the runner itself; never sent home.
-const RUNNER_BRIEF: &str = "cloud-task.md";
+pub const RUNNER_BRIEF: &str = "cloud-task.md";
 /// Per-file cap when packing; larger files stay on the VM.
 const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
 
@@ -26,7 +27,7 @@ pub struct Layout {
 }
 
 impl Layout {
-    fn project_dir(&self) -> PathBuf {
+    pub fn project_dir(&self) -> PathBuf {
         self.home
             .join(".claude")
             .join("projects")
@@ -37,11 +38,12 @@ impl Layout {
         self.home.join(".claude").join("todos")
     }
 
-    fn powerhouse_dir(&self) -> PathBuf {
+    pub fn powerhouse_dir(&self) -> PathBuf {
         self.cwd.join(".powerhouse")
     }
 
-    fn resolve(&self, bundle_path: &str) -> Result<PathBuf, String> {
+    /// Absolute destination of a bundle path on this side.
+    pub fn resolve(&self, bundle_path: &str) -> Result<PathBuf, String> {
         let (root, rest) = split_bundle_path(bundle_path)?;
         let base = match root {
             "project" => self.project_dir(),
@@ -84,8 +86,8 @@ pub fn install(mut bundle: SessionBundle, layout: &Layout) -> Result<usize, Stri
 }
 
 /// Pack session `session_id` from `layout`, addressed to `home_cwd` (the
-/// desktop worktree). `.powerhouse/` documents come along except the runner's
-/// own brief.
+/// working directory on the receiving side). `.powerhouse/` documents come
+/// along except the runner's own brief.
 pub fn capture(session_id: &str, layout: &Layout, home_cwd: &str, claude_version: Option<String>) -> Result<SessionBundle, String> {
     let project = layout.project_dir();
     let transcript = project.join(format!("{session_id}.jsonl"));

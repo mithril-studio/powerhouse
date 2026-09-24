@@ -504,10 +504,10 @@ fn prepare_workspace(ctx: &mut Ctx) -> Result<(), String> {
     // A continued chat: the desktop transcript goes where Claude Code looks
     // for this workspace's sessions, before the runner's brief is written.
     if let Some(spec) = &m.session {
-        let bundle = crate::session::read_verified(&paths::session_inbound(&m.run_id), spec)?;
+        let bundle = powerhouse_cloud_protocol::session_files::read_verified(&paths::session_inbound(&m.run_id), spec)?;
         let from = bundle.cwd.clone();
-        let layout = crate::session::Layout { home: home.clone(), cwd: ctx.workspace.clone() };
-        let files = crate::session::install(bundle, &layout)?;
+        let layout = powerhouse_cloud_protocol::session_files::Layout { home: home.clone(), cwd: ctx.workspace.clone() };
+        let files = powerhouse_cloud_protocol::session_files::install(bundle, &layout)?;
         ctx.event("session.installed", serde_json::json!({ "session_id": spec.session_id, "files": files, "from_cwd": from }));
     }
     let brief = render_brief(&m);
@@ -700,14 +700,14 @@ fn capture_session(ctx: &mut Ctx, reported: Option<&str>) {
     let m = ctx.row.manifest.clone();
     let Some(spec) = m.session.as_ref() else { return };
     let captured = (|| -> Result<(String, usize, usize), String> {
-        let inbound = crate::session::read_verified(&paths::session_inbound(&m.run_id), spec)?;
+        let inbound = powerhouse_cloud_protocol::session_files::read_verified(&paths::session_inbound(&m.run_id), spec)?;
         // `--resume` keeps the id; accept a new one only if Claude says so.
         let sid = reported
             .filter(|s| powerhouse_cloud_protocol::validate_run_id(s).is_ok())
             .unwrap_or(&spec.session_id)
             .to_string();
-        let layout = crate::session::Layout { home: paths::agent_home(&m.run_id), cwd: ctx.workspace.clone() };
-        let bundle = crate::session::capture(&sid, &layout, &inbound.cwd, inbound.claude_version.clone())?;
+        let layout = powerhouse_cloud_protocol::session_files::Layout { home: paths::agent_home(&m.run_id), cwd: ctx.workspace.clone() };
+        let bundle = powerhouse_cloud_protocol::session_files::capture(&sid, &layout, &inbound.cwd, inbound.claude_version.clone())?;
         let bytes = bundle.to_bytes();
         write_atomic(&paths::session_outbound(&m.run_id), &bytes, 0o600).map_err(|e| e.to_string())?;
         Ok((sid, bundle.files.len(), bytes.len()))

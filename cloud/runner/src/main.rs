@@ -6,7 +6,6 @@ mod exec;
 mod fake;
 mod gitops;
 mod paths;
-mod session;
 mod store;
 mod systemd;
 mod util;
@@ -310,7 +309,7 @@ fn submit(
     // durable, and keep it root-only for the executor.
     match (&manifest.session, session) {
         (Some(spec), Some(src)) => {
-            session::read_verified(src, spec).map_err(|m| RunnerError::new("session_invalid", m))?;
+            powerhouse_cloud_protocol::session_files::read_verified(src, spec).map_err(|m| RunnerError::new("session_invalid", m))?;
             let bytes = std::fs::read(src).map_err(|e| RunnerError::new("session_unreadable", e.to_string()))?;
             util::write_atomic(&paths::session_inbound(&manifest.run_id), &bytes, 0o600)
                 .map_err(|e| RunnerError::new("session", e.to_string()))?;

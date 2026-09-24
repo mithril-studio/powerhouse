@@ -19,13 +19,15 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use powerhouse_cloud_protocol::{
     AgentProvider, AgentSpec, CheckSpec, ContextSpec, EventPage, ProbeInfo, Receipt, Response,
-    ResultManifest, RunManifest, RunSnapshot, RunState, RunnerError, SourceSpec, TaskSpec,
-    WorkspaceSpec, MAX_BRIEF_BYTES, PROTOCOL_VERSION,
+    ResultManifest, RunManifest, RunSnapshot, RunState, RunnerError, SessionBundle, SessionSpec,
+    SourceSpec, TaskSpec, WorkspaceSpec, MAX_BRIEF_BYTES, PROTOCOL_VERSION, SESSION_PROTOCOL_VERSION,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use super::secrets::{self, SecretStore};
-use super::store::{CloudRunRecord, CloudStore, DiffMeta, MachineState, Phase, ReturnOutcome, SnapshotHandle, VmRef};
+use super::store::{
+    CloudRunRecord, CloudStore, DiffMeta, MachineState, Phase, ReturnOutcome, SessionHandoff, SessionReturn, SnapshotHandle, VmRef,
+};
 use super::transport::{ensure_owned, Boxd, BoxdCli, MachineInfo, SnapshotInfo, TransportError, OWNED_PREFIX};
 use crate::git::git;
 
@@ -281,6 +283,10 @@ pub struct SubmitRequest {
     /// Cloud-tab sends with no active chat.
     #[serde(default)]
     pub chat_id: Option<String>,
+    /// The chat's own Claude Code session, packed by the quick submit. The
+    /// cloud agent resumes it instead of starting from the brief alone.
+    #[serde(skip)]
+    pub session: Option<SessionBundle>,
 }
 
 fn default_permission_mode() -> String {
@@ -410,13 +416,21 @@ fn ensure_machine_from_snapshot(boxd: &dyn Boxd, name: &str, snapshot: &str, cei
 }
 
 pub fn build_manifest(req: &SubmitRequest, run_id: &str, source: &SourceInfo, base: &SnapshotInfo) -> Result<RunManifest, String> {
+    let session = req.session.as_ref().map(|b| {
+        let bytes = b.to_bytes();
+        SessionSpec {
+            session_id: b.session_id.clone(),
+            bundle_sha256: powerhouse_cloud_protocol::sha256_hex(&bytes),
+            bundle_bytes: bytes.len() as u64,
+        }
+    });
     let provider = match req.provider.as_str() {
         "claude" => AgentProvider::Claude,
         "fake" => AgentProvider::Fake,
         other => return Err(format!("unknown provider {other}")),
     };
     let manifest = RunManifest {
-        protocol_version: PROTOCOL_VERSION,
+        protocol_version: if session.is_some() { SESSION_PROTOCOL_VERSION } else { PROTOCOL_VERSION },
         run_id: run_id.to_string(),
         task: TaskSpec { text: req.task.trim().to_string(), acceptance_criteria: req.acceptance_criteria.clone() },
         source: SourceSpec {
@@ -442,6 +456,7 @@ pub fn build_manifest(req: &SubmitRequest, run_id: &str, source: &SourceInfo, ba
         deadline_seconds: req.deadline_seconds,
         created_at_ms: now_ms(),
         predecessor_run_id: None,
+        session,
     };
     manifest.validate()?;
     Ok(manifest)
@@ -504,8 +519,9 @@ pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest
         }
     }
     let run_id = uuid::Uuid::new_v4().to_string();
-    let manifest = build_manifest(&req, &run_id, &source, &base)?;
-    let digest = manifest.digest();
+    let mut manifest = build_manifest(&req, &run_id, &source, &base)?;
+    let mut digest = manifest.digest();
+    let session_bytes = req.session.as_ref().map(|b| b.to_bytes());
     // Credentials are Powerhouse's own, per run, and must exist before any
     // machine is touched. Git publication needs a token only for HTTPS remotes.
     let need_claude = manifest.agent.as_ref().is_some_and(|a| a.provider == AgentProvider::Claude);
@@ -551,6 +567,7 @@ pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest
         origin_chat_id: req.chat_id.clone(),
         returned: None,
         return_error: None,
+        session: req.session.as_ref().map(|b| SessionHandoff { session_id: b.session_id.clone(), cwd: b.cwd.clone(), returned: None }),
     };
     // Durable intent (run id, machine name, snapshot version) before the
     // first remote side effect.
@@ -607,6 +624,21 @@ pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest
                 base.name, probe.protocol_version
             ));
         }
+        // A base snapshot from before session handoff can still run the
+        // branch from its brief; the chat then stays on this Mac.
+        if manifest.session.is_some() && probe.session_protocol_version != Some(SESSION_PROTOCOL_VERSION) {
+            manifest.session = None;
+            manifest.protocol_version = PROTOCOL_VERSION;
+            digest = manifest.digest();
+            record.manifest = manifest.clone();
+            record.manifest_digest = digest.clone();
+            record.session = None;
+            record.phase_detail = Some(format!(
+                "The runner in snapshot {} cannot continue a chat yet, so the cloud agent starts from the brief. Publish a new base snapshot to send the chat too.",
+                base.name
+            ));
+            persist(mgr, app, &record)?;
+        }
         if !probe.agent_user_ready || !probe.store_ready {
             return Err(format!("runner on {vm_name} is not installed correctly (agent user or store missing); publish a new base snapshot"));
         }
@@ -638,6 +670,18 @@ pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest
             shred_local(&creds_tmp);
             cp_result?;
         }
+        // The chat travels next to the manifest, which pins its digest.
+        let remote_session = format!("/home/boxd/powerhouse-{run_id}.session.json");
+        let send_session = manifest.session.is_some();
+        if let (true, Some(bytes)) = (send_session, session_bytes.as_ref()) {
+            record.phase_detail = Some("Uploading the chat".into());
+            persist(mgr, app, &record)?;
+            let session_tmp = manifest_temp_path(&format!("{run_id}.session"));
+            write_private(&session_tmp, bytes)?;
+            let cp_result = boxd.cp_to(&session_tmp, &vm_name, &remote_session).map_err(|e| e.to_string());
+            let _ = std::fs::remove_file(&session_tmp);
+            cp_result?;
+        }
 
         record.phase = Phase::SubmissionUnknown;
         record.phase_detail = Some("Submitting to the runner".into());
@@ -645,6 +689,9 @@ pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest
         let mut submit_args: Vec<&str> = vec!["submit", "--manifest", &remote, "--expect-digest", &digest];
         if has_credentials {
             submit_args.extend(["--credentials", remote_creds.as_str()]);
+        }
+        if send_session {
+            submit_args.extend(["--session", remote_session.as_str()]);
         }
         let receipt: Receipt = match runner_call(boxd.as_ref(), &vm_name, &submit_args, Duration::from_secs(90)) {
             Ok(r) => r,
@@ -736,6 +783,10 @@ pub struct QuickSubmitRequest {
     /// Chat the send came from (`branch.activeChatId`); the result returns here.
     #[serde(default)]
     pub chat_id: Option<String>,
+    /// That chat's Claude Code session id. When its transcript exists the
+    /// whole conversation goes to the cloud and comes back with the result.
+    #[serde(default)]
+    pub agent_session_id: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -818,6 +869,19 @@ pub fn do_quick_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: QuickSu
         Some(doc) => doc.content,
         None => stub_brief(&worktree),
     };
+    // The chat itself. No transcript yet (a chat that never ran) means a
+    // brief-only run, exactly as before.
+    let session = match req
+        .agent_session_id
+        .as_deref()
+        .filter(|sid| powerhouse_cloud_protocol::validate_run_id(sid).is_ok())
+    {
+        Some(sid) => match super::session::pack(&super::session::claude_home(), &worktree, sid) {
+            Ok(bundle) => bundle,
+            Err(e) => return attention("session", format!("could not pack the chat: {e}")),
+        },
+        None => None,
+    };
 
     emit_quick_stage(app, &req.repo_id, &branch, "submitting");
     let submit = SubmitRequest {
@@ -842,6 +906,7 @@ pub fn do_quick_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: QuickSu
         brief,
         env_names: req.env_names,
         chat_id: req.chat_id,
+        session,
     };
     match do_submit(mgr, app, submit) {
         Ok(record) => Ok(QuickSubmitOutcome::Accepted { record: Box::new(record) }),
@@ -930,6 +995,9 @@ pub fn release_gate(record: &CloudRunRecord) -> Result<(), String> {
     if !record.remote_verified {
         return Err("remote branch not verified yet".into());
     }
+    if record.session.as_ref().is_some_and(|s| s.returned.is_none()) {
+        return Err("the chat has not come home yet".into());
+    }
     Ok(())
 }
 
@@ -1013,6 +1081,12 @@ fn advance_after_terminal(mgr: &CloudManager, app: Option<&AppHandle>, record: &
                 }
             }
         }
+        // The chat first, so the result card lands in the continued session.
+        // A failure keeps the VM (the release gate waits for the chat).
+        if let Err(e) = bring_session_home(mgr, app, record) {
+            record.machine_error = Some(format!("release pending: chat: {e}"));
+            return persist(mgr, app, record);
+        }
         // The remote is confirmed: bring the result home to the branch. Its own
         // failures live in `return_error` and never block the VM release.
         let _ = do_return(mgr, app, record);
@@ -1032,12 +1106,67 @@ fn advance_after_terminal(mgr: &CloudManager, app: Option<&AppHandle>, record: &
     } else {
         // Partial work only exists in the workspace: hold, then park.
         let _ = cache_diff(mgr, record);
+        // A failed or blocked run still brings its conversation back; a miss
+        // is retried by the tick while the VM is held.
+        if let Err(e) = bring_session_home(mgr, app, record) {
+            record.machine_error = Some(format!("chat pending: {e}"));
+        }
         // Report the outcome to chat; no integration for a non-completed run.
         let _ = do_return(mgr, app, record);
         record.set_machine(MachineState::Holding, now_ms());
         record.machine_error = None;
         persist(mgr, app, record)
     }
+}
+
+/// Bring a session-handoff run's conversation back to its worktree, once the
+/// run is terminal. Idempotent: does nothing once `session.returned` is set.
+/// Needs the VM; errors are retryable.
+fn bring_session_home(mgr: &CloudManager, app: Option<&AppHandle>, record: &mut CloudRunRecord) -> Result<(), String> {
+    let Some(handoff) = record.session.clone().filter(|s| s.returned.is_none()) else { return Ok(()) };
+    if !record.state().is_some_and(|s| s.is_terminal()) {
+        return Ok(());
+    }
+    let vm = record.task_vm.clone().ok_or("no task VM")?;
+    let remote = format!("/home/boxd/powerhouse-{}.session-out.json", record.run_id);
+    let info: serde_json::Value = match runner_call(mgr.boxd.as_ref(), &vm.name, &["session", &record.run_id, "--out", &remote], Duration::from_secs(120)) {
+        Ok(v) => v,
+        Err(e) if e.contains("(not_available)") => {
+            let handoff = record.session.as_mut().expect("checked above");
+            handoff.returned = Some(SessionReturn::Unchanged { reason: "the cloud agent never continued the chat".into() });
+            return persist(mgr, app, record);
+        }
+        Err(e) => return Err(e),
+    };
+    let local = mgr.store.lock().unwrap().cache_dir(&record.run_id).join("session.json");
+    std::fs::create_dir_all(local.parent().unwrap()).map_err(|e| e.to_string())?;
+    mgr.boxd.cp_from(&vm.name, &remote, &local).map_err(|e| e.to_string())?;
+    let bytes = std::fs::read(&local).map_err(|e| e.to_string())?;
+    let digest = powerhouse_cloud_protocol::sha256_hex(&bytes);
+    if info.get("sha256").and_then(|d| d.as_str()) != Some(digest.as_str()) {
+        return Err("the downloaded chat does not match what the runner exported".into());
+    }
+    let bundle = SessionBundle::from_bytes(&bytes)?;
+    let session_id = bundle.session_id.clone();
+    let files = super::session::restore(&super::session::claude_home(), Path::new(&handoff.cwd), bundle)?;
+    let handoff = record.session.as_mut().expect("checked above");
+    handoff.returned = Some(SessionReturn::Restored { session_id, files });
+    persist(mgr, app, record)
+}
+
+/// The chat stays on this Mac from now on: unlock it with the session it had
+/// when it was sent. Refused while the cloud agent may still be talking.
+pub fn do_keep_session_local(mgr: &CloudManager, app: Option<&AppHandle>, run_id: &str) -> Result<CloudRunRecord, String> {
+    let _guard = mgr.lifecycle.lock().unwrap();
+    let mut record = load(mgr, run_id)?;
+    if record.phase == Phase::Accepted && record.state().map(|s| s.is_live()).unwrap_or(true) {
+        return Err("the cloud agent is still working on this chat. Cancel the run first.".into());
+    }
+    if let Some(handoff) = record.session.as_mut().filter(|s| s.returned.is_none()) {
+        handoff.returned = Some(SessionReturn::Unchanged { reason: "kept on this Mac".into() });
+        persist(mgr, app, &record)?;
+    }
+    Ok(record)
 }
 
 /// The local worktree that has `branch` checked out, if any. Parses
@@ -1320,6 +1449,19 @@ pub fn do_lifecycle_tick(mgr: &CloudManager, app: Option<&AppHandle>) -> Result<
                 }
             }
             MachineState::Holding => {
+                if rec.session.as_ref().is_some_and(|s| s.returned.is_none()) {
+                    let _guard = mgr.lifecycle.lock().unwrap();
+                    if let Ok(mut r) = load(mgr, &id) {
+                        match bring_session_home(mgr, app, &mut r) {
+                            Ok(()) if r.session.as_ref().is_some_and(|s| s.returned.is_some()) => actions.push(note("chat returned")),
+                            Ok(()) => {}
+                            Err(e) => {
+                                r.machine_error = Some(format!("chat pending: {e}"));
+                                let _ = persist(mgr, app, &r);
+                            }
+                        }
+                    }
+                }
                 if now.saturating_sub(rec.machine_changed_ms) >= hold_ms {
                     match do_park(mgr, app, &rec.run_id) {
                         Ok(_) => actions.push(note("parked")),
@@ -1330,6 +1472,12 @@ pub fn do_lifecycle_tick(mgr: &CloudManager, app: Option<&AppHandle>) -> Result<
             MachineState::Parked | MachineState::Released => {
                 let _guard = mgr.lifecycle.lock().unwrap();
                 let mut r = rec.clone();
+                // No VM to ask any more: the chat stays as it was sent.
+                if let Some(handoff) = r.session.as_mut().filter(|s| s.returned.is_none()) {
+                    handoff.returned = Some(SessionReturn::Unchanged { reason: "the cloud workspace was put away before the chat came back".into() });
+                    let _ = persist(mgr, app, &r);
+                    actions.push(note("chat kept local"));
+                }
                 if !r.vm_released {
                     match release_vm(mgr, app, &mut r) {
                         Ok(()) => actions.push(note("removed VM after lost acknowledgement")),
@@ -1697,6 +1845,16 @@ pub async fn cloud_diff(app: AppHandle, run_id: String) -> Result<serde_json::Va
 }
 
 #[tauri::command]
+pub async fn cloud_keep_session_local(app: AppHandle, run_id: String) -> Result<CloudRunRecord, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mgr = app.state::<CloudManager>();
+        do_keep_session_local(&mgr, Some(&app), &run_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn cloud_import(app: AppHandle, run_id: String) -> Result<ImportResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mgr = app.state::<CloudManager>();
@@ -1837,6 +1995,8 @@ mod tests {
         save_timeout_but_exists: bool,
         /// The base is re-saved right when a machine is created (version drift).
         bump_base_on_create: bool,
+        /// Files on the VM, by remote path: `cp_to` stores, `cp_from` serves.
+        files: Mutex<HashMap<String, Vec<u8>>>,
     }
 
     impl Fake {
@@ -1913,9 +2073,17 @@ mod tests {
             self.calls.lock().unwrap().push(format!("config {vm} {key}={value}"));
             Ok(())
         }
-        fn cp_to(&self, _local: &Path, vm: &str, remote: &str) -> super::super::transport::TResult<()> {
+        fn cp_to(&self, local: &Path, vm: &str, remote: &str) -> super::super::transport::TResult<()> {
             self.calls.lock().unwrap().push(format!("cp {vm} {remote}"));
+            if let Ok(bytes) = std::fs::read(local) {
+                self.files.lock().unwrap().insert(remote.into(), bytes);
+            }
             Ok(())
+        }
+        fn cp_from(&self, vm: &str, remote: &str, local: &Path) -> super::super::transport::TResult<()> {
+            self.calls.lock().unwrap().push(format!("cpfrom {vm} {remote}"));
+            let bytes = self.files.lock().unwrap().get(remote).cloned().ok_or(TransportError::NotFound(remote.into()))?;
+            std::fs::write(local, bytes).map_err(|e| TransportError::Other(e.to_string()))
         }
         fn exec(&self, vm: &str, argv: &[String], _t: Duration) -> super::super::transport::TResult<super::super::transport::ExecOutput> {
             let joined = argv.join(" ");
@@ -2039,7 +2207,7 @@ mod tests {
             machine_ceiling: None, checks: vec![],
             deadline_seconds: 900, permission_mode: "dontAsk".into(), allowed_tools: vec![], max_turns: None,
             max_budget_usd: None, model: None, provider: "fake".into(), fake_script: Some("complete".into()),
-            brief: "# Plan\n1. add file".into(), env_names: vec![], chat_id: None,
+            brief: "# Plan\n1. add file".into(), env_names: vec![], chat_id: None, session: None,
         }
     }
 
@@ -2301,6 +2469,7 @@ mod tests {
             base_snapshot: base.into(), machine_ceiling: None, checks: vec![], deadline_seconds: 900,
             permission_mode: "dontAsk".into(), allowed_tools: vec![], max_turns: None, max_budget_usd: None,
             model: None, provider: "fake".into(), fake_script: Some("complete".into()), env_names: vec![], chat_id: None,
+            agent_session_id: None,
         }
     }
 
@@ -2566,6 +2735,182 @@ mod tests {
         // The diff is still readable after the VM is gone.
         let patch = std::fs::read_to_string(mgr.store.lock().unwrap().cache_dir(run_id).join("diff.patch")).unwrap();
         assert!(patch.contains("diff --git"));
+    }
+
+    // --- session handoff -------------------------------------------------------
+
+    const SID: &str = "0b1bf178-c3a1-458b-b925-a841edf79619";
+    /// `POWERHOUSE_CLAUDE_HOME` is process-wide; session tests take turns.
+    static CLAUDE_HOME_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_claude_home<T>(f: impl FnOnce(&Path) -> T) -> T {
+        let _guard = CLAUDE_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = tempfile::tempdir().unwrap();
+        std::env::set_var("POWERHOUSE_CLAUDE_HOME", home.path());
+        let out = f(home.path());
+        std::env::remove_var("POWERHOUSE_CLAUDE_HOME");
+        out
+    }
+
+    fn session_probe_json() -> String {
+        let mut v: serde_json::Value = serde_json::from_str(&probe_json()).unwrap();
+        v["ok"]["session_protocol_version"] = SESSION_PROTOCOL_VERSION.into();
+        v.to_string()
+    }
+
+    fn write_transcript(home: &Path, cwd: &str, content: &str) -> PathBuf {
+        let dir = super::super::session::tests::project_dir(home, Path::new(cwd));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{SID}.jsonl"));
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn quick_submit_carries_the_chat_to_a_runner_that_can_continue_it() {
+        with_claude_home(|home| {
+            let (dir, work, remote) = temp_repo_with(false);
+            split_push_origin(&work, &remote);
+            write_transcript(home, &work, &format!("{{\"cwd\":\"{work}\"}}\n"));
+            let fake = Arc::new(Fake { echo_submit: true, ..Default::default() });
+            fake.snapshot("ph-test-base", "v1");
+            fake.on_exec("probe", Ok(session_probe_json()));
+            let mgr = manager(fake.clone(), dir.path());
+            let mut req = quick_request(&work, "ph-test-base");
+            req.agent_session_id = Some(SID.into());
+            let QuickSubmitOutcome::Accepted { record } = do_quick_submit(&mgr, None, req).unwrap() else { panic!("expected accepted") };
+            assert_eq!(record.manifest.protocol_version, SESSION_PROTOCOL_VERSION);
+            let spec = record.manifest.session.clone().expect("session pinned in the manifest");
+            assert_eq!(spec.session_id, SID);
+            let remote_bundle = format!("/home/boxd/powerhouse-{}.session.json", record.run_id);
+            let bytes = fake.files.lock().unwrap().get(&remote_bundle).cloned().expect("bundle uploaded");
+            assert_eq!(powerhouse_cloud_protocol::sha256_hex(&bytes), spec.bundle_sha256);
+            assert_eq!(SessionBundle::from_bytes(&bytes).unwrap().cwd, work);
+            assert!(fake.calls().iter().any(|c| c.contains("submit") && c.contains(&format!("--session {remote_bundle}"))), "{:?}", fake.calls());
+            assert_eq!(record.session, Some(SessionHandoff { session_id: SID.into(), cwd: work.clone(), returned: None }));
+        });
+    }
+
+    #[test]
+    fn an_older_runner_gets_a_brief_only_run_and_the_chat_stays_local() {
+        with_claude_home(|home| {
+            let (dir, work, remote) = temp_repo_with(false);
+            split_push_origin(&work, &remote);
+            write_transcript(home, &work, "{}\n");
+            let fake = Arc::new(Fake { echo_submit: true, ..Default::default() });
+            fake.snapshot("ph-test-base", "v1");
+            fake.on_exec("probe", Ok(probe_json()));
+            let mgr = manager(fake.clone(), dir.path());
+            let mut req = quick_request(&work, "ph-test-base");
+            req.agent_session_id = Some(SID.into());
+            let QuickSubmitOutcome::Accepted { record } = do_quick_submit(&mgr, None, req).unwrap() else { panic!("expected accepted") };
+            assert_eq!(record.manifest.protocol_version, PROTOCOL_VERSION);
+            assert!(record.manifest.session.is_none() && record.session.is_none());
+            assert_eq!(record.manifest_digest, record.manifest.digest());
+            assert!(!fake.calls().iter().any(|c| c.contains("--session")), "{:?}", fake.calls());
+        });
+    }
+
+    #[test]
+    fn a_chat_without_a_transcript_sends_the_branch_only() {
+        with_claude_home(|_home| {
+            let (dir, work, remote) = temp_repo_with(false);
+            split_push_origin(&work, &remote);
+            let fake = Arc::new(Fake { echo_submit: true, ..Default::default() });
+            fake.snapshot("ph-test-base", "v1");
+            fake.on_exec("probe", Ok(session_probe_json()));
+            let mgr = manager(fake.clone(), dir.path());
+            let mut req = quick_request(&work, "ph-test-base");
+            req.agent_session_id = Some(SID.into());
+            let QuickSubmitOutcome::Accepted { record } = do_quick_submit(&mgr, None, req).unwrap() else { panic!("expected accepted") };
+            assert_eq!(record.manifest.protocol_version, PROTOCOL_VERSION);
+            assert!(record.session.is_none());
+        });
+    }
+
+    #[test]
+    fn a_finished_run_brings_the_chat_home_before_its_vm_is_released() {
+        with_claude_home(|home| {
+            let (dir, work, _remote) = temp_repo_with(false);
+            let fake = base_fake();
+            let mgr = manager(fake.clone(), dir.path());
+            let run_id = "11111111-2222-4333-8444-555555555555";
+            let transcript = write_transcript(home, &work, "local\n");
+            let (_source_sha, result_sha, mut rec) = completed_return_setup(&work, run_id, &fake);
+            rec.session = Some(SessionHandoff { session_id: SID.into(), cwd: work.clone(), returned: None });
+            mgr.store.lock().unwrap().put(rec).unwrap();
+            // What the runner exports: the continued chat, already addressed to `work`.
+            let bundle = SessionBundle {
+                session_id: SID.into(),
+                cwd: work.clone(),
+                claude_version: None,
+                files: vec![powerhouse_cloud_protocol::BundleFile {
+                    path: SessionBundle::transcript_path(SID),
+                    content: "local\ncloud\n".into(),
+                }],
+            };
+            let bytes = bundle.to_bytes();
+            let out = format!("/home/boxd/powerhouse-{run_id}.session-out.json");
+            fake.on_exec("runner session", Ok(serde_json::json!({"ok": {"session_id": SID, "bytes": bytes.len(), "sha256": powerhouse_cloud_protocol::sha256_hex(&bytes)}}).to_string()));
+            fake.on_exec("inspect", Ok(snap_json(run_id, "completed", 20, 2, false)));
+            fake.on_exec("events", Ok(events_json(run_id, &[1, 2])));
+            fake.on_exec("result", Ok(result_json(run_id, Some(&result_sha), true)));
+            fake.on_exec("diff", Ok(diff_json()));
+
+            // The download fails: the VM is kept until the chat is home.
+            let r = do_sync(&mgr, None, run_id, false).unwrap();
+            assert!(r.session.as_ref().unwrap().returned.is_none());
+            assert_eq!(r.machine, MachineState::Active);
+            assert!(r.machine_error.as_deref().unwrap_or("").contains("chat"), "{:?}", r.machine_error);
+            assert!(release_gate(&r).unwrap_err().contains("chat"));
+            assert_eq!(std::fs::read_to_string(&transcript).unwrap(), "local\n");
+
+            fake.files.lock().unwrap().insert(out, bytes);
+            let r = do_sync(&mgr, None, run_id, false).unwrap();
+            assert_eq!(r.session.as_ref().unwrap().returned, Some(SessionReturn::Restored { session_id: SID.into(), files: 1 }));
+            assert_eq!(std::fs::read_to_string(&transcript).unwrap(), "local\ncloud\n");
+            assert_eq!(std::fs::read_to_string(transcript.with_extension("jsonl.pre-cloud")).unwrap(), "local\n");
+            assert_eq!(r.returned, Some(ReturnOutcome::FastForwarded { sha: result_sha }));
+            assert_eq!(r.machine, MachineState::Released);
+        });
+    }
+
+    #[test]
+    fn a_run_that_never_continued_the_chat_unlocks_it_unchanged() {
+        let (dir, work, _remote) = temp_repo_with(false);
+        let fake = base_fake();
+        let mgr = manager(fake.clone(), dir.path());
+        let run_id = "11111111-2222-4333-8444-555555555555";
+        let vm = task_vm_name(None, run_id);
+        fake.machine(&vm, "running");
+        let mut rec = accepted_record(&work, run_id);
+        rec.session = Some(SessionHandoff { session_id: SID.into(), cwd: work.clone(), returned: None });
+        mgr.store.lock().unwrap().put(rec).unwrap();
+        fake.on_exec("runner session", Ok(serde_json::json!({"error": {"code": "not_available", "message": "no session was captured"}}).to_string()));
+        fake.on_exec("inspect", Ok(snap_json(run_id, "failed", 20, 2, false)));
+        fake.on_exec("events", Ok(events_json(run_id, &[1, 2])));
+        fake.on_exec("result", Ok(result_json(run_id, None, false)));
+        fake.on_exec("diff", Ok(diff_json()));
+        let r = do_sync(&mgr, None, run_id, false).unwrap();
+        assert!(matches!(r.session.as_ref().unwrap().returned, Some(SessionReturn::Unchanged { .. })), "{:?}", r.session);
+        assert_eq!(r.machine, MachineState::Holding);
+    }
+
+    #[test]
+    fn keeping_the_chat_local_is_refused_while_the_agent_works() {
+        let (dir, work, _remote) = temp_repo_with(false);
+        let fake = base_fake();
+        let mgr = manager(fake.clone(), dir.path());
+        let run_id = "11111111-2222-4333-8444-555555555555";
+        let mut rec = accepted_record(&work, run_id);
+        rec.snapshot = Some(snapshot_of(run_id, "running"));
+        rec.session = Some(SessionHandoff { session_id: SID.into(), cwd: work.clone(), returned: None });
+        mgr.store.lock().unwrap().put(rec.clone()).unwrap();
+        assert!(do_keep_session_local(&mgr, None, run_id).unwrap_err().contains("Cancel"));
+        rec.snapshot = Some(snapshot_of(run_id, "cancelled"));
+        mgr.store.lock().unwrap().put(rec).unwrap();
+        let r = do_keep_session_local(&mgr, None, run_id).unwrap();
+        assert!(matches!(r.session.unwrap().returned, Some(SessionReturn::Unchanged { .. })));
     }
 
     // --- return to branch -------------------------------------------------------
@@ -3075,6 +3420,7 @@ mod e2e {
             brief: format!("# Plan\n\n1. Read the repository layout.\n2. {task}\n3. Make the acceptance check pass: it verifies {expect_file} exists.\n"),
             env_names: vec![],
             chat_id: None,
+            session: None,
         };
         let t0 = Instant::now();
         let rec = do_submit(&mgr, None, req).expect("submit");

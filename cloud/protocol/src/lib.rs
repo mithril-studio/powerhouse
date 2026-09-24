@@ -1,8 +1,12 @@
 //! Versioned wire contracts between the Powerhouse desktop and the in-VM
-//! runner. Everything here is plain data: no I/O, no process handling.
+//! runner. Everything here is plain data: no process handling, and no I/O
+//! outside `session_files` (the on-disk layout of a Claude Code session that
+//! both ends read and write).
 //!
 //! The runner speaks JSON on stdout. Every response is either
 //! `{"ok": <payload>}` or `{"error": {"code": ..., "message": ...}}`.
+
+pub mod session_files;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
