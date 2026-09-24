@@ -64,6 +64,26 @@ export function memoryProjectSlug(repoName: string): string {
   return slug || "project";
 }
 
+/** Memory creds to hand a cloud run VM: the endpoint and its token, but only
+ *  when the endpoint is reachable from another machine. A loopback URL is the
+ *  laptop's own supervised server and means nothing on a VM, so it is dropped —
+ *  the run just goes without shared memory rather than pointing at itself. */
+export function routableMemory(memory: MemorySettings): { url: string; token: string } | null {
+  if (!memory.enabled) return null;
+  const url = memory.url.trim();
+  if (!url) return null;
+  let host: string;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return null;
+  }
+  if (host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]") {
+    return null;
+  }
+  return { url, token: memory.token };
+}
+
 /** ACP `mcpServers` entries for a session. Empty when memory is off. */
 export function memoryMcpServers(memory: MemorySettings): McpServer[] {
   if (!memory.enabled || !memory.url.trim()) return [];

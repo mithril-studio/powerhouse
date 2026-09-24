@@ -1,5 +1,6 @@
 import {
   cloudSettingsOf,
+  memorySettingsOf,
   resolveAgent,
   resolveChatTransport,
   useAppStore,
@@ -10,6 +11,7 @@ import {
 } from "../store/appStore";
 import { acpModel, detachAcp } from "./acpRegistry";
 import { cloudQuickSubmit, type QuickSubmitRequest } from "./cloud";
+import { routableMemory } from "./memory";
 
 /** What travels when the chat itself goes to the cloud. */
 export interface ChatHandoff {
@@ -27,6 +29,7 @@ export function buildQuickSubmitRequest(
   handoff: ChatHandoff | null = null,
 ): QuickSubmitRequest {
   const cloud = cloudSettingsOf(settings);
+  const memory = routableMemory(memorySettingsOf(settings));
   return {
     repoId: repo.id,
     repoPath: repo.path,
@@ -44,6 +47,8 @@ export function buildQuickSubmitRequest(
     model: handoff?.model || cloud.model.trim() || null,
     provider: "claude",
     envNames: repo.cloudEnvNames ?? [],
+    memoryUrl: memory?.url ?? null,
+    memoryToken: memory?.token ?? null,
     agentSessionId: handoff?.agentSessionId ?? null,
   };
 }

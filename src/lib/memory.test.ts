@@ -21,6 +21,7 @@ import {
   parseSearchResults,
   promotionFolder,
   rankNotes,
+  routableMemory,
   stripFrontmatter,
   type BriefNote,
 } from "./memory";
@@ -223,6 +224,33 @@ describe("inbox flow", () => {
     expect(autoPromotes("correction")).toBe(true);
     expect(autoPromotes("gotcha")).toBe(false);
     expect(autoPromotes("")).toBe(false);
+  });
+});
+
+describe("routableMemory", () => {
+  const on = (url: string, token = "tok"): Parameters<typeof routableMemory>[0] => ({
+    enabled: true,
+    url,
+    token,
+  });
+
+  it("passes a routable host with its token", () => {
+    expect(routableMemory(on("https://factory.mithril-studio.com/memory/mcp"))).toEqual({
+      url: "https://factory.mithril-studio.com/memory/mcp",
+      token: "tok",
+    });
+  });
+
+  it("drops loopback endpoints (useless to a VM)", () => {
+    expect(routableMemory(on("http://127.0.0.1:8765/mcp"))).toBeNull();
+    expect(routableMemory(on("http://localhost:8765/mcp"))).toBeNull();
+    expect(routableMemory(on("http://[::1]:8765/mcp"))).toBeNull();
+  });
+
+  it("drops when memory is off, blank, or malformed", () => {
+    expect(routableMemory({ enabled: false, url: "https://h/mcp", token: "t" })).toBeNull();
+    expect(routableMemory(on("   "))).toBeNull();
+    expect(routableMemory(on("not a url"))).toBeNull();
   });
 });
 

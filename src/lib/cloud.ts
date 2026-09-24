@@ -238,6 +238,10 @@ export interface SubmitRequest {
   brief: string;
   /** Per-project env var names; values come from the Keychain per repo. */
   envNames: string[];
+  /** Routable shared-memory endpoint and token for the run VM; null when memory
+   *  is off or only on the laptop's loopback. */
+  memoryUrl?: string | null;
+  memoryToken?: string | null;
 }
 
 /** One-click submission: the brief is auto-picked, the task text is fixed. */
@@ -258,6 +262,10 @@ export interface QuickSubmitRequest {
   provider: "claude" | "fake";
   fakeScript?: string | null;
   envNames: string[];
+  /** Routable shared-memory endpoint and token for the run VM; null when memory
+   *  is off or only on the laptop's loopback. */
+  memoryUrl?: string | null;
+  memoryToken?: string | null;
   /** Chat the send came from (`branch.activeChatId`); the result returns here. */
   chatId: string | null;
   /** That chat's Claude session; its transcript travels with the run. */

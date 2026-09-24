@@ -179,6 +179,7 @@ pub fn render_run_credentials(
     need_claude: bool,
     git_remote: Option<&str>,
     project_env: &[(String, String)],
+    memory: Option<(&str, &str)>,
 ) -> Result<String, String> {
     let mut lines = vec![];
     if need_claude {
@@ -204,6 +205,21 @@ pub fn render_run_credentials(
         }
         lines.push(format!("ENV.{name}={value}"));
     }
+    // The shared memory host. A run VM cannot reach the laptop's loopback
+    // server, so only a routable URL is worth sending; the caller filters
+    // those out. The token authenticates the VM to the same host the laptop
+    // uses. Both are line values, so newlines are refused like the rest.
+    if let Some((url, token)) = memory {
+        if !url.trim().is_empty() {
+            if url.contains('\n') || url.contains('\r') || token.contains('\n') || token.contains('\r') {
+                return Err("the memory URL or token contains a newline; it cannot travel to the VM".into());
+            }
+            lines.push(format!("MEMORY_URL={}", url.trim()));
+            if !token.is_empty() {
+                lines.push(format!("MEMORY_TOKEN={token}"));
+            }
+        }
+    }
     Ok(format!("{}\n", lines.join("\n")))
 }
 
@@ -223,9 +239,9 @@ mod tests {
         assert_eq!(resolve_github(&m, remote).unwrap().unwrap().1, "repo");
         // A different owner falls back to the wide token.
         assert_eq!(resolve_github(&m, "https://github.com/joost/other.git").unwrap().unwrap().1, "wide");
-        let rendered = render_run_credentials(&m, false, Some(remote), &[]).unwrap();
+        let rendered = render_run_credentials(&m, false, Some(remote), &[], None).unwrap();
         assert_eq!(rendered, "GIT_PUBLISH_TOKEN=repo\n");
-        assert!(render_run_credentials(&m, false, None, &[]).unwrap().trim().is_empty());
+        assert!(render_run_credentials(&m, false, None, &[], None).unwrap().trim().is_empty());
     }
 
     #[test]
@@ -244,10 +260,35 @@ mod tests {
         // A configured name without a value refuses instead of half-configuring the run.
         let err = project_env_values(&m, "repo-a", &["FOO_API_KEY".into(), "BAR".into()]).unwrap_err();
         assert!(err.contains("BAR"), "{err}");
-        let rendered = render_run_credentials(&m, false, None, &[("FOO_API_KEY".into(), "s3cret".into())]).unwrap();
+        let rendered = render_run_credentials(&m, false, None, &[("FOO_API_KEY".into(), "s3cret".into())], None).unwrap();
         assert_eq!(rendered, "ENV.FOO_API_KEY=s3cret\n");
         // Line-based format: newline values are refused, not truncated.
-        let err = render_run_credentials(&m, false, None, &[("X".into(), "a\nb".into())]).unwrap_err();
+        let err = render_run_credentials(&m, false, None, &[("X".into(), "a\nb".into())], None).unwrap_err();
+        assert!(err.contains("newline"), "{err}");
+    }
+
+    #[test]
+    fn memory_endpoint_and_token_travel_as_credential_lines() {
+        let m = MemoryStore::default();
+        // A configured host and token both travel.
+        let rendered = render_run_credentials(
+            &m,
+            false,
+            None,
+            &[],
+            Some(("https://factory.mithril-studio.com/memory/mcp", "bearer-tok")),
+        )
+        .unwrap();
+        assert!(rendered.contains("MEMORY_URL=https://factory.mithril-studio.com/memory/mcp"), "{rendered}");
+        assert!(rendered.contains("MEMORY_TOKEN=bearer-tok"), "{rendered}");
+        // A host without a token still travels; the token line is omitted.
+        let no_token = render_run_credentials(&m, false, None, &[], Some(("https://h/mcp", ""))).unwrap();
+        assert!(no_token.contains("MEMORY_URL=https://h/mcp") && !no_token.contains("MEMORY_TOKEN="), "{no_token}");
+        // No memory configured: no lines.
+        assert!(render_run_credentials(&m, false, None, &[], None).unwrap().trim().is_empty());
+        assert!(render_run_credentials(&m, false, None, &[], Some(("   ", "tok"))).unwrap().trim().is_empty());
+        // Newlines are refused like every other line value.
+        let err = render_run_credentials(&m, false, None, &[], Some(("https://h/mcp", "a\nb"))).unwrap_err();
         assert!(err.contains("newline"), "{err}");
     }
 

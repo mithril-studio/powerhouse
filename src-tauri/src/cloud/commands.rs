@@ -279,6 +279,13 @@ pub struct SubmitRequest {
     /// travel only in the per-run credentials file.
     #[serde(default)]
     pub env_names: Vec<String>,
+    /// Shared memory host for the run VM: the routable endpoint and its bearer
+    /// token. Empty when memory is off or only reachable on the laptop's
+    /// loopback (a VM cannot reach that). Travels in the credentials file.
+    #[serde(default)]
+    pub memory_url: Option<String>,
+    #[serde(default)]
+    pub memory_token: Option<String>,
     /// Chat the send came from; the finished result returns here. `None` for
     /// Cloud-tab sends with no active chat.
     #[serde(default)]
@@ -498,6 +505,14 @@ fn manifest_temp_path(run_id: &str) -> PathBuf {
         .join(format!("{run_id}.json"))
 }
 
+/// The routable memory endpoint and token to hand a run VM, or None when
+/// memory is off or only on the laptop's loopback. Borrows from the request so
+/// the same helper serves both the advanced and quick submit paths.
+fn memory_creds<'a>(url: &'a Option<String>, token: &'a Option<String>) -> Option<(&'a str, &'a str)> {
+    let url = url.as_deref().map(str::trim).filter(|u| !u.is_empty())?;
+    Some((url, token.as_deref().unwrap_or("")))
+}
+
 /// The whole submission. Every step persists before its remote side effect.
 pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest) -> Result<CloudRunRecord, String> {
     let boxd = mgr.boxd.clone();
@@ -527,7 +542,8 @@ pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest
     let need_claude = manifest.agent.as_ref().is_some_and(|a| a.provider == AgentProvider::Claude);
     let git_remote = manifest.source.remote_url.starts_with("https://").then_some(manifest.source.remote_url.as_str());
     let project_env = secrets::project_env_values(mgr.secrets.as_ref(), &req.repo_id, &req.env_names)?;
-    let credentials_text = secrets::render_run_credentials(mgr.secrets.as_ref(), need_claude, git_remote, &project_env)?;
+    let memory = memory_creds(&req.memory_url, &req.memory_token);
+    let credentials_text = secrets::render_run_credentials(mgr.secrets.as_ref(), need_claude, git_remote, &project_env, memory)?;
     let vm_name = task_vm_name(source.branch.as_deref(), &run_id);
     let ceiling = Some(req.machine_ceiling.unwrap_or(DEFAULT_MACHINE_CEILING));
     // One live run per branch: the VM name is the branch's cloud identity, so
@@ -783,6 +799,11 @@ pub struct QuickSubmitRequest {
     pub fake_script: Option<String>,
     #[serde(default)]
     pub env_names: Vec<String>,
+    /// Shared memory host for the run VM; see `SubmitRequest`.
+    #[serde(default)]
+    pub memory_url: Option<String>,
+    #[serde(default)]
+    pub memory_token: Option<String>,
     /// Chat the send came from (`branch.activeChatId`); the result returns here.
     #[serde(default)]
     pub chat_id: Option<String>,
@@ -831,7 +852,7 @@ pub fn do_quick_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: QuickSu
         Ok(env) => env,
         Err(e) => return attention("preflight", e),
     };
-    if let Err(e) = secrets::render_run_credentials(mgr.secrets.as_ref(), need_claude, git_remote, &project_env) {
+    if let Err(e) = secrets::render_run_credentials(mgr.secrets.as_ref(), need_claude, git_remote, &project_env, memory_creds(&req.memory_url, &req.memory_token)) {
         return attention("preflight", e);
     }
     let base = match find_snapshot(mgr.boxd.as_ref(), req.base_snapshot.trim()) {
@@ -908,6 +929,8 @@ pub fn do_quick_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: QuickSu
         fake_script: req.fake_script,
         brief,
         env_names: req.env_names,
+        memory_url: req.memory_url,
+        memory_token: req.memory_token,
         chat_id: req.chat_id,
         session,
     };
@@ -1008,7 +1031,7 @@ fn https_auth_env_for(mgr: &CloudManager, remote: &str) -> Vec<(String, String)>
     if !remote.starts_with("https://") {
         return vec![];
     }
-    match secrets::render_run_credentials(mgr.secrets.as_ref(), false, Some(remote), &[]) {
+    match secrets::render_run_credentials(mgr.secrets.as_ref(), false, Some(remote), &[], None) {
         Ok(text) => text
             .lines()
             .find_map(|l| l.strip_prefix("GIT_PUBLISH_TOKEN=").map(|t| t.to_string()))
@@ -2210,7 +2233,7 @@ mod tests {
             machine_ceiling: None, checks: vec![],
             deadline_seconds: 900, permission_mode: "dontAsk".into(), allowed_tools: vec![], max_turns: None,
             max_budget_usd: None, model: None, provider: "fake".into(), fake_script: Some("complete".into()),
-            brief: "# Plan\n1. add file".into(), env_names: vec![], chat_id: None, session: None,
+            brief: "# Plan\n1. add file".into(), env_names: vec![], memory_url: None, memory_token: None, chat_id: None, session: None,
         }
     }
 
@@ -2471,7 +2494,8 @@ mod tests {
             repo_id: "repo".into(), repo_path: source.into(), repo_name: "work".into(), source_path: source.into(),
             base_snapshot: base.into(), machine_ceiling: None, checks: vec![], deadline_seconds: 900,
             permission_mode: "dontAsk".into(), allowed_tools: vec![], max_turns: None, max_budget_usd: None,
-            model: None, provider: "fake".into(), fake_script: Some("complete".into()), env_names: vec![], chat_id: None,
+            model: None, provider: "fake".into(), fake_script: Some("complete".into()), env_names: vec![],
+            memory_url: None, memory_token: None, chat_id: None,
             agent_session_id: None,
         }
     }
@@ -3423,6 +3447,8 @@ mod e2e {
             fake_script: (provider == "fake").then(|| script.clone()),
             brief: format!("# Plan\n\n1. Read the repository layout.\n2. {task}\n3. Make the acceptance check pass: it verifies {expect_file} exists.\n"),
             env_names: vec![],
+            memory_url: std::env::var("POWERHOUSE_CLOUD_E2E_MEMORY_URL").ok(),
+            memory_token: std::env::var("POWERHOUSE_CLOUD_E2E_MEMORY_TOKEN").ok(),
             chat_id: None,
             // POWERHOUSE_CLOUD_E2E_SESSION=<id>: continue that local Claude
             // session of the source checkout instead of starting fresh.
