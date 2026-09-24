@@ -98,9 +98,12 @@ pub fn build_command(
                 .arg("--output-format")
                 .arg("stream-json")
                 .arg("--permission-mode")
-                .arg(&spec.permission_mode)
-                .arg("--session-id")
-                .arg(uuid::Uuid::new_v4().to_string());
+                .arg(&spec.permission_mode);
+            match &manifest.session {
+                // Continue the desktop chat; `prepare_workspace` installed it.
+                Some(session) => c.arg("--resume").arg(&session.session_id),
+                None => c.arg("--session-id").arg(uuid::Uuid::new_v4().to_string()),
+            };
             if let Some(m) = &spec.model {
                 c.arg("--model").arg(m);
             }
@@ -113,7 +116,8 @@ pub fn build_command(
             if !spec.allowed_tools.is_empty() {
                 c.arg("--allowedTools").arg(spec.allowed_tools.join(","));
             }
-            c.arg("--").arg(build_prompt(manifest));
+            let prompt = if manifest.session.is_some() { build_resume_prompt(manifest) } else { build_prompt(manifest) };
+            c.arg("--").arg(prompt);
             c
         }
     };
@@ -128,6 +132,9 @@ pub fn build_command(
     cmd.env("POWERHOUSE_RUN_ID", &manifest.run_id);
     for (k, v) in secrets {
         cmd.env(k, v);
+    }
+    if let (AgentProvider::Fake, Some(session)) = (&spec.provider, &manifest.session) {
+        cmd.env("POWERHOUSE_FAKE_RESUME", &session.session_id);
     }
     cmd.current_dir(workspace);
     cmd
@@ -175,6 +182,33 @@ explain why in your final message and stop. End with a short summary of what you
     p
 }
 
+/// The turn that continues a desktop chat in the cloud. The conversation
+/// already holds the task; this says where the agent is now and how to finish.
+pub fn build_resume_prompt(m: &RunManifest) -> String {
+    let mut p = String::new();
+    p.push_str("[Powerhouse] This conversation has been moved from the user's laptop to an isolated cloud workspace, where you continue unattended. ");
+    p.push_str("The repository is checked out in the current directory at commit ");
+    p.push_str(&m.source.commit_sha);
+    p.push_str(", which is the branch exactly as it was on the laptop (uncommitted work included as a WIP commit). ");
+    p.push_str("File paths from earlier in this conversation have been rewritten to this checkout. ");
+    p.push_str("Tools and MCP servers that only existed on the laptop are not available here.\n\n");
+    p.push_str("Continue the work you were doing until it is done. If the last request is already complete, verify it and wrap up.");
+    if !m.checks.is_empty() {
+        p.push_str("\n\nThese checks run automatically after you finish; make them pass:\n");
+        for c in &m.checks {
+            p.push_str("- ");
+            p.push_str(&c.command);
+            p.push('\n');
+        }
+    }
+    p.push_str(
+        "\n\nRules: work only inside the current directory. Do not push, do not create pull requests, do not switch branches. \
+Leave your changes in the working tree (committing is optional). Nobody can answer questions until the conversation returns to the laptop; \
+if you are blocked, explain why in your final message and stop. End with a short summary of what you changed and any remaining concerns.",
+    );
+    p
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,6 +231,29 @@ mod tests {
         assert!(matches!(none.classify(Some(0)), AgentVerdict::Failed(_)));
         assert!(matches!(none.classify(None), AgentVerdict::Failed(_)));
         assert!(matches!(none.classify(Some(75)), AgentVerdict::Blocked(_)));
+    }
+
+    #[test]
+    fn a_session_run_resumes_instead_of_starting_fresh() {
+        let mut m: RunManifest = serde_json::from_str(include_str!("../../protocol/tests/fixtures/agent-v2.json")).unwrap();
+        let mut spec = m.agent.clone().unwrap();
+        spec.provider = AgentProvider::Claude;
+        let args = |m: &RunManifest| -> Vec<String> {
+            build_command(m, &spec, "/bin/runner", Path::new("/w"), Path::new("/h"), &[])
+                .get_args()
+                .map(|a| a.to_string_lossy().to_string())
+                .collect()
+        };
+        let fresh = args(&m);
+        assert!(fresh.contains(&"--session-id".to_string()) && !fresh.contains(&"--resume".to_string()));
+        let sid = "0b1bf178-c3a1-458b-b925-a841edf79619";
+        m.protocol_version = powerhouse_cloud_protocol::SESSION_PROTOCOL_VERSION;
+        m.session = Some(powerhouse_cloud_protocol::SessionSpec { session_id: sid.into(), bundle_sha256: "a".repeat(64), bundle_bytes: 1 });
+        let resumed = args(&m);
+        let at = resumed.iter().position(|a| a == "--resume").unwrap();
+        assert_eq!(resumed[at + 1], sid);
+        assert!(!resumed.contains(&"--session-id".to_string()));
+        assert!(resumed.last().unwrap().contains("moved from the user's laptop"));
     }
 
     #[test]

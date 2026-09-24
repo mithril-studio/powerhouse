@@ -6,6 +6,7 @@ mod exec;
 mod fake;
 mod gitops;
 mod paths;
+mod session;
 mod store;
 mod systemd;
 mod util;
@@ -51,6 +52,17 @@ enum Cmd {
         /// storage (the original is shredded) and destroyed when the run ends.
         #[arg(long)]
         credentials: Option<std::path::PathBuf>,
+        /// Session bundle for a run that continues a desktop chat; verified
+        /// against the manifest's pin and moved into root-only storage.
+        #[arg(long)]
+        session: Option<std::path::PathBuf>,
+    },
+    /// Copy the captured session (the continued chat) to `--out` so the
+    /// desktop can download it.
+    Session {
+        run_id: String,
+        #[arg(long)]
+        out: std::path::PathBuf,
     },
     /// Authoritative snapshot of one run.
     Inspect { run_id: String },
@@ -95,9 +107,10 @@ fn main() {
         Cmd::Probe => respond(probe()),
         Cmd::Install { install_binary } => respond(install(&self_bin, install_binary)),
         Cmd::Digest { manifest } => respond(digest_of(&manifest)),
-        Cmd::Submit { manifest, expect_digest, credentials } => {
-            respond(submit(&manifest, expect_digest.as_deref(), credentials.as_deref()))
+        Cmd::Submit { manifest, expect_digest, credentials, session } => {
+            respond(submit(&manifest, expect_digest.as_deref(), credentials.as_deref(), session.as_deref()))
         }
+        Cmd::Session { run_id, out } => respond(export_session(&run_id, &out)),
         Cmd::Inspect { run_id } => respond(inspect(&run_id)),
         Cmd::List => respond(list()),
         Cmd::Events { run_id, after, limit } => respond(
@@ -201,6 +214,7 @@ fn probe() -> Result<ProbeInfo, RunnerError> {
     Ok(ProbeInfo {
         protocol_version: PROTOCOL_VERSION,
         script_protocol_version: Some(powerhouse_cloud_protocol::SCRIPT_PROTOCOL_VERSION),
+        session_protocol_version: Some(powerhouse_cloud_protocol::SESSION_PROTOCOL_VERSION),
         runner_version: RUNNER_VERSION.to_string(),
         agents: vec![AgentProvider::Claude, AgentProvider::Fake],
         os,
@@ -274,6 +288,7 @@ fn submit(
     manifest_path: &std::path::Path,
     expect_digest: Option<&str>,
     credentials: Option<&std::path::Path>,
+    session: Option<&std::path::Path>,
 ) -> Result<powerhouse_cloud_protocol::Receipt, RunnerError> {
     let bytes = std::fs::read(manifest_path).map_err(|e| RunnerError::new("manifest_unreadable", e.to_string()))?;
     if bytes.len() > 1024 * 1024 {
@@ -290,6 +305,22 @@ fn submit(
                 format!("uploaded manifest digest {digest} does not match expected {expected}"),
             ));
         }
+    }
+    // The session bundle is part of the request: verify it before anything is
+    // durable, and keep it root-only for the executor.
+    match (&manifest.session, session) {
+        (Some(spec), Some(src)) => {
+            session::read_verified(src, spec).map_err(|m| RunnerError::new("session_invalid", m))?;
+            let bytes = std::fs::read(src).map_err(|e| RunnerError::new("session_unreadable", e.to_string()))?;
+            util::write_atomic(&paths::session_inbound(&manifest.run_id), &bytes, 0o600)
+                .map_err(|e| RunnerError::new("session", e.to_string()))?;
+            let _ = std::fs::remove_file(src);
+        }
+        (Some(_), None) if !paths::session_inbound(&manifest.run_id).exists() => {
+            return Err(RunnerError::new("session_missing", "the manifest continues a session but no --session bundle was given"));
+        }
+        (None, Some(_)) => return Err(RunnerError::new("session_unexpected", "--session given for a manifest without a session")),
+        _ => {}
     }
     // Take custody of the run's credentials before anything is durable, so a
     // launched run always finds them and the drop location holds nothing.
@@ -400,6 +431,36 @@ fn result(run_id: &str) -> Result<powerhouse_cloud_protocol::ResultManifest, Run
     let row = store.get(run_id).map_err(store_err)?;
     row.result
         .ok_or_else(|| RunnerError::new("not_available", format!("run {run_id} has no result yet (state {})", row.state.as_str())))
+}
+
+fn export_session(run_id: &str, out: &std::path::Path) -> Result<serde_json::Value, RunnerError> {
+    powerhouse_cloud_protocol::validate_run_id(run_id).map_err(|m| RunnerError::new("invalid", m))?;
+    let bytes = std::fs::read(paths::session_outbound(run_id))
+        .map_err(|_| RunnerError::new("not_available", "no session was captured for this run"))?;
+    let bundle = powerhouse_cloud_protocol::SessionBundle::from_bytes(&bytes).map_err(|m| RunnerError::new("session_invalid", m))?;
+    // Hand the copy to whoever owns the destination directory (the boxd user),
+    // never following a link planted at the destination.
+    let parent = out.parent().filter(|p| p.is_absolute()).ok_or_else(|| RunnerError::new("invalid", "--out must be an absolute path"))?;
+    let owner = std::fs::metadata(parent).map_err(|e| RunnerError::new("invalid", format!("{}: {e}", parent.display())))?;
+    let _ = std::fs::remove_file(out);
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(out)
+            .map_err(|e| RunnerError::new("export", e.to_string()))?;
+        f.write_all(&bytes).map_err(|e| RunnerError::new("export", e.to_string()))?;
+        std::os::unix::fs::fchown(&f, Some(owner.uid()), Some(owner.gid())).map_err(|e| RunnerError::new("export", e.to_string()))?;
+    }
+    Ok(serde_json::json!({
+        "session_id": bundle.session_id,
+        "bytes": bytes.len(),
+        "sha256": powerhouse_cloud_protocol::sha256_hex(&bytes),
+    }))
 }
 
 fn diff(run_id: &str) -> Result<serde_json::Value, RunnerError> {

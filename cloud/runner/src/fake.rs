@@ -16,7 +16,27 @@ fn text(s: &str) -> serde_json::Value {
 }
 
 pub fn run(script: &str) -> i32 {
-    let session = format!("fake-{}", uuid::Uuid::new_v4());
+    // A continued chat keeps its id and appends to the installed transcript,
+    // like `claude --resume` does.
+    let session = match std::env::var("POWERHOUSE_FAKE_RESUME") {
+        Ok(sid) => {
+            let cwd = std::env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+            let home = std::env::var("HOME").unwrap_or_default();
+            let transcript = Path::new(&home)
+                .join(".claude/projects")
+                .join(powerhouse_cloud_protocol::claude_project_slug(&cwd))
+                .join(format!("{sid}.jsonl"));
+            let found = transcript.is_file();
+            let appended = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&transcript)
+                .and_then(|mut f| writeln!(f, "{}", serde_json::json!({"type":"fake-cloud-turn","cwd":cwd})))
+                .is_ok();
+            emit(serde_json::json!({"type":"fake","subtype":"resume","transcript_found":found,"appended":appended}));
+            sid
+        }
+        Err(_) => format!("fake-{}", uuid::Uuid::new_v4()),
+    };
     emit(serde_json::json!({"type":"system","subtype":"init","session_id":session,"model":"fake","tools":[]}));
 
     // Isolation probe: the runner's store must be unreadable from here.
@@ -29,7 +49,7 @@ pub fn run(script: &str) -> i32 {
     let has_git = std::env::var_os("GIT_PUBLISH_TOKEN").is_some() || std::env::var_os("GITHUB_PAT_TOKEN").is_some();
     // Names (never values) outside the runner's own baseline: the per-project
     // env vars a run was configured with.
-    const BASELINE: [&str; 9] = ["PATH", "HOME", "USER", "LANG", "TERM", "CI", "DISABLE_AUTOUPDATER", "POWERHOUSE_RUN_ID", "POWERHOUSE_RUNNER_ROOT"];
+    const BASELINE: [&str; 10] = ["PATH", "HOME", "USER", "LANG", "TERM", "CI", "DISABLE_AUTOUPDATER", "POWERHOUSE_RUN_ID", "POWERHOUSE_RUNNER_ROOT", "POWERHOUSE_FAKE_RESUME"];
     let mut extra_env: Vec<String> = std::env::vars_os()
         .filter_map(|(k, _)| k.into_string().ok())
         .filter(|k| !BASELINE.contains(&k.as_str()) && !["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "GIT_PUBLISH_TOKEN"].contains(&k.as_str()))

@@ -379,6 +379,9 @@ fn run_stages(ctx: &mut Ctx) -> Result<(), String> {
     // ---- running ---------------------------------------------------------
     ctx.stage(RunState::Running, "agent")?;
     let (agent_outcome, exit_code, stop) = run_agent(ctx)?;
+    if ctx.row.manifest.session.is_some() {
+        capture_session(ctx, agent_outcome.session_id.as_deref());
+    }
     result.provider_session_id = agent_outcome.session_id.clone();
     result.summary = agent_outcome.summary.clone();
     result.usage = agent_outcome.usage.clone();
@@ -496,6 +499,17 @@ fn prepare_workspace(ctx: &mut Ctx) -> Result<(), String> {
     // never consulted for ignore rules).
     let ph_dir = ctx.workspace.join(".powerhouse");
     std::fs::create_dir_all(&ph_dir).map_err(|e| e.to_string())?;
+    let home = paths::agent_home(&m.run_id);
+    std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
+    // A continued chat: the desktop transcript goes where Claude Code looks
+    // for this workspace's sessions, before the runner's brief is written.
+    if let Some(spec) = &m.session {
+        let bundle = crate::session::read_verified(&paths::session_inbound(&m.run_id), spec)?;
+        let from = bundle.cwd.clone();
+        let layout = crate::session::Layout { home: home.clone(), cwd: ctx.workspace.clone() };
+        let files = crate::session::install(bundle, &layout)?;
+        ctx.event("session.installed", serde_json::json!({ "session_id": spec.session_id, "files": files, "from_cwd": from }));
+    }
     let brief = render_brief(&m);
     std::fs::write(ph_dir.join("cloud-task.md"), brief).map_err(|e| e.to_string())?;
     // Per-project env vars: also on disk, so build/test tooling that reads
@@ -514,8 +528,6 @@ fn prepare_workspace(ctx: &mut Ctx) -> Result<(), String> {
         writeln!(f, ".powerhouse/").map_err(|e| e.to_string())?;
         writeln!(f, ".env").map_err(|e| e.to_string())?;
     }
-    let home = paths::agent_home(&m.run_id);
-    std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
     chown_recursive(&work, ctx.uid, ctx.gid)?;
     std::fs::set_permissions(&work, std::os::unix::fs::PermissionsExt::from_mode(0o700))
         .map_err(|e| e.to_string())?;
@@ -679,6 +691,31 @@ fn run_agent(ctx: &mut Ctx) -> Result<(AgentOutcome, Option<i32>, Option<Stop>),
     // Reap anything the agent left behind in its process group.
     kill_group(&mut child);
     Ok((outcome, exit.flatten(), stop))
+}
+
+/// Pack the continued chat for the desktop, whatever the agent's verdict: a
+/// failed or stopped run still has a conversation worth taking home. Failure
+/// here is reported, never fatal; the desktop then keeps its own copy.
+fn capture_session(ctx: &mut Ctx, reported: Option<&str>) {
+    let m = ctx.row.manifest.clone();
+    let Some(spec) = m.session.as_ref() else { return };
+    let captured = (|| -> Result<(String, usize, usize), String> {
+        let inbound = crate::session::read_verified(&paths::session_inbound(&m.run_id), spec)?;
+        // `--resume` keeps the id; accept a new one only if Claude says so.
+        let sid = reported
+            .filter(|s| powerhouse_cloud_protocol::validate_run_id(s).is_ok())
+            .unwrap_or(&spec.session_id)
+            .to_string();
+        let layout = crate::session::Layout { home: paths::agent_home(&m.run_id), cwd: ctx.workspace.clone() };
+        let bundle = crate::session::capture(&sid, &layout, &inbound.cwd, inbound.claude_version.clone())?;
+        let bytes = bundle.to_bytes();
+        write_atomic(&paths::session_outbound(&m.run_id), &bytes, 0o600).map_err(|e| e.to_string())?;
+        Ok((sid, bundle.files.len(), bytes.len()))
+    })();
+    match captured {
+        Ok((sid, files, bytes)) => ctx.event("session.captured", serde_json::json!({ "session_id": sid, "files": files, "bytes": bytes })),
+        Err(e) => ctx.event("session.capture_error", serde_json::json!({ "message": e })),
+    }
 }
 
 /// Parse one output line, feed the outcome, and return the event to store

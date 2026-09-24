@@ -527,6 +527,7 @@ mod tests {
             deadline_seconds: 300,
             created_at_ms: 1,
             predecessor_run_id: None,
+            session: None,
         }
     }
 
