@@ -180,6 +180,21 @@ What exists now, on branch `add-basic-memory`:
 
 Not yet built, in order: the memory VM and the GitHub remote (today the endpoint is loopback and the repo has no remote), the inbox and approve flow (agent writes go straight into the active tree), the host checkpoint at run end, the Pi adapter switch (Pi gets the brief through the prompt but cannot call the MCP tools), outcome labels, consolidation cron. The repo-local `.mem/` files are left in place until every branch has moved to the shared memory.
 
+### Write path, cloud reach, and outcome-label data as built (2026-09-24, branch `feature/memory-inbox-checkpoint`)
+
+Four of the five follow-ups above now have their in-repo half. What changed:
+
+- **Inbox / approve flow.** Fresh notes land in an `inbox` directory, not the active tree. The brief now tells agents to `write_note ... directory inbox`. The Memory page has an **Inbox** view (approve → `move_note` into the type folder; discard → `delete_note`; in-place edit → `write_note` overwrite) and a **Browse** view showing only the approved tree. Corrections auto-promote on load. Pure helpers (`isInboxNote`, `inboxNotes`, `activeNotes`, `promotionFolder`, `autoPromotes`) are unit-tested in `src/lib/memory.test.ts`.
+- **Host checkpoint at run end.** `src/lib/checkpoint.ts` (`distillCheckpoint`, `writeCheckpoint`, tested) distils one note per session — task, files, commands, outcome, and the briefed notes — and `useAcpSession` writes it to the inbox at the end of every working turn as a `session` note, overwriting per chat so a session leaves exactly one checkpoint. Runs with no tool activity are skipped; memory being down never affects the run.
+- **Run-VM reach.** The routable memory endpoint and token travel in the per-run credentials file as `MEMORY_URL` / `MEMORY_TOKEN` (`render_run_credentials` in `cloud/secrets.rs`, threaded through both submit paths in `cloud/commands.rs`; `routableMemory` in `memory.ts` drops loopback URLs a VM cannot reach). Tested on both sides.
+- **Outcome-label data.** `fetchBrief` returns the `project/permalink` of every briefed note; the checkpoint records them as a `- [briefed]` line. This is the source data the consolidation pass reads.
+
+Still infra, not in this branch:
+
+- **Pi adapter switch.** Left the default `acpCommand` as `npx -y pi-acp` on purpose — flipping every Pi user to the georgeharker fork before the fork + `pi-mcp-adapter` are validated against a running Pi risks breaking Pi entirely. The switch is a one-line change to the Pi seed in `appStore.ts` (or per-user in Settings) once the fork is baked into the base snapshot and the laptop install. Pi already receives the brief in-prompt today.
+- **Runner consumption of `MEMORY_URL` / `MEMORY_TOKEN`.** The credentials file now carries them; the in-VM runner must read them and point its memory settings at the host (like it already does for `CLAUDE_CODE_OAUTH_TOKEN`). That code lives in the base-snapshot runner, out of this repo.
+- **Hits computation + consolidation cron.** The `[briefed]` data exists; crediting notes whose sessions merge first pass needs the merge outcome (laptop telemetry / merge queue) joined to the briefed refs, and the `hits` write plus stale-inbox auto-retire (§12.3) belong in the host cron. Neither is wired yet.
+
 ### Memory host on Hetzner, as built (2026-09-24)
 
 Done on `software-factory` (46.224.40.20): user `memory` with uv and Basic Memory 0.23.2; bare remote `~/memory.git` (laptop key authorised); working clone `~/memory` with projects `global` (default) and `powerhouse` registered; `memory.service` serving streamable-HTTP MCP on 127.0.0.1:8770 (active, answers initialize); `memory-sync.timer` every 5 minutes (active). The proposed Caddyfile validates on the host.
@@ -188,4 +203,4 @@ Applied 2026-09-24 after approval: the laptop repo history is on the host (`~/me
 
 Gotcha learned on the host: files that arrive through `git pull` are not picked up by the running server's watcher until a restart; the startup sync indexes everything. The sync script therefore touches `~/.reindex` when a pull changed files, and a root path unit (`memory-restart.path`) restarts `memory.service` and clears the flag. Verified by touching the flag by hand.
 
-Remaining on the laptop: Settings → Memory, endpoint `https://factory.mithril-studio.com/memory/mcp`, token from `~/.powerhouse/memory-token`. Run VMs need the token through the per-run credentials channel (not wired yet).
+Remaining on the laptop: Settings → Memory, endpoint `https://factory.mithril-studio.com/memory/mcp`, token from `~/.powerhouse/memory-token`. The laptop now sends `MEMORY_URL` / `MEMORY_TOKEN` to run VMs in the per-run credentials file (see the write-path section above); the in-VM runner reading them is the remaining piece.
