@@ -506,6 +506,66 @@ pub fn git_remove_worktree(repo_path: String, worktree_path: String) -> Result<(
     Ok(())
 }
 
+const ARCHIVE_PREFIX: &str = "refs/powerhouse/archive/";
+/// How long an archived branch stays recoverable before the sweep deletes it.
+const ARCHIVE_TTL_SECS: u64 = 3 * 24 * 60 * 60;
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Move a deleted worktree's branch out of `refs/heads` into
+/// `refs/powerhouse/archive/<unix-ts>/<branch>`. Branch pickers only list
+/// `refs/heads`, so it disappears at once, while its commits stay reachable
+/// (and restorable) until `git_prune_archived_branches` drops it.
+#[tauri::command]
+pub fn git_archive_branch(
+    repo_path: String,
+    branch: String,
+    default_branch: String,
+) -> Result<(), String> {
+    archive_branch_at(Path::new(&repo_path), &branch, &default_branch, unix_now())
+}
+
+fn archive_branch_at(repo: &Path, branch: &str, default_branch: &str, now: u64) -> Result<(), String> {
+    if branch == default_branch {
+        return Err(format!("refusing to archive the default branch “{branch}”"));
+    }
+    let local_ref = format!("refs/heads/{branch}");
+    let Ok(sha) = git(repo, &["rev-parse", "--verify", "--quiet", &local_ref]) else {
+        return Ok(()); // already gone
+    };
+    let archive_ref = format!("{ARCHIVE_PREFIX}{now}/{branch}");
+    git(repo, &["update-ref", &archive_ref, &sha])?;
+    git(repo, &["branch", "-D", branch])?;
+    Ok(())
+}
+
+/// Delete archived branches older than the TTL. Returns how many were dropped.
+#[tauri::command]
+pub fn git_prune_archived_branches(repo_path: String) -> Result<u32, String> {
+    prune_archived_at(Path::new(&repo_path), unix_now())
+}
+
+fn prune_archived_at(repo: &Path, now: u64) -> Result<u32, String> {
+    let refs = git(repo, &["for-each-ref", "--format=%(refname)", ARCHIVE_PREFIX])?;
+    let mut pruned = 0;
+    for r in refs.lines() {
+        let archived_at = r
+            .strip_prefix(ARCHIVE_PREFIX)
+            .and_then(|rest| rest.split_once('/'))
+            .and_then(|(ts, _)| ts.parse::<u64>().ok());
+        let Some(archived_at) = archived_at else { continue };
+        if now.saturating_sub(archived_at) >= ARCHIVE_TTL_SECS && git(repo, &["update-ref", "-d", r]).is_ok() {
+            pruned += 1;
+        }
+    }
+    Ok(pruned)
+}
+
 #[derive(serde::Serialize)]
 pub struct ChangedFile {
     path: String,
@@ -621,4 +681,55 @@ pub fn git_file_diff(
     }
     // Untracked file — no tracked diff exists; diff against an empty file.
     Ok(git_raw(&wt, &["diff", "--no-index", "--", "/dev/null", &path]).unwrap_or_default())
+}
+
+#[cfg(test)]
+mod archive_tests {
+    use super::*;
+
+    const DAY: u64 = 24 * 60 * 60;
+
+    fn repo_with_branch(branch: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "root"],
+            &["branch", branch],
+        ] {
+            git(p, args).unwrap();
+        }
+        dir
+    }
+
+    fn refs(dir: &tempfile::TempDir, prefix: &str) -> Vec<String> {
+        let out = git(dir.path(), &["for-each-ref", "--format=%(refname)", prefix]).unwrap();
+        out.lines().map(String::from).collect()
+    }
+
+    #[test]
+    fn archive_hides_branch_but_keeps_its_commit() {
+        let dir = repo_with_branch("feat/x");
+        archive_branch_at(dir.path(), "feat/x", "main", 1000).unwrap();
+        assert!(!refs(&dir, "refs/heads/").contains(&"refs/heads/feat/x".to_string()));
+        assert_eq!(refs(&dir, ARCHIVE_PREFIX), vec!["refs/powerhouse/archive/1000/feat/x"]);
+    }
+
+    #[test]
+    fn prune_drops_only_expired_archives() {
+        let dir = repo_with_branch("old");
+        git(dir.path(), &["branch", "new"]).unwrap();
+        archive_branch_at(dir.path(), "old", "main", 0).unwrap();
+        archive_branch_at(dir.path(), "new", "main", 2 * DAY).unwrap();
+
+        assert_eq!(prune_archived_at(dir.path(), 3 * DAY), Ok(1));
+        assert_eq!(refs(&dir, ARCHIVE_PREFIX), vec![format!("{ARCHIVE_PREFIX}{}/new", 2 * DAY)]);
+    }
+
+    #[test]
+    fn missing_branch_is_ok_and_default_is_refused() {
+        let dir = repo_with_branch("feat");
+        assert_eq!(archive_branch_at(dir.path(), "nope", "main", 0), Ok(()));
+        assert!(archive_branch_at(dir.path(), "main", "main", 0).is_err());
+    }
 }

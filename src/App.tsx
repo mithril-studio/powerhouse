@@ -9,6 +9,7 @@ import { acpKillAll, githubAccount, ptyKillAll } from "./lib/ipc";
 import { initHandoff } from "./lib/handoff";
 import { startDockBadge } from "./lib/attention";
 import { startCloudSync } from "./lib/cloud";
+import { startArchivedBranchSweep } from "./lib/actions";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
@@ -89,6 +90,7 @@ export default function App() {
       startPersistence();
       startQueueSync();
       startDockBadge();
+      startArchivedBranchSweep();
       void initHandoff();
       void reconcileGithub();
       // Cloud runs live in their VMs; this only observes and reconciles.
