@@ -747,6 +747,9 @@ pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest
 /// Fixed task text for quick submissions: the brief *is* the task.
 pub const QUICK_TASK_TEXT: &str =
     "Execute the work described in the brief (`.powerhouse/cloud-task.md`). It contains the plan and context.";
+/// Task text when the chat itself travels: the conversation holds the work.
+pub const SESSION_TASK_TEXT: &str =
+    "Continue the work from this conversation until it is done. If the last request is already complete, verify it and wrap up.";
 const QUICK_EVENT: &str = "cloud-quick-submit";
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -889,7 +892,7 @@ pub fn do_quick_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: QuickSu
         repo_path: req.repo_path,
         repo_name: req.repo_name,
         source_path: req.source_path,
-        task: QUICK_TASK_TEXT.into(),
+        task: if session.is_some() { SESSION_TASK_TEXT.into() } else { QUICK_TASK_TEXT.into() },
         acceptance_criteria: vec![],
         base_snapshot: base.name.clone(),
         base_snapshot_version: base.version.clone(),
@@ -2782,6 +2785,7 @@ mod tests {
             assert_eq!(record.manifest.protocol_version, SESSION_PROTOCOL_VERSION);
             let spec = record.manifest.session.clone().expect("session pinned in the manifest");
             assert_eq!(spec.session_id, SID);
+            assert_eq!(record.manifest.task.text, SESSION_TASK_TEXT);
             let remote_bundle = format!("/home/boxd/powerhouse-{}.session.json", record.run_id);
             let bytes = fake.files.lock().unwrap().get(&remote_bundle).cloned().expect("bundle uploaded");
             assert_eq!(powerhouse_cloud_protocol::sha256_hex(&bytes), spec.bundle_sha256);
@@ -3420,7 +3424,13 @@ mod e2e {
             brief: format!("# Plan\n\n1. Read the repository layout.\n2. {task}\n3. Make the acceptance check pass: it verifies {expect_file} exists.\n"),
             env_names: vec![],
             chat_id: None,
-            session: None,
+            // POWERHOUSE_CLOUD_E2E_SESSION=<id>: continue that local Claude
+            // session of the source checkout instead of starting fresh.
+            session: std::env::var("POWERHOUSE_CLOUD_E2E_SESSION").ok().map(|sid| {
+                super::super::session::pack(&super::super::session::claude_home(), Path::new(&source), &sid)
+                    .expect("pack session")
+                    .expect("the source checkout has no transcript for POWERHOUSE_CLOUD_E2E_SESSION")
+            }),
         };
         let t0 = Instant::now();
         let rec = do_submit(&mgr, None, req).expect("submit");
@@ -3503,6 +3513,10 @@ mod e2e {
         assert_eq!(r.machine, MachineState::Released, "{:?}", r.machine_error);
         assert!(r.vm_released && r.diff_cached.is_some() && r.remote_verified);
         assert!(matches!(boxd.machine_get(&vm), Err(TransportError::NotFound(_))), "VM must be gone after release");
+        if let Some(handoff) = &r.session {
+            eprintln!("SESSION returned: {:?}", handoff.returned);
+            assert!(matches!(handoff.returned, Some(SessionReturn::Restored { .. })), "{:?}", handoff.returned);
+        }
         let ph: Vec<_> = boxd.machine_list().unwrap().into_iter().filter(|m| m.name.starts_with(OWNED_PREFIX)).map(|m| m.name).collect();
         eprintln!("E2E OK: run {} result {:?}; VM {vm} released; remaining ph-* machines: {ph:?}", run_id, res.result_sha);
     }

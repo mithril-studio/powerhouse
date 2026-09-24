@@ -192,7 +192,9 @@ pub fn build_resume_prompt(m: &RunManifest) -> String {
     p.push_str(", which is the branch exactly as it was on the laptop (uncommitted work included as a WIP commit). ");
     p.push_str("File paths from earlier in this conversation have been rewritten to this checkout. ");
     p.push_str("Tools and MCP servers that only existed on the laptop are not available here.\n\n");
-    p.push_str("Continue the work you were doing until it is done. If the last request is already complete, verify it and wrap up.");
+    p.push_str("Your instruction from the user for this cloud run:\n\n");
+    p.push_str(m.task.text.trim());
+    p.push_str("\n\n`.powerhouse/cloud-task.md` repeats it with the plan attached in Powerhouse and the checks that will run.");
     if !m.checks.is_empty() {
         p.push_str("\n\nThese checks run automatically after you finish; make them pass:\n");
         for c in &m.checks {
