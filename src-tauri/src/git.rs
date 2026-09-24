@@ -125,7 +125,10 @@ pub(crate) fn detect_target_branch(root: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{detect_target_branch, git, git_target_commits, is_github_https, parse_log, repo_name_from_url};
+    use super::{
+        detect_target_branch, git, git_remove_worktree, git_target_commits, is_github_https,
+        parse_log, registered_worktrees, repo_name_from_url, resolve_worktree_base,
+    };
     use std::path::Path;
 
     fn commit(work: &Path, file: &str, msg: &str) {
@@ -255,6 +258,72 @@ mod tests {
         assert!(!is_github_https("https://gitlab.com/owner/repo.git"));
         assert!(!is_github_https("https://evil.com/github.com/x.git"));
     }
+
+    #[test]
+    fn worktree_base_prefers_the_freshly_fetched_remote_tip() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = repo_with_origin(dir.path());
+        git(&work, &["checkout", "-qb", "test"]).unwrap();
+        commit(&work, "a", "on test v1");
+        git(&work, &["push", "-q", "origin", "test"]).unwrap();
+
+        // A second clone advances origin/test; `work`'s tracking ref is now stale.
+        let other = dir.path().join("other");
+        let origin = dir.path().join("origin.git");
+        git(dir.path(), &["clone", "-q", "-b", "test", origin.to_str().unwrap(), other.to_str().unwrap()]).unwrap();
+        commit(&other, "b", "on test v2");
+        git(&other, &["push", "-q", "origin", "test"]).unwrap();
+        let tip = git(&other, &["rev-parse", "HEAD"]).unwrap();
+
+        let start = resolve_worktree_base(&work, "test");
+        assert_eq!(start, "origin/test");
+        // resolve fetched, so the local tracking ref caught up to the new tip.
+        assert_eq!(git(&work, &["rev-parse", "refs/remotes/origin/test"]).unwrap(), tip);
+    }
+
+    #[test]
+    fn worktree_base_falls_back_to_a_local_only_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = repo_with_origin(dir.path());
+        git(&work, &["branch", "solo-feature"]).unwrap();
+        // No origin/solo-feature exists, so the local branch is used verbatim.
+        assert_eq!(resolve_worktree_base(&work, "solo-feature"), "solo-feature");
+    }
+
+    #[test]
+    fn remove_worktree_is_idempotent_when_the_directory_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        // Canonicalize so paths match git's realpath output on macOS (/var → /private/var).
+        let root = dir.path().canonicalize().unwrap();
+        let work = repo_with_origin(&root);
+        let wt = root.join("wt");
+        git(&work, &["worktree", "add", "-q", "-b", "wt-branch", wt.to_str().unwrap()]).unwrap();
+        let wt_str = wt.to_string_lossy().to_string();
+        assert!(registered_worktrees(&work).iter().any(|w| w == &wt_str));
+
+        // Simulate an external deletion: the directory vanishes but git still
+        // has the admin metadata — the exact state that broke the UI.
+        std::fs::remove_dir_all(&wt).unwrap();
+        git_remove_worktree(work.to_string_lossy().to_string(), wt_str.clone()).unwrap();
+        assert!(!registered_worktrees(&work).iter().any(|w| w == &wt_str));
+
+        // Calling again on an already-unregistered path still succeeds.
+        git_remove_worktree(work.to_string_lossy().to_string(), wt_str).unwrap();
+    }
+
+    #[test]
+    fn remove_worktree_tears_down_a_live_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let work = repo_with_origin(&root);
+        let wt = root.join("live");
+        git(&work, &["worktree", "add", "-q", "-b", "live-branch", wt.to_str().unwrap()]).unwrap();
+        let wt_str = wt.to_string_lossy().to_string();
+
+        git_remove_worktree(work.to_string_lossy().to_string(), wt_str.clone()).unwrap();
+        assert!(!wt.exists());
+        assert!(!registered_worktrees(&work).iter().any(|w| w == &wt_str));
+    }
 }
 
 /// Clone a git URL into `dest_parent` (default `~/conductor/repos`) and return
@@ -331,6 +400,21 @@ pub fn git_init_repo(name: String, dest_parent: Option<String>) -> Result<RepoIn
     git_validate_repo(target.to_string_lossy().to_string())
 }
 
+/// The commit a new worktree's branch should start at. Best-effort fetches
+/// `origin`, then prefers `origin/<base>` when that remote branch exists, so a
+/// new worktree tracks the latest integration tip (e.g. `origin/test`) instead
+/// of a local `base` that may be behind. Falls back to `base` verbatim for
+/// local-only branches or a repo without `origin`.
+fn resolve_worktree_base(repo: &Path, base: &str) -> String {
+    let _ = fetch_origin(repo);
+    let remote_ref = format!("origin/{base}");
+    if git(repo, &["rev-parse", "--verify", "--quiet", &format!("refs/remotes/{remote_ref}")]).is_ok() {
+        remote_ref
+    } else {
+        base.to_string()
+    }
+}
+
 #[tauri::command]
 pub fn git_create_worktree(
     repo_path: String,
@@ -366,7 +450,11 @@ pub fn git_create_worktree(
     }
 
     let worktree_str = worktree_dir.to_string_lossy().to_string();
-    let args = ["worktree", "add", "-b", &branch, &worktree_str, &base];
+    // Start the new branch from the freshest tip of `base`, not a stale local
+    // ref: fetch, then branch off `origin/<base>` when it exists. See
+    // AGENTS.md, "Branch & release flow" — worktrees are cut from origin/test.
+    let start_point = resolve_worktree_base(&repo, &base);
+    let args = ["worktree", "add", "-b", &branch, &worktree_str, &start_point];
 
     let created = match git(&repo, &args) {
         Ok(_) => worktree_str,
@@ -498,10 +586,34 @@ pub fn git_target_commits(repo_path: String, target: String, base: String) -> Re
     })
 }
 
+/// Absolute paths of every worktree git currently tracks for `repo`, with
+/// trailing slashes trimmed so they compare cleanly against a caller's path.
+fn registered_worktrees(repo: &Path) -> Vec<String> {
+    git(repo, &["worktree", "list", "--porcelain"])
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.strip_prefix("worktree "))
+        .map(|p| p.trim_end_matches('/').to_string())
+        .collect()
+}
+
+/// Remove a worktree and prune its metadata. Idempotent: if the worktree's
+/// directory or admin data is already gone (deleted outside the app, or a
+/// half-finished earlier removal), `git worktree remove` fails with
+/// "is not a working tree" — we prune, then treat an unregistered path as
+/// success, since the end state the caller asked for is already true. The
+/// original error only surfaces when the worktree really is still tracked.
 #[tauri::command]
 pub fn git_remove_worktree(repo_path: String, worktree_path: String) -> Result<(), String> {
     let repo = PathBuf::from(&repo_path);
-    git(&repo, &["worktree", "remove", "--force", &worktree_path])?;
+    if let Err(err) = git(&repo, &["worktree", "remove", "--force", &worktree_path]) {
+        let _ = git(&repo, &["worktree", "prune"]);
+        let target = worktree_path.trim_end_matches('/');
+        if registered_worktrees(&repo).iter().any(|w| w == target) {
+            return Err(err);
+        }
+        return Ok(());
+    }
     let _ = git(&repo, &["worktree", "prune"]);
     Ok(())
 }
