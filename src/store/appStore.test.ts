@@ -228,6 +228,22 @@ describe("page navigation overlays", () => {
       }),
     );
   });
+
+  it("leaves the memory page when a worktree or chat is selected", () => {
+    useAppStore.getState().openMemory();
+    expect(useAppStore.getState().memoryOpen).toBe(true);
+
+    useAppStore.getState().select("repo-1", "b1");
+    expect(useAppStore.getState()).toEqual(
+      expect.objectContaining({
+        selection: { repoId: "repo-1", branchId: "b1" },
+        memoryOpen: false,
+        settingsOpen: false,
+        telemetryOpen: false,
+        workspaceView: "home",
+      }),
+    );
+  });
 });
 
 describe("chat activity", () => {
