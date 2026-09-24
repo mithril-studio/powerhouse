@@ -37,3 +37,14 @@ it("resolves false when canceled", async () => {
   await expect(result).resolves.toBe(false);
   expect(getPowerConfirmation()).toBeNull();
 });
+
+// useSyncExternalStore contract: an unstable snapshot makes React re-render
+// forever and blank the app the moment the dialog opens.
+it("returns the same snapshot object until the confirmation changes", async () => {
+  const result = requestPowerConfirmation({ title: "Hey, are you sure?", message: "Delete it?" });
+
+  expect(getPowerConfirmation()).toBe(getPowerConfirmation());
+
+  settlePowerConfirmation(false);
+  await expect(result).resolves.toBe(false);
+});

@@ -13,9 +13,24 @@ interface PendingConfirmation extends PowerConfirmation {
 
 let nextId = 1;
 let pending: PendingConfirmation | null = null;
+// Snapshot for useSyncExternalStore: must stay reference-equal between emits,
+// or React re-renders forever and unmounts the whole tree on "maximum update
+// depth exceeded" (the app goes blank the moment a confirmation opens).
+let snapshot: PowerConfirmation | null = null;
 const listeners = new Set<() => void>();
 
-function emit() {
+function setPending(next: PendingConfirmation | null) {
+  pending = next;
+  snapshot = next
+    ? {
+        id: next.id,
+        title: next.title,
+        message: next.message,
+        confirmLabel: next.confirmLabel,
+        cancelLabel: next.cancelLabel,
+        shortcutLabel: next.shortcutLabel,
+      }
+    : null;
   for (const listener of listeners) listener();
 }
 
@@ -25,9 +40,7 @@ export function subscribePowerConfirmation(listener: () => void) {
 }
 
 export function getPowerConfirmation(): PowerConfirmation | null {
-  if (!pending) return null;
-  const { resolve: _resolve, ...confirmation } = pending;
-  return confirmation;
+  return snapshot;
 }
 
 export function hasPowerConfirmation() {
@@ -44,7 +57,7 @@ export function requestPowerConfirmation(options: {
   if (pending) return Promise.resolve(false);
 
   return new Promise((resolve) => {
-    pending = {
+    setPending({
       id: nextId++,
       title: options.title,
       message: options.message,
@@ -52,15 +65,13 @@ export function requestPowerConfirmation(options: {
       cancelLabel: options.cancelLabel ?? "Cancel",
       shortcutLabel: options.shortcutLabel ?? "⌘W",
       resolve,
-    };
-    emit();
+    });
   });
 }
 
 export function settlePowerConfirmation(confirmed: boolean) {
   const current = pending;
   if (!current) return;
-  pending = null;
-  emit();
+  setPending(null);
   current.resolve(confirmed);
 }
