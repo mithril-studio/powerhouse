@@ -10,6 +10,8 @@ import {
   gitCloneRepo,
   gitCreateWorktree,
   gitInitRepo,
+  gitArchiveBranch,
+  gitPruneArchivedBranches,
   gitRemoveWorktree,
   gitValidateRepo,
   queueCancel,
@@ -161,7 +163,7 @@ export async function deleteBranch(repoId: string, branchId: string) {
   if (!repo || !branch) return;
 
   const confirmed = await ask(
-    `Delete branch “${branch.name}”?\n\nIts worktree and any uncommitted changes will be removed. The git branch itself is kept.`,
+    `Delete branch “${branch.name}”?\n\nIts worktree and any uncommitted changes will be removed. The git branch is archived for 3 days, then deleted.`,
     { title: "Delete branch", kind: "warning", okLabel: "Delete" },
   );
   if (!confirmed) return;
@@ -191,6 +193,24 @@ export async function deleteBranch(repoId: string, branchId: string) {
     return;
   }
   useAppStore.getState().removeBranch(repoId, branchId);
+  try {
+    await gitArchiveBranch(repo.path, branch.name, repo.defaultBranch);
+  } catch (err) {
+    await message(String(err), { title: "Could not archive git branch", kind: "error" });
+  }
+}
+
+const ARCHIVE_SWEEP_MS = 60 * 60 * 1000;
+
+/** Delete archived branches past their 3 days, now and hourly after. */
+export function startArchivedBranchSweep() {
+  const sweep = () => {
+    for (const repo of useAppStore.getState().repos) {
+      void gitPruneArchivedBranches(repo.path).catch(() => {});
+    }
+  };
+  sweep();
+  window.setInterval(sweep, ARCHIVE_SWEEP_MS);
 }
 
 /**

@@ -127,6 +127,30 @@ describe("agent controls", () => {
     });
   });
 
+  it("lists a pinned model outside the picker as the active option", () => {
+    const configOptions: SessionConfigOption[] = [
+      {
+        id: "model",
+        name: "Model",
+        category: "model",
+        type: "select",
+        currentValue: "claude-opus-4-8",
+        options: [
+          { value: "default", name: "Default" },
+          { value: "claude-fable-5-1[1m]", name: "Fable 5.1" },
+        ],
+      },
+    ];
+    const models = resolveModels(state({ configOptions }));
+    if (!models.supported) throw new Error("expected models");
+    expect(models.current?.label).toBe("claude-opus-4-8");
+    expect(models.options.map((o) => o.label)).toEqual([
+      "claude-opus-4-8",
+      "Default",
+      "Fable 5.1",
+    ]);
+  });
+
   it("reports unsupported reasoning for agents without a thought level", () => {
     const result = resolveReasoning(state({}));
     expect(result.supported).toBe(false);

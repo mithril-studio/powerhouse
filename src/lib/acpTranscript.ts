@@ -1,5 +1,6 @@
 import type {
   ContentBlock,
+  Cost,
   PlanEntry,
   SessionUpdate,
   ToolCallContent,
@@ -46,7 +47,20 @@ export type AcpTranscriptItem =
       runId: string;
       /** True when appended at boot for a run that had already finished. */
       late: boolean;
-    };
+    }
+  | AcpUsageItem;
+
+/** Context-window snapshot reported by the agent after a model call. */
+export interface AcpUsageItem {
+  id: string;
+  type: "usage";
+  /** Tokens currently in the model's context. */
+  used: number;
+  /** Total context window size in tokens. */
+  size: number;
+  /** Cumulative session cost when the agent reports it. */
+  cost?: Cost | null;
+}
 
 const newId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 
@@ -140,6 +154,48 @@ function appendChunk(
   ];
 }
 
+/**
+ * Records the agent's latest context-window reading at the end of the
+ * current turn. Agents emit usage after every model call, so a single turn
+ * can produce many readings; only the newest one per turn is kept and it is
+ * always the last item of that turn.
+ */
+function recordUsage(
+  transcript: AcpTranscriptItem[],
+  usage: { used: number; size: number; cost?: Cost | null },
+): AcpTranscriptItem[] {
+  let turnStart = -1;
+  for (let index = transcript.length - 1; index >= 0; index -= 1) {
+    const item = transcript[index];
+    if (item.type === "message" && item.role === "user") {
+      turnStart = index;
+      break;
+    }
+  }
+  const kept = transcript.filter(
+    (item, index) => !(item.type === "usage" && index > turnStart),
+  );
+  return [
+    ...kept,
+    {
+      id: newId("usage"),
+      type: "usage",
+      used: usage.used,
+      size: usage.size,
+      ...(usage.cost != null ? { cost: usage.cost } : {}),
+    },
+  ];
+}
+
+/** The most recent context-window reading in the transcript, if any. */
+export function latestUsage(transcript: AcpTranscriptItem[]): AcpUsageItem | null {
+  for (let index = transcript.length - 1; index >= 0; index -= 1) {
+    const item = transcript[index];
+    if (item.type === "usage") return item;
+  }
+  return null;
+}
+
 export function applyAcpUpdate(
   transcript: AcpTranscriptItem[],
   update: SessionUpdate,
@@ -197,6 +253,8 @@ export function applyAcpUpdate(
       const withoutPlan = transcript.filter((item) => item.type !== "plan");
       return [...withoutPlan, { id: "plan", type: "plan", entries: update.entries }];
     }
+    case "usage_update":
+      return recordUsage(transcript, update);
     default:
       return transcript;
   }

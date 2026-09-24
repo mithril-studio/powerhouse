@@ -56,6 +56,10 @@ export interface AgentProfile {
   handoff?: HandoffMode;
   /** Shell command that runs the agent's CLI auth flow, e.g. "codex login". */
   loginCommand?: string;
+  /** Env var the ACP agent reads its startup model from, e.g. "ANTHROPIC_MODEL". */
+  modelEnvVar?: string;
+  /** Model new ACP chats start on; blank = the agent's own default. */
+  defaultModel?: string;
 }
 
 export type Theme = "dark" | "light";
@@ -247,6 +251,7 @@ interface AppState extends PersistedTree {
 
   hydrate: (tree: (Partial<PersistedTree> & LegacyTree) | null) => void;
   setDefaultAgent: (agentId: string) => void;
+  setAgentDefaultModel: (agentId: string, model: string) => void;
   setTheme: (theme: Theme) => void;
   setGithubConnection: (github: GithubConnection) => void;
   openSettings: () => void;
@@ -289,6 +294,8 @@ interface AppState extends PersistedTree {
   setQueueEntries: (repoId: string, live: QueueEntry[]) => void;
   dismissQueueEntry: (repoId: string, entryId: string) => void;
   setWorkflow: (repoId: string, workflow: WorkflowStep[], pushOnMerge: boolean) => void;
+  /** The branch new worktrees are cut from and the merge queue lands on. */
+  setDefaultBranch: (repoId: string, branch: string) => void;
   setRepoEnvNames: (repoId: string, names: string[]) => void;
   openWorkflowModal: (repoId: string) => void;
   closeWorkflowModal: () => void;
@@ -329,6 +336,10 @@ const SEED_AGENTS: AgentProfile[] = [
     handoff: "workspace-only",
     // Bare `claude` runs the auth flow when unauthenticated; use /login inside otherwise.
     loginCommand: "claude",
+    // The ACP picker only lists current models; the env var also reaches
+    // pinned ids like Opus 4.8 that `session/set_config_option` rejects.
+    modelEnvVar: "ANTHROPIC_MODEL",
+    defaultModel: "claude-opus-4-8",
   },
   {
     id: "codex",
@@ -374,6 +385,8 @@ function backfillAgentProfiles(agents: AgentProfile[]): AgentProfile[] {
       acpCommand: a.acpCommand ?? seed.acpCommand,
       handoff: a.handoff ?? seed.handoff,
       loginCommand: a.loginCommand ?? seed.loginCommand,
+      modelEnvVar: a.modelEnvVar ?? seed.modelEnvVar,
+      defaultModel: a.defaultModel ?? seed.defaultModel,
     };
   });
   const existing = new Set(backfilled.map((agent) => agent.id));
@@ -433,6 +446,13 @@ export function migrateSettings(
     return { agents: [custom, ...agents], defaultAgentId: custom.id, theme, connections };
   }
   return { agents, defaultAgentId: "claude", theme, connections };
+}
+
+/** Env that pins a fresh ACP session to the agent's default model, if any. */
+export function agentModelEnv(agent: AgentProfile): Record<string, string> | undefined {
+  const model = agent.defaultModel?.trim();
+  if (!agent.modelEnvVar || !model) return undefined;
+  return { [agent.modelEnvVar]: model };
 }
 
 /** Resolves the profile for a chat, falling back to the default agent. */
@@ -562,6 +582,16 @@ export const useAppStore = create<AppState>((set, get) => ({
         ? { settings: { ...s.settings, defaultAgentId: agentId } }
         : s,
     ),
+
+  setAgentDefaultModel: (agentId, model) =>
+    set((s) => ({
+      settings: {
+        ...s.settings,
+        agents: s.settings.agents.map((a) =>
+          a.id === agentId ? { ...a, defaultModel: model.trim() } : a,
+        ),
+      },
+    })),
 
   setTheme: (theme) => set((s) => ({ settings: { ...s.settings, theme } })),
 
@@ -777,6 +807,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   setWorkflow: (repoId, workflow, pushOnMerge) =>
     set((s) => ({
       repos: updateRepo(s.repos, repoId, (r) => ({ ...r, workflow, pushOnMerge })),
+    })),
+  setDefaultBranch: (repoId, branch) =>
+    set((s) => ({
+      repos: updateRepo(s.repos, repoId, (r) => ({ ...r, defaultBranch: branch })),
     })),
   setRepoEnvNames: (repoId, names) =>
     set((s) => ({

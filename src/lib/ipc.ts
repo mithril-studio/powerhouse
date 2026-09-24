@@ -12,8 +12,12 @@ export interface ChangedFile {
   status: string;
 }
 
-export const acpSpawn = (chatId: string, cwd: string, command: string) =>
-  invoke<void>("acp_spawn", { chatId, cwd, command });
+export const acpSpawn = (
+  chatId: string,
+  cwd: string,
+  command: string,
+  env?: Record<string, string>,
+) => invoke<void>("acp_spawn", { chatId, cwd, command, env });
 
 export const acpWrite = (chatId: string, data: string) =>
   invoke<void>("acp_write", { chatId, data });
@@ -77,6 +81,34 @@ export const gitListBranches = (repoPath: string) =>
 
 export const gitRemoveWorktree = (repoPath: string, worktreePath: string) =>
   invoke<void>("git_remove_worktree", { repoPath, worktreePath });
+
+/** Serialized from Rust — snake_case is intentional. */
+export interface CommitInfo {
+  sha: string;
+  short: string;
+  subject: string;
+  author: string;
+  /** Committer time, unix seconds. */
+  time: number;
+  merge: boolean;
+}
+
+export interface TargetCommits {
+  target: string;
+  base: string | null;
+  fetched: boolean;
+  commits: CommitInfo[];
+}
+
+/** Commits on origin/<target> not yet on origin/<base>; fetches first. */
+export const gitTargetCommits = (repoPath: string, target: string, base: string) =>
+  invoke<TargetCommits>("git_target_commits", { repoPath, target, base });
+/** Hide a branch from pickers; its commits stay restorable for 3 days. */
+export const gitArchiveBranch = (repoPath: string, branch: string, defaultBranch: string) =>
+  invoke<void>("git_archive_branch", { repoPath, branch, defaultBranch });
+
+export const gitPruneArchivedBranches = (repoPath: string) =>
+  invoke<number>("git_prune_archived_branches", { repoPath });
 
 export const gitChangedFiles = (worktreePath: string, base: string) =>
   invoke<ChangedFile[]>("git_changed_files", { worktreePath, base });

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  agentModelEnv,
   cloudSettingsOf,
   migrateSettings,
   resolveChatTransport,
@@ -39,6 +40,25 @@ describe("agent transport migration", () => {
     expect(settings.agents.find((agent) => agent.id === "opencode")).toBeUndefined();
     expect(settings.defaultAgentId).toBe("claude");
     expect(settings.agents.map((agent) => agent.id)).toEqual(["claude", "codex", "pi"]);
+  });
+
+  it("backfills Claude's default model without overriding a cleared one", () => {
+    const base = { theme: "dark" as const, connections: { github: { status: "disconnected" as const } } };
+    const claude: AgentProfile = { id: "claude", name: "Claude", command: "claude", promptTemplate: "" };
+
+    const legacy = migrateSettings({ settings: { ...base, agents: [claude], defaultAgentId: "claude" } });
+    const migrated = legacy.agents.find((a) => a.id === "claude")!;
+    expect(agentModelEnv(migrated)).toEqual({ ANTHROPIC_MODEL: "claude-opus-4-8" });
+
+    const cleared = migrateSettings({
+      settings: { ...base, agents: [{ ...claude, defaultModel: "" }], defaultAgentId: "claude" },
+    });
+    expect(agentModelEnv(cleared.agents.find((a) => a.id === "claude")!)).toBeUndefined();
+  });
+
+  it("sets no model env for agents without a model env var", () => {
+    const codex = migrateSettings(null).agents.find((a) => a.id === "codex")!;
+    expect(agentModelEnv({ ...codex, defaultModel: "gpt-6" })).toBeUndefined();
   });
 
   it("keeps custom agents on the terminal transport", () => {
@@ -180,5 +200,16 @@ describe("chat activity", () => {
     useAppStore.setState({ repos: [], chatActivity: { c1: "done", c2: "working" } });
     useAppStore.getState().removeChat("r", "b", "c1");
     expect(useAppStore.getState().chatActivity).toEqual({ c2: "working" });
+  });
+});
+
+describe("target branch", () => {
+  it("retargets one repo's worktree base and merge-queue landing branch", () => {
+    useAppStore.getState().hydrate(structuredClone(LEGACY_TREE) as never);
+    useAppStore.getState().setDefaultBranch("repo-1", "test");
+    expect(useAppStore.getState().repos[0].defaultBranch).toBe("test");
+    // Everything else on the repo is untouched.
+    expect(useAppStore.getState().repos[0].workflow[0].command).toBe("pnpm build");
+    expect(useAppStore.getState().repos[0].branches).toHaveLength(1);
   });
 });

@@ -7,6 +7,7 @@ import {
 } from "../store/appStore";
 import { cycleMode } from "../lib/agentControls";
 import { buildPalette } from "../lib/acpCommandPalette";
+import { latestUsage } from "../lib/acpTranscript";
 import { useAcpSession } from "../hooks/useAcpSession";
 import { useAgentShortcuts } from "../hooks/useAgentShortcuts";
 import { usePromptAttachments } from "../hooks/usePromptAttachments";
@@ -29,9 +30,6 @@ interface Props {
 export function AcpChatPane({ repoId, branch, chat, active }: Props) {
   const session = useAcpSession({ repoId, branch, chat, active });
   const openBottomPanel = useAppStore((state) => state.openBottomPanel);
-  const nativeCliOpen = useAppStore(
-    (state) => state.bottomPanelOpen && state.bottomTab === "agent",
-  );
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [draft, setDraft] = useState("");
 
@@ -46,6 +44,10 @@ export function AcpChatPane({ repoId, branch, chat, active }: Props) {
   const paletteView = useMemo(
     () => buildPalette(session.controlState),
     [session.controlState],
+  );
+  const usage = useMemo(
+    () => latestUsage(chat.acpTranscript ?? []),
+    [chat.acpTranscript],
   );
 
   const onCycleMode = () => {
@@ -145,13 +147,9 @@ export function AcpChatPane({ repoId, branch, chat, active }: Props) {
       )}
       {connected && (
         <AcpFooter
-          agentName={session.agentLabel}
           branchName={branch.name}
-          busy={session.busy}
-          modes={session.modes}
           configOptions={session.configOptions}
-          commandCount={session.commands.length}
-          nativeCliOpen={nativeCliOpen}
+          usage={usage}
         />
       )}
     </section>

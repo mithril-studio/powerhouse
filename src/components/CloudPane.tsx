@@ -169,63 +169,52 @@ export function CloudPane({ repo, branch }: { repo: Repo; branch?: Branch | null
           </div>
         )}
       </div>
-      <InventoryFooter inventory={inventory} error={inventoryError} busy={inventoryBusy} onRefresh={() => void loadInventory()} />
+      <InventoryFooter inventory={inventory} baseSnapshot={cloud.baseSnapshot} error={inventoryError} busy={inventoryBusy} onRefresh={() => void loadInventory()} />
     </div>
   );
 }
 
-/** What Powerhouse holds in boxd right now, against the org's machine slots. */
+/** Org machine usage and the base snapshot's status. Nothing else. */
 function InventoryFooter({
   inventory,
+  baseSnapshot,
   error,
   busy,
   onRefresh,
 }: {
   inventory: Inventory | null;
+  baseSnapshot: string;
   error: string | null;
   busy: boolean;
   onRefresh: () => void;
 }) {
+  const base = inventory?.snapshots.find((s) => s.name === baseSnapshot);
   return (
-    <div className="shrink-0 border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
-      <div className="flex items-center gap-2">
-        <span className="font-semibold uppercase tracking-wider">boxd</span>
-        {inventory ? (
+    <div className="flex shrink-0 items-center gap-3 border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
+      {inventory ? (
+        <>
           <span>
-            {inventory.total_machines}/{inventory.org_slots} machines in the org (ceiling {inventory.ceiling}) ·{" "}
-            {inventory.machines.length} Powerhouse VM{inventory.machines.length === 1 ? "" : "s"} · {inventory.snapshots.length} snapshot
-            {inventory.snapshots.length === 1 ? "" : "s"}
+            {inventory.total_machines}/{inventory.org_slots} machines
           </span>
-        ) : error ? (
-          <span className="truncate text-destructive" title={error}>
-            unavailable
+          <span className="font-mono">
+            {baseSnapshot} <span className="text-muted-foreground/60">{base ? base.status : "missing"}</span>
           </span>
-        ) : (
-          <span>loading…</span>
-        )}
-        <button
-          onClick={onRefresh}
-          disabled={busy}
-          title="Refresh boxd inventory"
-          className="ml-auto h-5 rounded-md px-1.5 hover:bg-muted hover:text-foreground disabled:opacity-50"
-        >
-          ↻
-        </button>
-      </div>
-      {inventory && (inventory.machines.length > 0 || inventory.snapshots.length > 0) && (
-        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono">
-          {inventory.machines.map((m) => (
-            <span key={`m-${m.name}`} title={`machine · ${m.status}`}>
-              {m.name} <span className="text-muted-foreground/60">{m.status}</span>
-            </span>
-          ))}
-          {inventory.snapshots.map((s) => (
-            <span key={`s-${s.name}`} title={`snapshot · ${s.status}`}>
-              {s.name} <span className="text-muted-foreground/60">{s.version ?? ""} {s.size ?? ""}</span>
-            </span>
-          ))}
-        </div>
+        </>
+      ) : error ? (
+        <span className="truncate text-destructive" title={error}>
+          boxd unavailable
+        </span>
+      ) : (
+        <span>loading…</span>
       )}
+      <button
+        onClick={onRefresh}
+        disabled={busy}
+        title="Refresh boxd inventory"
+        className="ml-auto h-5 rounded-md px-1.5 hover:bg-muted hover:text-foreground disabled:opacity-50"
+      >
+        ↻
+      </button>
     </div>
   );
 }

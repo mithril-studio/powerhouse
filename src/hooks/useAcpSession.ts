@@ -7,6 +7,7 @@ import type {
   SessionModeState,
 } from "@agentclientprotocol/sdk";
 import {
+  agentModelEnv,
   resolveAgent,
   useAppStore,
   type Branch,
@@ -137,6 +138,8 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
           chatId: chat.id,
           cwd: branch.worktreePath,
           command: profile.acpCommand,
+          // Only fresh chats: the env var outranks a resumed session's model.
+          env: resume ? undefined : agentModelEnv(profile),
           resumeSessionId: resume ? chat.agentSessionId : undefined,
           callbacks: {
             onUpdate: (update) =>
@@ -227,8 +230,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
       }
     },
     [
-      profile.acpCommand,
-      profile.name,
+      profile,
       chat.id,
       chat.agentSessionId,
       chat.initialPrompt,
