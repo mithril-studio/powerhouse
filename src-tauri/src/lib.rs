@@ -60,6 +60,7 @@ pub fn run() {
             git::git_create_worktree,
             git::git_list_branches,
             git::git_remove_worktree,
+            git::git_target_commits,
             git::git_changed_files,
             git::git_file_diff,
             git::git_list_files,
