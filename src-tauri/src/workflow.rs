@@ -330,6 +330,13 @@ fn skip_rest(states: &mut [StepState], from: usize) {
     }
 }
 
+/// Put a spawned child in its own process group before launch, so its whole
+/// subtree can later be torn down together with [`request_stop`]/[`stop_now`]
+/// rather than orphaning grandchildren. No-op on non-Unix.
+pub fn isolate(cmd: &mut std::process::Command) {
+    group::isolate(cmd);
+}
+
 /// Ask a running step to stop: SIGTERM to its whole process group. The runner
 /// loop escalates to SIGKILL after the grace period once `cancel` is set.
 pub fn request_stop(child: &Child) {
