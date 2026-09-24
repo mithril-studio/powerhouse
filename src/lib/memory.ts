@@ -33,6 +33,13 @@ export const MEMORY_SERVER_NAME = "powerhouse-memory";
 /** The scope every session reads besides its own project. */
 export const GLOBAL_PROJECT = "global";
 
+/** Fresh notes (agent writes and run checkpoints) land here, not in the active
+ *  tree. A human approves them on the Memory page, which moves each note out to
+ *  its type folder. Corrections are the exception: the user already said it, so
+ *  they auto-promote. Keeping this a plain directory means the same MCP a
+ *  session uses can write, list, and move — no extra server surface. */
+export const INBOX_DIR = "inbox";
+
 /** The note types the brief knows how to rank. Order = priority. */
 export const NOTE_TYPES = [
   "correction",
@@ -202,7 +209,7 @@ export function formatBrief(notes: BriefNote[], project: string): string {
     lines.push(...snippet, "");
   }
   lines.push(
-    `Before finishing: if you learned something not derivable from the code (a gotcha with cause and fix, a decision with rationale, a non-default convention), record it with write_note in project \`${project}\`, directory = its type (gotcha, procedure, convention, correction, decision, pointer), body as \`- [category] observation\` lines. Do not record what the code or docs already say.`,
+    `Before finishing: if you learned something not derivable from the code (a gotcha with cause and fix, a decision with rationale, a non-default convention), record it with write_note in project \`${project}\`, directory \`${INBOX_DIR}\`, note_type its kind (gotcha, procedure, convention, correction, decision, pointer), body as \`- [category] observation\` lines. A human reviews the inbox and approves it into memory. Do not record what the code or docs already say.`,
     "</memory-brief>",
   );
   let text = lines.join("\n");
@@ -295,3 +302,59 @@ export function stripFrontmatter(content: string): string {
   const match = /^---\n[\s\S]*?\n---\n?/.exec(content);
   return (match ? content.slice(match[0].length) : content).trim();
 }
+
+// ---- inbox / approve flow ---------------------------------------------------
+
+/** A note still awaiting approval: written into the inbox, not yet promoted. */
+export function isInboxNote(permalink: string): boolean {
+  return permalink === INBOX_DIR || permalink.startsWith(`${INBOX_DIR}/`);
+}
+
+/** The inbox subset of a note list, order preserved. */
+export function inboxNotes(notes: BriefNote[]): BriefNote[] {
+  return notes.filter((n) => isInboxNote(n.permalink));
+}
+
+/** The active (already-approved) subset. */
+export function activeNotes(notes: BriefNote[]): BriefNote[] {
+  return notes.filter((n) => !isInboxNote(n.permalink));
+}
+
+/** The folder an approved note moves into: its type, or `note` when the type
+ *  is missing or not one Powerhouse ranks. */
+export function promotionFolder(type: string): string {
+  return (NOTE_TYPES as readonly string[]).includes(type) ? type : "note";
+}
+
+/** Corrections auto-promote (the user already said it); everything else waits
+ *  for a click. */
+export function autoPromotes(type: string): boolean {
+  return type === "correction";
+}
+
+/** Move an inbox note into its type folder, out of the review queue. */
+export const promoteInboxNote = (memory: MemorySettings, note: BriefNote) =>
+  memoryCall(memory, "move_note", {
+    project: note.project,
+    identifier: note.permalink,
+    destination_folder: promotionFolder(note.type),
+  });
+
+/** Drop an inbox note without keeping it. */
+export const discardInboxNote = (memory: MemorySettings, note: BriefNote) =>
+  memoryCall(memory, "delete_note", {
+    project: note.project,
+    identifier: note.permalink,
+  });
+
+/** Rewrite an inbox note's body in place, before it is approved. Overwrites the
+ *  same file because the title and directory are unchanged. */
+export const saveInboxNote = (memory: MemorySettings, note: BriefNote, body: string) =>
+  memoryCall(memory, "write_note", {
+    project: note.project,
+    title: note.title,
+    content: body,
+    directory: INBOX_DIR,
+    note_type: note.type || "note",
+    overwrite: true,
+  });
