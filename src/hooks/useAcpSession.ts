@@ -109,6 +109,9 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
 
   /** True once this session has been briefed from memory (or must not be). */
   const briefedRef = useRef(false);
+  /** `project/permalink` of the notes this session was briefed with, carried
+   *  into the checkpoint so outcome labels can credit them later. */
+  const briefedNotesRef = useRef<string[]>([]);
 
   /** Write one distilled note per session to the memory inbox. Overwrites the
    *  same note each turn (keyed by chat), so a session leaves exactly one
@@ -128,6 +131,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
       branch: branch.name,
       agent: agentLabel,
       at: new Date(),
+      briefed: briefedNotesRef.current,
     });
     if (!note) return;
     const project = memoryProjectSlug(repo?.name ?? "");
@@ -155,6 +159,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
         try {
           const brief = await fetchBrief(memory, project, prompt);
           if (brief.count > 0) {
+            briefedNotesRef.current = brief.briefed;
             outbound = composeBriefedPrompt(brief.text, prompt);
             mutateTranscript((items) =>
               appendSystemMessage(items, `memory: briefed ${brief.count} notes from global, ${project}`),

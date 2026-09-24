@@ -22,6 +22,10 @@ export interface CheckpointInput {
   branch: string;
   agent: string;
   at: Date;
+  /** `project/permalink` of the notes this session was briefed with. Recorded
+   *  so a consolidation pass can credit notes whose sessions merge (outcome
+   *  labels, design §7). */
+  briefed?: string[];
 }
 
 export interface Checkpoint {
@@ -94,6 +98,9 @@ export function distillCheckpoint(input: CheckpointInput): Checkpoint | null {
   }
   if (shownCommands.length > 0) lines.push(`- [commands] ${shownCommands.join(" · ")}`);
   if (lastAssistant) lines.push(`- [outcome] ${oneLine(lastAssistant.text, 200)}`);
+  if (input.briefed && input.briefed.length > 0) {
+    lines.push(`- [briefed] ${input.briefed.join(", ")}`);
+  }
   lines.push(
     `- [session] ${input.agent} on ${input.branch}; ${tools.length} tool call${tools.length === 1 ? "" : "s"}; ${input.at.toISOString()}`,
   );

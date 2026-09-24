@@ -264,6 +264,9 @@ export const memoryServerEnsure = (memory: MemorySettings) =>
 export interface Brief {
   text: string;
   count: number;
+  /** `project/permalink` of every note in the brief, for outcome labels: a
+   *  session that merges first pass credits the notes that shaped it. */
+  briefed: string[];
 }
 
 /** Search both scopes for the prompt, add recent activity, rank, render. */
@@ -314,7 +317,11 @@ export async function fetchBrief(
       }
     }),
   );
-  return { text: formatBrief(hydrated, project), count: hydrated.length };
+  return {
+    text: formatBrief(hydrated, project),
+    count: hydrated.length,
+    briefed: hydrated.map((n) => `${n.project}/${n.permalink}`),
+  };
 }
 
 /** Body without the YAML frontmatter block. */

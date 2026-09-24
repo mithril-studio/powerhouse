@@ -62,6 +62,19 @@ describe("distillCheckpoint", () => {
     expect(cp!.body.match(/f0\.ts/g)?.length).toBe(1);
   });
 
+  it("records the briefed notes for outcome labels", () => {
+    const cp = distillCheckpoint({
+      ...input([userMsg("do it"), tool({ kind: "edit", locations: [{ path: "x" }] })]),
+      briefed: ["powerhouse/gotcha/a", "global/decision/b"],
+    });
+    expect(cp!.body).toContain("- [briefed] powerhouse/gotcha/a, global/decision/b");
+  });
+
+  it("omits the briefed line when nothing was briefed", () => {
+    const cp = distillCheckpoint(input([userMsg("do it"), tool({ kind: "edit", locations: [{ path: "x" }] })]));
+    expect(cp!.body).not.toContain("[briefed]");
+  });
+
   it("falls back to a file subject when there is no task text", () => {
     const cp = distillCheckpoint(input([tool({ kind: "edit", locations: [{ path: "only.ts" }] })]));
     expect(cp!.title).toContain("only.ts");
