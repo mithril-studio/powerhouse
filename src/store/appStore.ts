@@ -285,7 +285,8 @@ interface AppState extends PersistedTree {
     runId: string,
     sessionId: string,
   ) => void;
-  clearChatReplay: (repoId: string, branchId: string, chatId: string) => void;
+  /** Reconnect the chat (with a replay) the next time it is on screen. */
+  setChatReplay: (repoId: string, branchId: string, chatId: string, replay: boolean) => void;
   setChatAgentSession: (
     repoId: string,
     branchId: string,
@@ -745,11 +746,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       })),
     })),
 
-  clearChatReplay: (repoId, branchId, chatId) =>
+  setChatReplay: (repoId, branchId, chatId, replay) =>
     set((s) => ({
       repos: updateBranch(s.repos, repoId, branchId, (b) => ({
         ...b,
-        chats: b.chats.map((c) => (c.id === chatId ? { ...c, replayOnResume: false } : c)),
+        chats: b.chats.map((c) => (c.id === chatId ? { ...c, replayOnResume: replay } : c)),
       })),
     })),
 

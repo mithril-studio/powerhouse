@@ -84,20 +84,29 @@ export async function quickSubmit(
   s.setCloudQuickStage(repo.id, branchLabel, "starting");
   s.setCloudQuickError(repo.id, branchLabel, null);
   s.openRightTab("cloud");
+  let handoff: ChatHandoff | null = null;
+  let carried = false;
   try {
-    const handoff = await prepareChatHandoff(s.settings, chat);
+    handoff = await prepareChatHandoff(s.settings, chat);
     const out = await cloudQuickSubmit(
       buildQuickSubmitRequest(repo, sourcePath, s.settings, chatId, handoff),
     );
     const st = useAppStore.getState();
     if (out.kind === "accepted") {
       st.setCloudRun(out.record);
+      carried = Boolean(out.record.session);
     } else {
       st.setCloudQuickError(repo.id, branchLabel, out.reason);
     }
   } catch (e) {
     useAppStore.getState().setCloudQuickError(repo.id, branchLabel, String(e));
   } finally {
+    // The chat was closed for the trip but stayed here (the send failed, or
+    // the cloud cannot continue chats yet): reconnect it.
+    if (handoff && !carried && chat) {
+      const branch = repo.branches.find((b) => b.chats.some((c) => c.id === chat.id));
+      if (branch) useAppStore.getState().setChatReplay(repo.id, branch.id, chat.id, true);
+    }
     useAppStore.getState().setCloudQuickStage(repo.id, branchLabel, null);
   }
 }

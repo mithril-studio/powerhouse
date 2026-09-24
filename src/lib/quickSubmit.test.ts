@@ -167,7 +167,7 @@ describe("applyReturnedSession", () => {
     } as CloudRunRecord;
     applyReturnedSession(rec);
     expect(chat()).toMatchObject({ agentSessionId: "s-2", cloudSessionRunId: "run-1", replayOnResume: true });
-    useAppStore.getState().clearChatReplay("r1", "b1", "c1");
+    useAppStore.getState().setChatReplay("r1", "b1", "c1", false);
     applyReturnedSession(rec);
     expect(chat().replayOnResume).toBe(false);
     // Nothing came back: the chat keeps its own session.

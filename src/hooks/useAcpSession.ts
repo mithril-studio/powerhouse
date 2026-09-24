@@ -66,7 +66,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
   const activity = useAppStore((state) => state.chatActivity[chat.id]);
   const setChatAgentSession = useAppStore((state) => state.setChatAgentSession);
   const updateTranscript = useAppStore((state) => state.updateChatAcpTranscript);
-  const clearChatReplay = useAppStore((state) => state.clearChatReplay);
+  const setChatReplay = useAppStore((state) => state.setChatReplay);
   /** The cloud run that owns this conversation right now, if any. */
   const cloudRunId = useAppStore(
     (state) => runHoldingChat(state.cloudRuns, chat.id)?.run_id ?? null,
@@ -274,7 +274,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
         });
 
         setChatAgentSession(repoId, branch.id, chat.id, result.sessionId);
-        if (replay) clearChatReplay(repoId, branch.id, chat.id);
+        if (replay) setChatReplay(repoId, branch.id, chat.id, false);
         // Cosmetic run labels; losing this call loses labels, never evidence.
         const modelOption = (result.configOptions ?? []).find(
           (option) => option.category === "model",
@@ -323,7 +323,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
       setChatAgentSession,
       setChatStatus,
       setChatActivity,
-      clearChatReplay,
+      setChatReplay,
       finishTurn,
       submitPrompt,
     ],
