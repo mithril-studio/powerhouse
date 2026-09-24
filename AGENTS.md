@@ -13,60 +13,69 @@ publishing a new signed app version that users receive via the **auto-updater**.
 ## Branch & release flow (do not bypass)
 
 ```
-worktree branch → Powerhouse merge queue → test → signed beta pre-release auto-builds → install & verify
-                                                → PR test → main → push v* tag → ships to all users
+worktree branch → agent pushes to test → test server + signed beta pre-release auto-build
+                                       → ship workflow (once per feature) → PR test → main → push v* tag → ships
 ```
 
 - **`main` is production and is branch-protected.** No direct pushes (enforced for admins too). Every change
-  reaches `main` through a PR. Do not attempt to `git push origin main` — it will be rejected.
-- **`test` is the staging branch and the merge queue's target.** Feature work lands here only through the
-  Powerhouse merge queue (below), never by hand and never via PR. Every push to `test` triggers
-  `.github/workflows/beta.yml`, which builds a **signed + notarized** beta and publishes it as a GitHub
-  **pre-release** on the `mithril-studio/powerhouse` repo (never shipped to users). `test` is not
-  branch-protected on purpose: the queue fast-forwards and pushes it.
-- **Promote by**: verify the installed beta actually contains the intended work, then open a PR from `test`
-  into `main`, merge, and push a `v<version>` tag (matching `src-tauri/tauri.conf.json` `version`) to fire
-  `.github/workflows/release.yml`, which builds/signs/notarizes and publishes to `powerhouse-releases`.
+  reaches `main` through a PR from `test`. Do not attempt to `git push origin main` — it will be rejected.
+- **`test` is the integration branch.** Agents push their finished work here themselves (rules below). It is
+  deliberately unprotected. Every push triggers `.github/workflows/beta.yml`, which builds a **signed +
+  notarized** beta and publishes it as a GitHub **pre-release** on `mithril-studio/powerhouse` (never shipped
+  to users); the test server also deploys from it.
+- **Ship by**: when a feature is complete, run the ship workflow against `test` (lint, tests, build, run the
+  app, AI review of the diff against `main`). Green → verify the installed beta contains the intended work,
+  open a PR from `test` into `main`, merge, and push a `v<version>` tag (matching `src-tauri/tauri.conf.json`
+  `version`) to fire `.github/workflows/release.yml`, which builds/signs/notarizes and publishes to
+  `powerhouse-releases`.
 
 Why this exists: a production release once went out missing work that was assumed to be included. The beta
 gate is the mandatory place to catch that — a real installed build, not just a green CI check.
 
-## Landing work on `test`: the merge queue
+## The Merge tab: what is on `test`
 
-Powerhouse's own merge queue (Merge tab in the right sidebar, engine in `src-tauri/src/queue.rs`) is the
-only path from a worktree branch to `test`. One worker per repo, so integration is serial and every landed
-commit was tested against the `test` tip it landed on.
+The Merge tab in the right sidebar lists **every commit on `origin/test` that is not yet on `origin/main`**,
+newest first, with author and time (`git_target_commits` in `src-tauri/src/git.rs`; fetches first, refreshes
+each minute while open). That list is the session overview and, at ship time, the answer to "what is in this
+release". Write commit subjects for that list: one line, imperative, says what changed.
 
-What happens when a branch is enqueued (⇧ on the branch row, or **Merge** in the Merge tab):
-
-1. A throwaway worktree is cut from `origin/test`; the branch is merged into it with a merge commit.
-2. The repo's workflow steps (**Edit workflow** in the Merge tab: e.g. `pnpm build`, `pnpm test`) run there
-   in order. First failure fails the entry and skips the rest; the step log stays on the card.
-3. All green → `test` is fast-forwarded to the tested merge commit and pushed. The worktree is removed on
-   every exit path, including cancel and crash.
-4. A red entry blocks only that branch. Re-enqueue after fixing.
+Below the list, **Merge** lands the selected worktree branch on the target with the merge queue. With no
+workflow steps configured it only checks that the merge is clean, then fast-forwards and pushes — a one-click
+alternative to pushing by hand. Steps can be configured under **Edit workflow** but are not the gate; the
+ship workflow is.
 
 **Target branch.** Each project stores one target branch: new worktrees are cut from it, diffs are shown
-against it, and the queue lands on it. When a project is added, `origin/test` is chosen automatically if it
-exists (`detect_target_branch` in `src-tauri/src/git.rs`); otherwise the remote default. Change it in
-**Edit workflow → Target branch**. For this repo it must be `test`.
-
-**Promotion `test` → `main`** stays a GitHub PR, batched, after the beta gate. Nothing else touches `main`.
+against it, the Merge tab lists it, and the queue lands on it. `origin/test` is chosen automatically when a
+project is added if it exists (`detect_target_branch`); otherwise the remote default. Change it in **Edit
+workflow → Target branch**. For this repo it is `test`.
 
 ## Rules for agents working in a worktree
 
-Each agent works in its own worktree on its own branch. The agent's job ends at a clean commit on that
-branch; landing is the human's click.
+Each agent works in its own worktree on its own branch and lands its own work on `test`.
 
 - Commit on your branch when the work is done and the local checks pass (`pnpm build`, `pnpm test`,
-  `cargo test` in `src-tauri` when Rust changed).
-- Do **not** merge, rebase, or push. Do not touch `origin/test` or `origin/main`. Do not open PRs.
-- One concern per branch; open a second worktree for a second concern. The queue is serial, so big
-  branches are the ones that get sent back.
-- When ready, say **"ready for queue"** and stop.
-- If the queue reports a merge conflict, rebase onto `origin/test`, resolve, rerun the checks, and say
-  "ready for queue" again. That is the only time an agent rebases.
-- Keep workflow steps fast; they run once per landed branch.
+  `cargo test` in `src-tauri` when Rust changed). Small commits, one concern each, clear subjects.
+- Land it yourself, always the same way:
+
+  ```sh
+  git fetch origin
+  git rebase origin/test          # or merge, if the branch is shared
+  pnpm build && pnpm test         # re-check on top of the current test tip
+  git push origin HEAD:test
+  ```
+
+  A rejected (non-fast-forward) push means someone landed first: fetch, rebase, re-check, push again.
+- Never force-push `test`. Never push `main`. Never open a PR — the `test → main` PR is the human's.
+- Say what you landed: the commit subjects and the short SHAs, so it can be matched to the Merge tab list.
+- If your push broke the test server, fixing it is your next task, ahead of anything else.
+
+## Ship workflow (once per feature)
+
+Run before the `test → main` PR, never per commit. It cuts a throwaway worktree from `origin/test` and runs,
+in order: install, lint, tests, build, launch the app for a smoke check, and an AI review of the whole diff
+against `main`. It runs on the shared workflow runner below. Status: the runner and step validation exist;
+the "run a workflow against a branch in a throwaway worktree" wrapper and the AI-review step type are the
+next two pieces.
 
 ## Workflow runner
 
