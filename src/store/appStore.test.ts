@@ -202,3 +202,14 @@ describe("chat activity", () => {
     expect(useAppStore.getState().chatActivity).toEqual({ c2: "working" });
   });
 });
+
+describe("target branch", () => {
+  it("retargets one repo's worktree base and merge-queue landing branch", () => {
+    useAppStore.getState().hydrate(structuredClone(LEGACY_TREE) as never);
+    useAppStore.getState().setDefaultBranch("repo-1", "test");
+    expect(useAppStore.getState().repos[0].defaultBranch).toBe("test");
+    // Everything else on the repo is untouched.
+    expect(useAppStore.getState().repos[0].workflow[0].command).toBe("pnpm build");
+    expect(useAppStore.getState().repos[0].branches).toHaveLength(1);
+  });
+});

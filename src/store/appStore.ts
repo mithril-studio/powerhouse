@@ -294,6 +294,8 @@ interface AppState extends PersistedTree {
   setQueueEntries: (repoId: string, live: QueueEntry[]) => void;
   dismissQueueEntry: (repoId: string, entryId: string) => void;
   setWorkflow: (repoId: string, workflow: WorkflowStep[], pushOnMerge: boolean) => void;
+  /** The branch new worktrees are cut from and the merge queue lands on. */
+  setDefaultBranch: (repoId: string, branch: string) => void;
   setRepoEnvNames: (repoId: string, names: string[]) => void;
   openWorkflowModal: (repoId: string) => void;
   closeWorkflowModal: () => void;
@@ -805,6 +807,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   setWorkflow: (repoId, workflow, pushOnMerge) =>
     set((s) => ({
       repos: updateRepo(s.repos, repoId, (r) => ({ ...r, workflow, pushOnMerge })),
+    })),
+  setDefaultBranch: (repoId, branch) =>
+    set((s) => ({
+      repos: updateRepo(s.repos, repoId, (r) => ({ ...r, defaultBranch: branch })),
     })),
   setRepoEnvNames: (repoId, names) =>
     set((s) => ({

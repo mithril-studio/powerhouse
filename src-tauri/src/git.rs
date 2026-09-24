@@ -64,14 +64,7 @@ pub fn git_validate_repo(path: String) -> Result<RepoInfo, String> {
     git(&root_path, &["rev-parse", "HEAD"])
         .map_err(|_| "Repository has no commits yet — make an initial commit first".to_string())?;
 
-    let default_branch = git(
-        &root_path,
-        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-    )
-    .ok()
-    .map(|s| s.strip_prefix("origin/").unwrap_or(&s).to_string())
-    .or_else(|| git(&root_path, &["symbolic-ref", "--short", "HEAD"]).ok())
-    .unwrap_or_else(|| "HEAD".to_string());
+    let default_branch = detect_target_branch(&root_path);
 
     let name = root_path
         .file_name()
@@ -110,9 +103,138 @@ fn is_github_https(url: &str) -> bool {
     (u.starts_with("https://github.com/") || u.starts_with("https://www.github.com/"))
 }
 
+/// The staging trunk. When a project has `origin/test`, that branch is what
+/// new worktrees are cut from and what the merge queue lands on — the test
+/// server deploys from it. See AGENTS.md, "Branch & release flow".
+pub(crate) const STAGING_BRANCH: &str = "test";
+
+/// Resolve a project's target branch: `origin/test` when it exists, else the
+/// remote's default (origin/HEAD), else the local HEAD. Stored on the repo at
+/// add time and editable in the merge workflow modal.
+pub(crate) fn detect_target_branch(root: &Path) -> String {
+    let staging_ref = format!("refs/remotes/origin/{STAGING_BRANCH}");
+    if git(root, &["rev-parse", "--verify", "--quiet", &staging_ref]).is_ok() {
+        return STAGING_BRANCH.to_string();
+    }
+    git(root, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+        .ok()
+        .map(|s| s.strip_prefix("origin/").unwrap_or(&s).to_string())
+        .or_else(|| git(root, &["symbolic-ref", "--short", "HEAD"]).ok())
+        .unwrap_or_else(|| "HEAD".to_string())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{is_github_https, repo_name_from_url};
+    use super::{detect_target_branch, git, git_target_commits, is_github_https, parse_log, repo_name_from_url};
+    use std::path::Path;
+
+    fn commit(work: &Path, file: &str, msg: &str) {
+        std::fs::write(work.join(file), msg).unwrap();
+        git(work, &["add", "."]).unwrap();
+        git(work, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", msg]).unwrap();
+    }
+
+    #[test]
+    fn parse_log_splits_records_and_flags_merges() {
+        let out = "aaa\x1fa1\x1ffeat: one \x1f thing\x1fJoost\x1f1700000000\x1fp1\x1e\n\
+                   bbb\x1fb1\x1fMerge branch 'x'\x1fBot\x1f1700000100\x1fp1 p2\x1e\n";
+        let got = parse_log(out);
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].short, "a1");
+        assert_eq!(got[0].subject, "feat: one ");
+        assert!(!got[0].merge);
+        assert_eq!(got[1].author, "Bot");
+        assert_eq!(got[1].time, 1700000100);
+        assert!(got[1].merge);
+        assert!(parse_log("").is_empty());
+    }
+
+    #[test]
+    fn target_commits_lists_what_test_has_beyond_main() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = repo_with_origin(dir.path());
+        git(&work, &["checkout", "-qb", "test"]).unwrap();
+        commit(&work, "a", "feat: on test 1");
+        commit(&work, "b", "feat: on test 2");
+        git(&work, &["push", "-q", "origin", "test"]).unwrap();
+
+        let got = git_target_commits(work.to_string_lossy().to_string(), "test".into(), "main".into()).unwrap();
+        assert_eq!(got.base.as_deref(), Some("main"));
+        assert!(got.fetched);
+        let subjects: Vec<_> = got.commits.iter().map(|c| c.subject.as_str()).collect();
+        assert_eq!(subjects, ["feat: on test 2", "feat: on test 1"], "newest first, base excluded");
+        assert_eq!(got.commits[0].author, "t");
+        assert!(got.commits[0].time > 0);
+    }
+
+    #[test]
+    fn target_commits_falls_back_to_latest_when_base_is_the_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = repo_with_origin(dir.path());
+        let got = git_target_commits(work.to_string_lossy().to_string(), "main".into(), "main".into()).unwrap();
+        assert_eq!(got.base, None);
+        assert_eq!(got.commits.len(), 1);
+        assert_eq!(got.commits[0].subject, "init");
+    }
+
+    #[test]
+    fn target_commits_reports_a_missing_remote_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = repo_with_origin(dir.path());
+        let err = git_target_commits(work.to_string_lossy().to_string(), "test".into(), "main".into()).unwrap_err();
+        assert!(err.contains("no branch “test”"), "{err}");
+    }
+
+    /// A repo with one commit on `main`, pushed to a bare `origin`.
+    fn repo_with_origin(dir: &Path) -> std::path::PathBuf {
+        let origin = dir.join("origin.git");
+        let work = dir.join("work");
+        git(dir, &["init", "--bare", "-b", "main", origin.to_str().unwrap()]).unwrap();
+        git(dir, &["init", "-b", "main", work.to_str().unwrap()]).unwrap();
+        std::fs::write(work.join("README"), "hi").unwrap();
+        git(&work, &["add", "."]).unwrap();
+        git(&work, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"]).unwrap();
+        git(&work, &["remote", "add", "origin", origin.to_str().unwrap()]).unwrap();
+        git(&work, &["push", "-q", "-u", "origin", "main"]).unwrap();
+        work
+    }
+
+    #[test]
+    fn target_branch_is_the_remote_default_without_a_test_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = repo_with_origin(dir.path());
+        git(&work, &["remote", "set-head", "origin", "main"]).unwrap();
+        assert_eq!(detect_target_branch(&work), "main");
+    }
+
+    #[test]
+    fn target_branch_prefers_origin_test_when_it_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = repo_with_origin(dir.path());
+        git(&work, &["remote", "set-head", "origin", "main"]).unwrap();
+        git(&work, &["branch", "test"]).unwrap();
+        git(&work, &["push", "-q", "origin", "test"]).unwrap();
+        assert_eq!(detect_target_branch(&work), "test");
+    }
+
+    #[test]
+    fn a_local_test_branch_alone_does_not_count() {
+        // Only the remote staging branch is the convention; a stray local
+        // `test` must not redirect the queue.
+        let dir = tempfile::tempdir().unwrap();
+        let work = repo_with_origin(dir.path());
+        git(&work, &["remote", "set-head", "origin", "main"]).unwrap();
+        git(&work, &["branch", "test"]).unwrap();
+        assert_eq!(detect_target_branch(&work), "main");
+    }
+
+    #[test]
+    fn target_branch_falls_back_to_local_head_without_a_remote() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().join("solo");
+        git(dir.path(), &["init", "-b", "trunk", work.to_str().unwrap()]).unwrap();
+        assert_eq!(detect_target_branch(&work), "trunk");
+    }
 
     #[test]
     fn parses_repo_name_from_various_url_shapes() {
@@ -277,6 +399,103 @@ pub fn git_list_branches(repo_path: String) -> Result<Vec<String>, String> {
         .map(|l| l.trim().to_string())
         .filter(|l| !l.is_empty())
         .collect())
+}
+
+/// One commit on the target branch, for the Merge tab's "on test" list.
+#[derive(serde::Serialize, Debug, PartialEq)]
+pub struct CommitInfo {
+    pub sha: String,
+    pub short: String,
+    pub subject: String,
+    pub author: String,
+    /// Committer time, unix seconds.
+    pub time: u64,
+    pub merge: bool,
+}
+
+#[derive(serde::Serialize, Debug)]
+pub struct TargetCommits {
+    pub target: String,
+    /// The production branch the range is measured against, when it exists
+    /// at origin and differs from the target. `None` = latest commits only.
+    pub base: Option<String>,
+    /// Whether `git fetch origin` succeeded; when false the list is stale.
+    pub fetched: bool,
+    pub commits: Vec<CommitInfo>,
+}
+
+/// Record separator 0x1e between commits, unit separator 0x1f between fields,
+/// so subjects can contain anything.
+const LOG_FORMAT: &str = "--format=%H%x1f%h%x1f%s%x1f%an%x1f%ct%x1f%P%x1e";
+const TARGET_COMMITS_MAX: &str = "--max-count=100";
+
+pub(crate) fn parse_log(out: &str) -> Vec<CommitInfo> {
+    out.split('\x1e')
+        .filter_map(|rec| {
+            let rec = rec.trim_matches(|c| c == '\n' || c == '\r');
+            if rec.is_empty() {
+                return None;
+            }
+            let f: Vec<&str> = rec.splitn(6, '\x1f').collect();
+            if f.len() < 6 {
+                return None;
+            }
+            Some(CommitInfo {
+                sha: f[0].to_string(),
+                short: f[1].to_string(),
+                subject: f[2].to_string(),
+                author: f[3].to_string(),
+                time: f[4].trim().parse().unwrap_or(0),
+                merge: f[5].split_whitespace().count() > 1,
+            })
+        })
+        .collect()
+}
+
+/// Best-effort `git fetch origin`, attaching the GitHub token for HTTPS
+/// github.com remotes the same way clone does. Never prompts.
+pub(crate) fn fetch_origin(repo: &Path) -> bool {
+    let url = git(repo, &["remote", "get-url", "origin"]).unwrap_or_default();
+    let auth = is_github_https(&url)
+        .then(crate::github::token)
+        .flatten()
+        .map(|t| format!("http.extraheader=AUTHORIZATION: {}", crate::github::basic_auth_header(&t)));
+    let mut cmd = Command::new(GIT);
+    cmd.current_dir(repo).env("GIT_TERMINAL_PROMPT", "0");
+    if let Some(cfg) = &auth {
+        cmd.arg("-c").arg(cfg);
+    }
+    cmd.args(["fetch", "--quiet", "--prune", "origin"]);
+    cmd.output().map(|o| o.status.success()).unwrap_or(false)
+}
+
+/// What is on `origin/<target>` and not yet on `origin/<base>` — the Merge
+/// tab's session overview. Falls back to the latest commits on the target
+/// when the base is the target itself or does not exist at origin.
+#[tauri::command]
+pub fn git_target_commits(repo_path: String, target: String, base: String) -> Result<TargetCommits, String> {
+    let repo = PathBuf::from(&repo_path);
+    let has_origin = git(&repo, &["remote"])
+        .map(|s| s.lines().any(|l| l.trim() == "origin"))
+        .unwrap_or(false);
+    if !has_origin {
+        return Err("This project has no origin remote.".to_string());
+    }
+    let fetched = fetch_origin(&repo);
+    let target_ref = format!("origin/{target}");
+    git(&repo, &["rev-parse", "--verify", "--quiet", &format!("refs/remotes/{target_ref}")])
+        .map_err(|_| format!("origin has no branch “{target}” yet."))?;
+    let base_ref = format!("origin/{base}");
+    let base_exists = base != target
+        && git(&repo, &["rev-parse", "--verify", "--quiet", &format!("refs/remotes/{base_ref}")]).is_ok();
+    let range = if base_exists { format!("{base_ref}..{target_ref}") } else { target_ref };
+    let out = git(&repo, &["log", TARGET_COMMITS_MAX, LOG_FORMAT, &range])?;
+    Ok(TargetCommits {
+        target,
+        base: base_exists.then_some(base),
+        fetched,
+        commits: parse_log(&out),
+    })
 }
 
 #[tauri::command]
