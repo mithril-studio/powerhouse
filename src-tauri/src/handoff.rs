@@ -17,14 +17,13 @@ const HANDOFF_INSTRUCTION: &str = "Write a complete handoff document to `.powerh
 #[derive(Default)]
 pub struct HandoffWatchers(pub Mutex<HashMap<String, Arc<AtomicBool>>>);
 
-/// Best-effort: seed `/handoff` slash-commands for claude & codex (convenience
-/// only — the watcher catches manual handoffs regardless). Never overwrites.
+/// Best-effort: seed `/handoff` slash-commands for claude (convenience only —
+/// the watcher catches manual handoffs regardless). Never overwrites.
 #[tauri::command]
 pub fn handoff_ensure_commands() -> Result<(), String> {
     let home = dirs::home_dir().ok_or("cannot resolve home directory")?;
     let targets = [
         home.join(".claude").join("commands").join("handoff.md"),
-        home.join(".codex").join("prompts").join("handoff.md"),
     ];
     for path in targets {
         if path.exists() {

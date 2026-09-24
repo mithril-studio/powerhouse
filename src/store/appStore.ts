@@ -54,7 +54,7 @@ export interface AgentProfile {
   acpCommand?: string;
   /** How the native CLI (opened alongside ACP) relates to the ACP session. */
   handoff?: HandoffMode;
-  /** Shell command that runs the agent's CLI auth flow, e.g. "codex login". */
+  /** Shell command that runs the agent's CLI auth flow, e.g. "claude". */
   loginCommand?: string;
   /** Env var the ACP agent reads its startup model from, e.g. "ANTHROPIC_MODEL". */
   modelEnvVar?: string;
@@ -342,16 +342,6 @@ const SEED_AGENTS: AgentProfile[] = [
     defaultModel: "claude-opus-4-8",
   },
   {
-    id: "codex",
-    name: "Codex",
-    command: "codex",
-    promptTemplate: 'codex "{prompt}"',
-    transport: "acp",
-    acpCommand: "npx -y @agentclientprotocol/codex-acp",
-    handoff: "workspace-only",
-    loginCommand: "codex login",
-  },
-  {
     id: "pi",
     name: "Pi",
     command: "pi",
@@ -373,7 +363,9 @@ const seedSettings = (): Settings => ({
  *  custom agents and any user-edited fields untouched. */
 function backfillAgentProfiles(agents: AgentProfile[]): AgentProfile[] {
   const seedById = Object.fromEntries(SEED_AGENTS.map((a) => [a.id, a]));
-  const backfilled = agents.filter((a) => a.id !== "opencode").map((a) => {
+  const backfilled = agents
+    .filter((a) => a.id !== "opencode" && a.id !== "codex")
+    .map((a) => {
     const seed = seedById[a.id];
     if (!seed) return a;
     return {
