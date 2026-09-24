@@ -44,6 +44,17 @@ pub fn credentials_file(run_id: &str) -> PathBuf {
     credentials_dir().join(format!("{run_id}.env"))
 }
 
+/// Session bundle delivered with a submission (root-only); read when the
+/// workspace is prepared and again when the session is captured.
+pub fn session_inbound(run_id: &str) -> PathBuf {
+    root().join("sessions").join(format!("{run_id}.json"))
+}
+
+/// The continued session, packed for the trip home after the agent stops.
+pub fn session_outbound(run_id: &str) -> PathBuf {
+    results_dir(run_id).join("session.json")
+}
+
 pub fn results_dir(run_id: &str) -> PathBuf {
     root().join("results").join(run_id)
 }

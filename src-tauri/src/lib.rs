@@ -4,6 +4,7 @@ mod files;
 mod git;
 mod github;
 mod handoff;
+mod memory;
 mod pty;
 mod queue;
 mod telemetry;
@@ -12,6 +13,7 @@ mod workflow;
 use acp::AcpManager;
 use cloud::commands::CloudManager;
 use handoff::HandoffWatchers;
+use memory::MemoryState;
 use pty::PtyManager;
 use queue::QueueManager;
 use tauri::Manager;
@@ -37,6 +39,7 @@ pub fn run() {
         .manage(QueueManager::default())
         .manage(HandoffWatchers::default())
         .manage(CloudManager::default())
+        .manage(MemoryState::default())
         .setup(|app| {
             app.manage(Telemetry::init(app.handle().clone()));
             Ok(())
@@ -95,6 +98,7 @@ pub fn run() {
             cloud::commands::cloud_diff,
             cloud::commands::cloud_import,
             cloud::commands::cloud_forget,
+            cloud::commands::cloud_keep_session_local,
             cloud::commands::cloud_secret_status,
             cloud::commands::cloud_set_secret,
             cloud::commands::cloud_project_env_status,
@@ -113,6 +117,8 @@ pub fn run() {
             telemetry::commands::telemetry_proposal_evaluate,
             telemetry::commands::telemetry_proposal_decide,
             telemetry::commands::telemetry_selfcheck,
+            memory::memory_call,
+            memory::memory_server_ensure,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -124,6 +130,7 @@ pub fn run() {
                 // and deliberately untouched here.
                 app.state::<PtyManager>().kill_all();
                 app.state::<QueueManager>().kill_running();
+                app.state::<MemoryState>().kill_server();
                 if let Err(error) = app.state::<Telemetry>().shutdown() {
                     eprintln!("[telemetry] shutdown flush failed: {error}");
                 }

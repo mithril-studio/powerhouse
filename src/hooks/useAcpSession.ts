@@ -8,6 +8,7 @@ import type {
 } from "@agentclientprotocol/sdk";
 import {
   agentModelEnv,
+  memorySettingsOf,
   resolveAgent,
   useAppStore,
   type Branch,
@@ -25,11 +26,21 @@ import {
   appendSystemMessage,
   appendUserMessage,
   applyAcpUpdate,
+  type AcpTranscriptItem,
 } from "../lib/acpTranscript";
 import { notifyTurnFinished } from "../lib/attention";
+import { runHoldingChat } from "../lib/cloud";
 import { activityFromStopReason } from "../lib/chatActivity";
 import { consumeAutoSpawn } from "../lib/terminalRegistry";
 import { handoffWatchStart, telemetryAnnotateRun } from "../lib/ipc";
+import {
+  composeBriefedPrompt,
+  fetchBrief,
+  memoryMcpServers,
+  memoryProjectSlug,
+  memoryServerEnsure,
+  memorySessionMeta,
+} from "../lib/memory";
 import type { AgentControlState, ApplyOp } from "../lib/agentControls";
 import type { AcpConnectionState } from "../components/acp/AcpConnectionPanel";
 import type { PendingPermission } from "../components/acp/AcpPermissionCard";
@@ -55,7 +66,13 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
   const activity = useAppStore((state) => state.chatActivity[chat.id]);
   const setChatAgentSession = useAppStore((state) => state.setChatAgentSession);
   const updateTranscript = useAppStore((state) => state.updateChatAcpTranscript);
+  const setChatReplay = useAppStore((state) => state.setChatReplay);
+  /** The cloud run that owns this conversation right now, if any. */
+  const cloudRunId = useAppStore(
+    (state) => runHoldingChat(state.cloudRuns, chat.id)?.run_id ?? null,
+  );
   const profile = resolveAgent(settings, chat.agentId);
+  const memory = useMemo(() => memorySettingsOf(settings), [settings.memory]);
 
   const [connection, setConnection] = useState<AcpConnectionState>("idle");
   const [busy, setBusy] = useState(false);
@@ -69,6 +86,9 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
   const [supportsImages, setSupportsImages] = useState(false);
   const closingRef = useRef(false);
   const replayingRef = useRef(false);
+  /** Cloud result cards survive a replay, which rebuilds the transcript. */
+  const replayCardsRef = useRef<AcpTranscriptItem[]>([]);
+  const autoReplayTriedRef = useRef(false);
   const activeRef = useRef(active);
   activeRef.current = active;
 
@@ -86,6 +106,9 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
     [chat.id, chat.title, branch.name, setChatActivity],
   );
 
+  /** True once this session has been briefed from memory (or must not be). */
+  const briefedRef = useRef(false);
+
   const mutateTranscript = useCallback(
     (update: Parameters<typeof updateTranscript>[3]) =>
       updateTranscript(repoId, branch.id, chat.id, update),
@@ -99,8 +122,27 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
       mutateTranscript((items) =>
         appendUserMessage(items, prompt, attachments.map(toRef)),
       );
+      let outbound = prompt;
+      if (memory.enabled && !briefedRef.current) {
+        briefedRef.current = true;
+        const repoName = useAppStore.getState().repos.find((r) => r.id === repoId)?.name ?? "";
+        const project = memoryProjectSlug(repoName);
+        try {
+          const brief = await fetchBrief(memory, project, prompt);
+          if (brief.count > 0) {
+            outbound = composeBriefedPrompt(brief.text, prompt);
+            mutateTranscript((items) =>
+              appendSystemMessage(items, `memory: briefed ${brief.count} notes from global, ${project}`),
+            );
+          }
+        } catch (cause) {
+          mutateTranscript((items) =>
+            appendSystemMessage(items, `memory: brief unavailable (${String(cause)})`),
+          );
+        }
+      }
       try {
-        const response = await sendAcpPrompt(chat.id, promptBlocks(prompt, attachments));
+        const response = await sendAcpPrompt(chat.id, promptBlocks(outbound, attachments));
         finishTurn(activityFromStopReason(response.stopReason));
       } catch (cause) {
         finishTurn("error");
@@ -109,7 +151,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
         );
       }
     },
-    [chat.id, mutateTranscript, finishTurn],
+    [chat.id, mutateTranscript, finishTurn, memory, repoId],
   );
 
   const start = useCallback(
@@ -132,6 +174,18 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
       setDiagnostics("");
       setCommands([]);
       if (!resume) mutateTranscript(() => []);
+      // A fresh session is briefed on its first prompt; a resumed one already
+      // carries its context. Memory unavailable is not fatal: the agent still
+      // runs, just without the brief and with a dead MCP entry it can ignore.
+      briefedRef.current = resume;
+      if (memory.enabled) {
+        await memoryServerEnsure(memory).catch((cause) =>
+          mutateTranscript((items) =>
+            appendSystemMessage(items, `memory: server unavailable (${String(cause)})`),
+          ),
+        );
+      }
+      const replay = resume && Boolean(chat.replayOnResume);
 
       try {
         const result = await startAcp({
@@ -141,6 +195,9 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
           // Only fresh chats: the env var outranks a resumed session's model.
           env: resume ? undefined : agentModelEnv(profile),
           resumeSessionId: resume ? chat.agentSessionId : undefined,
+          mcpServers: memoryMcpServers(memory),
+          meta: memorySessionMeta(memory),
+          replay,
           callbacks: {
             onUpdate: (update) =>
               mutateTranscript((items) =>
@@ -163,7 +220,29 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
             onAvailableCommandsChange: setCommands,
             onSessionReplayChange: (replaying) => {
               replayingRef.current = replaying;
-              if (replaying) mutateTranscript(() => []);
+              if (replaying) {
+                mutateTranscript((items) => {
+                  replayCardsRef.current = items.filter((i) => i.type === "cloud-result");
+                  return [];
+                });
+              } else if (replayCardsRef.current.length > 0) {
+                const cards = replayCardsRef.current;
+                replayCardsRef.current = [];
+                mutateTranscript((items) => [
+                  ...items.filter((i) => i.type !== "cloud-result"),
+                  ...cards,
+                ]);
+              }
+            },
+            onDetached: () => {
+              closingRef.current = true;
+              setPermission((pending) => {
+                pending?.resolve({ outcome: { outcome: "cancelled" } });
+                return null;
+              });
+              setBusy(false);
+              setConnection("idle");
+              setChatStatus(chat.id, "exited");
             },
             onBusyChange: (working) => {
               setBusy(working);
@@ -195,6 +274,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
         });
 
         setChatAgentSession(repoId, branch.id, chat.id, result.sessionId);
+        if (replay) setChatReplay(repoId, branch.id, chat.id, false);
         // Cosmetic run labels; losing this call loses labels, never evidence.
         const modelOption = (result.configOptions ?? []).find(
           (option) => option.category === "model",
@@ -234,17 +314,32 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
       chat.id,
       chat.agentSessionId,
       chat.initialPrompt,
+      chat.replayOnResume,
       branch.id,
       branch.worktreePath,
       repoId,
+      memory,
       mutateTranscript,
       setChatAgentSession,
       setChatStatus,
       setChatActivity,
+      setChatReplay,
       finishTurn,
       submitPrompt,
     ],
   );
+
+  // A conversation that came back from the cloud reconnects on its own, with
+  // a replay so the cloud turns show up in the transcript.
+  useEffect(() => {
+    if (!chat.replayOnResume) {
+      autoReplayTriedRef.current = false;
+      return;
+    }
+    if (!active || cloudRunId || connection === "starting" || autoReplayTriedRef.current) return;
+    autoReplayTriedRef.current = true;
+    void start(true);
+  }, [active, cloudRunId, chat.replayOnResume, connection, start]);
 
   // A finished turn counts as seen once its chat is on screen and focused.
   useEffect(() => {
@@ -340,6 +435,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
     supportsImages,
     controlState,
     thinkingLevel,
+    cloudRunId,
     start,
     submitPrompt,
     cancel,

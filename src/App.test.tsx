@@ -32,7 +32,13 @@ vi.mock("./components/telemetry/TelemetryPage", () => ({ TelemetryPage: () => nu
 
 beforeEach(() => {
   useAppStore.getState().hydrate(null);
-  useAppStore.setState({ workspaceView: "home", rightSidebarOpen: true });
+  useAppStore.setState({
+    workspaceView: "home",
+    rightSidebarOpen: true,
+    settingsOpen: false,
+    telemetryOpen: false,
+    memoryOpen: false,
+  });
 });
 
 it("shows Workflows alongside the main navigation, with the project workspace still mounted but inert", () => {
@@ -59,4 +65,13 @@ it("returns to the project workspace without removing navigation", () => {
   expect(html).toContain('aria-label="Project workspace" class="flex');
   expect(html).toContain("Project inspector");
   expect(html).not.toContain('id="workflows-title"');
+});
+
+it("shows Memory beside the main navigation instead of covering it", () => {
+  useAppStore.getState().openMemory();
+  const html = renderToStaticMarkup(<App />);
+  expect(html).toContain('aria-label="Main sidebar"');
+  expect(html).toContain('aria-current="page"');
+  expect(html).toContain('class="fixed inset-y-0 right-0 left-60 z-40 flex flex-col border-l border-border bg-background"');
+  expect(html).not.toContain('class="fixed inset-0 z-50 flex flex-col bg-background"');
 });

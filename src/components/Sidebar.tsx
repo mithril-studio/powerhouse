@@ -7,7 +7,7 @@ import { AddProjectModal, type AddProjectMode } from "./AddProjectModal";
 const NAV_ITEMS = [
   { label: "Home", soon: false },
   { label: "Workflows", soon: false },
-  { label: "Memory", soon: true },
+  { label: "Memory", soon: false },
   { label: "Telemetry", soon: false },
 ] as const;
 
@@ -52,6 +52,9 @@ export function Sidebar() {
   const closeTelemetry = useAppStore((s) => s.closeTelemetry);
   const closeSettings = useAppStore((s) => s.closeSettings);
   const telemetryOpen = useAppStore((s) => s.telemetryOpen);
+  const openMemory = useAppStore((s) => s.openMemory);
+  const closeMemory = useAppStore((s) => s.closeMemory);
+  const memoryOpen = useAppStore((s) => s.memoryOpen);
   const workspaceView = useAppStore((s) => s.workspaceView);
   const setWorkspaceView = useAppStore((s) => s.setWorkspaceView);
 
@@ -69,15 +72,21 @@ export function Sidebar() {
     return () => window.removeEventListener("keydown", onKey);
   }, [menuOpen]);
 
-  // Home leaves the telemetry/settings overlays and the workflows view;
-  // Workflows switches the workspace view; Telemetry toggles its overlay.
-  // Memory stays a disabled placeholder until that page exists.
+  // Home leaves the overlays and the workflows view; Workflows switches the
+  // workspace view; Telemetry and Memory each toggle their own overlay.
   const navAction = (label: (typeof NAV_ITEMS)[number]["label"]) => {
     if (label === "Telemetry") {
       closeSettings();
+      closeMemory();
       return telemetryOpen ? closeTelemetry() : openTelemetry();
     }
+    if (label === "Memory") {
+      closeSettings();
+      closeTelemetry();
+      return memoryOpen ? closeMemory() : openMemory();
+    }
     closeTelemetry();
+    closeMemory();
     closeSettings();
     setWorkspaceView(label === "Workflows" ? "workflows" : "home");
   };
@@ -117,7 +126,9 @@ export function Sidebar() {
           const active =
             item.label === "Telemetry"
               ? telemetryOpen
-              : !telemetryOpen && item.label.toLowerCase() === workspaceView;
+              : item.label === "Memory"
+                ? memoryOpen
+                : !telemetryOpen && !memoryOpen && item.label.toLowerCase() === workspaceView;
           return (
             <button
               key={item.label}

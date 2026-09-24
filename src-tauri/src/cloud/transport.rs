@@ -118,6 +118,8 @@ pub trait Boxd: Send + Sync {
     fn machine_remove(&self, vm: &str) -> TResult<()>;
     fn config_set(&self, vm: &str, key: &str, value: &str) -> TResult<()>;
     fn cp_to(&self, local: &Path, vm: &str, remote_path: &str) -> TResult<()>;
+    /// Download `vm:remote_path` to `local` (a file path).
+    fn cp_from(&self, vm: &str, remote_path: &str, local: &Path) -> TResult<()>;
     fn exec(&self, vm: &str, argv: &[String], timeout: Duration) -> TResult<ExecOutput>;
     fn snapshots_list(&self) -> TResult<Vec<SnapshotInfo>>;
     /// Saves memory + disk of a *running* machine under `name` (re-saving bumps the version).
@@ -320,6 +322,16 @@ impl Boxd for BoxdCli {
         let local_s = local.to_string_lossy().to_string();
         let dest = format!("{vm}:{remote_path}");
         let (_, stderr, code) = self.run(&["machine", "cp", &local_s, &dest, "--json"], Duration::from_secs(300))?;
+        if code != 0 {
+            return Err(TransportError::Other(format!("cp failed: {}", stderr.trim())));
+        }
+        Ok(())
+    }
+
+    fn cp_from(&self, vm: &str, remote_path: &str, local: &Path) -> TResult<()> {
+        let src = format!("{vm}:{remote_path}");
+        let local_s = local.to_string_lossy().to_string();
+        let (_, stderr, code) = self.run(&["machine", "cp", &src, &local_s, "--json"], Duration::from_secs(300))?;
         if code != 0 {
             return Err(TransportError::Other(format!("cp failed: {}", stderr.trim())));
         }

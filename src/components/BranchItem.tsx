@@ -1,7 +1,6 @@
 import { useAppStore, type Branch, type Repo } from "../store/appStore";
 import { deleteBranch, enqueueBranch } from "../lib/actions";
 import { holdsResources } from "../lib/cloud";
-import { quickSubmitBranch } from "../lib/quickSubmit";
 import { rollupActivity } from "../lib/chatActivity";
 import { ActivityDot } from "./ActivityDot";
 
@@ -94,18 +93,6 @@ export function BranchItem({ repo, branch }: Props) {
       <button
         onClick={(e) => {
           e.stopPropagation();
-          void quickSubmitBranch(repo, branch);
-        }}
-        title="Send to cloud"
-        aria-label={`Send ${branch.name} to cloud`}
-        disabled={!!quickStage}
-        className="hidden size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-input hover:text-foreground group-hover:flex disabled:opacity-40"
-      >
-        ☁
-      </button>
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
           void enqueueBranch(repo.id, branch.id);
         }}
         title="Enqueue for merge"
@@ -120,7 +107,7 @@ export function BranchItem({ repo, branch }: Props) {
           e.stopPropagation();
           void deleteBranch(repo.id, branch.id);
         }}
-        title="Delete branch (⌘⇧⌫)"
+        title="Delete branch (confirm with ⌘W)"
         aria-label={`Delete branch ${branch.name}`}
         className="hidden size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-input hover:text-destructive group-hover:flex"
       >

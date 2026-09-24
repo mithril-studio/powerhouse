@@ -4,12 +4,19 @@ import { homeDir } from "@tauri-apps/api/path";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   cloudSettingsOf,
+  memorySettingsOf,
   useAppStore,
   type AgentProfile,
   type CloudSettings,
   type Theme,
 } from "../store/appStore";
 import { cloudSecretStatus, cloudSetSecret, type SecretStatus } from "../lib/cloud";
+import {
+  DEFAULT_MEMORY_SETTINGS,
+  memoryServerEnsure,
+  type MemorySettings,
+  type MemoryServerStatus,
+} from "../lib/memory";
 import {
   disposeTerminal,
   fitTerminal,
@@ -397,6 +404,94 @@ function AgentRow({ agent }: { agent: AgentProfile }) {
   );
 }
 
+function MemorySection() {
+  const settings = useAppStore((s) => s.settings);
+  const setMemorySettings = useAppStore((s) => s.setMemorySettings);
+  const memory = memorySettingsOf(settings);
+  const [status, setStatus] = useState<MemoryServerStatus | "checking" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const patch = (p: Partial<MemorySettings>) => setMemorySettings({ ...memory, ...p });
+
+  const check = () => {
+    setStatus("checking");
+    setError(null);
+    memoryServerEnsure(memory)
+      .then(setStatus)
+      .catch((e) => {
+        setStatus("failed");
+        setError(String(e));
+      });
+  };
+
+  const statusText: Record<MemoryServerStatus | "checking", string> = {
+    checking: "checking…",
+    external: "connected",
+    supervised: "local server running (started by Powerhouse)",
+    unreachable: "unreachable",
+    failed: "local server failed to start",
+  };
+
+  return (
+    <div className="space-y-3 text-xs">
+      <div className="rounded-xl border border-border bg-card p-3">
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={memory.enabled}
+            onChange={(e) => patch({ enabled: e.target.checked })}
+          />
+          <span className="text-foreground">Give every agent session the shared memory</span>
+        </label>
+        <p className="mt-1 text-muted-foreground">
+          Claude Code and Pi get the same Basic Memory server as an MCP tool, plus a brief of
+          relevant notes on the first prompt. The runtimes' own memories are switched off so
+          there is exactly one.
+        </p>
+      </div>
+      <div className="rounded-xl border border-border bg-card p-3">
+        <p className="mb-2 font-semibold uppercase tracking-wider text-[11px] text-muted-foreground">Server</p>
+        <div className="grid grid-cols-[1fr_minmax(0,14rem)] gap-2">
+          <label className="space-y-1">
+            <span className="text-muted-foreground">MCP endpoint</span>
+            <input
+              value={memory.url}
+              onChange={(e) => patch({ url: e.target.value })}
+              spellCheck={false}
+              placeholder={DEFAULT_MEMORY_SETTINGS.url}
+              className={`${cloudInput} font-mono`}
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="text-muted-foreground">Bearer token (remote host)</span>
+            <input
+              type="password"
+              value={memory.token}
+              onChange={(e) => patch({ token: e.target.value })}
+              className={cloudInput}
+            />
+          </label>
+        </div>
+        <div className="mt-2 flex items-center gap-2">
+          <button type="button" onClick={check} className="pi-btn text-[11px]">
+            Check connection
+          </button>
+          {status && (
+            <span className={status === "external" || status === "supervised" ? "text-muted-foreground" : "text-destructive"}>
+              {statusText[status]}
+            </span>
+          )}
+        </div>
+        {error && <p className="mt-1 text-destructive">{error}</p>}
+        <p className="mt-2 text-muted-foreground">
+          A loopback endpoint is started by Powerhouse itself (needs <code>basic-memory</code> on
+          PATH: <code>uv tool install basic-memory</code>). Point it at the memory VM to share one
+          memory across machines. Notes live in <code>~/.powerhouse/memory</code>.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function AgentsSection() {
   const agents = useAppStore((s) => s.settings.agents);
   const configurable = agents.filter((a) => a.loginCommand || a.modelEnvVar);
@@ -559,7 +654,7 @@ function CloudSection() {
   );
 }
 
-const TABS = ["Main", "Agents", "Cloud"] as const;
+const TABS = ["Main", "Agents", "Memory", "Cloud"] as const;
 type Tab = (typeof TABS)[number];
 
 export function SettingsPage() {
@@ -642,6 +737,13 @@ export function SettingsPage() {
               description="CLI access and the default model for each coding agent."
             >
               <AgentsSection />
+            </Section>
+          ) : tab === "Memory" ? (
+            <Section
+              title="Memory"
+              description="One shared memory for every coding agent."
+            >
+              <MemorySection />
             </Section>
           ) : (
             <Section

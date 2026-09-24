@@ -1,5 +1,6 @@
 // Orchestration shared by components and keyboard shortcuts.
 import { ask, message, open } from "@tauri-apps/plugin-dialog";
+import { requestPowerConfirmation } from "./powerConfirm";
 import {
   useAppStore,
   type Branch,
@@ -162,10 +163,12 @@ export async function deleteBranch(repoId: string, branchId: string) {
   const branch = repo?.branches.find((b) => b.id === branchId);
   if (!repo || !branch) return;
 
-  const confirmed = await ask(
-    `Delete branch “${branch.name}”?\n\nIts worktree and any uncommitted changes will be removed. The git branch is archived for 3 days, then deleted.`,
-    { title: "Delete branch", kind: "warning", okLabel: "Delete" },
-  );
+  const confirmed = await requestPowerConfirmation({
+    title: "Hey, are you sure?",
+    message: `Delete branch “${branch.name}”?\n\nIts worktree and any uncommitted changes will be removed. The git branch is archived for 3 days, then deleted.`,
+    confirmLabel: "Delete",
+    shortcutLabel: "⌘W",
+  });
   if (!confirmed) return;
 
   // Stop the handoff watcher and cancel any in-flight handoff for this branch.

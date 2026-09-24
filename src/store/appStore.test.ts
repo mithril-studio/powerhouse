@@ -25,9 +25,16 @@ describe("agent transport migration", () => {
       promptTemplate: 'opencode "{prompt}"',
     };
 
+    const codex: AgentProfile = {
+      id: "codex",
+      name: "Codex",
+      command: "codex",
+      promptTemplate: 'codex "{prompt}"',
+    };
+
     const settings = migrateSettings({
       settings: {
-        agents: [claude, opencode],
+        agents: [claude, opencode, codex],
         defaultAgentId: "opencode",
         theme: "dark",
         connections: { github: { status: "disconnected" } },
@@ -38,8 +45,9 @@ describe("agent transport migration", () => {
       expect.objectContaining({ command: "claude-custom", transport: "acp" }),
     );
     expect(settings.agents.find((agent) => agent.id === "opencode")).toBeUndefined();
+    expect(settings.agents.find((agent) => agent.id === "codex")).toBeUndefined();
     expect(settings.defaultAgentId).toBe("claude");
-    expect(settings.agents.map((agent) => agent.id)).toEqual(["claude", "codex", "pi"]);
+    expect(settings.agents.map((agent) => agent.id)).toEqual(["claude", "pi"]);
   });
 
   it("backfills Claude's default model without overriding a cleared one", () => {
@@ -57,8 +65,8 @@ describe("agent transport migration", () => {
   });
 
   it("sets no model env for agents without a model env var", () => {
-    const codex = migrateSettings(null).agents.find((a) => a.id === "codex")!;
-    expect(agentModelEnv({ ...codex, defaultModel: "gpt-6" })).toBeUndefined();
+    const pi = migrateSettings(null).agents.find((a) => a.id === "pi")!;
+    expect(agentModelEnv({ ...pi, defaultModel: "gpt-6" })).toBeUndefined();
   });
 
   it("keeps custom agents on the terminal transport", () => {
@@ -182,6 +190,43 @@ describe("cloud run mirror", () => {
     expect(useAppStore.getState().cloudRuns["r1"]).toBe(rec);
     useAppStore.getState().removeCloudRun("r1");
     expect(useAppStore.getState().cloudRuns).toEqual({});
+  });
+});
+
+describe("page navigation overlays", () => {
+  it("keeps settings, telemetry, memory and workflows mutually reachable", () => {
+    useAppStore.setState({
+      workspaceView: "home",
+      settingsOpen: false,
+      telemetryOpen: false,
+      memoryOpen: false,
+    });
+
+    useAppStore.getState().openSettings();
+    expect(useAppStore.getState()).toEqual(
+      expect.objectContaining({ settingsOpen: true, memoryOpen: false, telemetryOpen: false }),
+    );
+
+    useAppStore.getState().openMemory();
+    expect(useAppStore.getState()).toEqual(
+      expect.objectContaining({ settingsOpen: false, memoryOpen: true, telemetryOpen: false }),
+    );
+
+    useAppStore.getState().openTelemetry();
+    expect(useAppStore.getState()).toEqual(
+      expect.objectContaining({ settingsOpen: false, memoryOpen: false, telemetryOpen: true }),
+    );
+
+    useAppStore.getState().openMemory();
+    useAppStore.getState().setWorkspaceView("workflows");
+    expect(useAppStore.getState()).toEqual(
+      expect.objectContaining({
+        workspaceView: "workflows",
+        settingsOpen: false,
+        memoryOpen: false,
+        telemetryOpen: false,
+      }),
+    );
   });
 });
 

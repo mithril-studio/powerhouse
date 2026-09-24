@@ -100,6 +100,27 @@ pub enum ReturnOutcome {
     ReportedOnly,
 }
 
+/// A chat's Claude Code session that travelled with the run. While `returned`
+/// is `None` the cloud owns the conversation and the chat stays locked.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SessionHandoff {
+    pub session_id: String,
+    /// The worktree the session belongs to on this machine.
+    pub cwd: String,
+    #[serde(default)]
+    pub returned: Option<SessionReturn>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SessionReturn {
+    /// The continued session was written back; the chat resumes `session_id`.
+    Restored { session_id: String, files: usize },
+    /// Nothing came back (the agent never ran, or the VM is gone); the local
+    /// session is as it was when the chat was sent.
+    Unchanged { reason: String },
+}
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CloudRunRecord {
     pub run_id: String,
@@ -166,6 +187,10 @@ pub struct CloudRunRecord {
     /// retried by the lifecycle tick like "release pending".
     #[serde(default)]
     pub return_error: Option<String>,
+    // --- session handoff ---------------------------------------------------
+    /// Set when the send carried the chat itself (protocol 4).
+    #[serde(default)]
+    pub session: Option<SessionHandoff>,
 }
 
 impl CloudRunRecord {
@@ -356,6 +381,7 @@ pub mod tests_support {
                 deadline_seconds: 600,
                 created_at_ms: 1,
                 predecessor_run_id: None,
+                session: None,
             },
             manifest_digest: "d".into(),
             created_at_ms: 1,
@@ -380,6 +406,7 @@ pub mod tests_support {
             origin_chat_id: None,
             returned: None,
             return_error: None,
+            session: None,
         }
     }
 }

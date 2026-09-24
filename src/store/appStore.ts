@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { WorkflowDraft } from "../features/workflows/workflowDrafts";
+import { DEFAULT_MEMORY_SETTINGS, type MemorySettings } from "../lib/memory";
 import type { AcpTranscriptItem } from "../lib/acpTranscript";
 
 export type AgentTransport = "acp" | "pty";
@@ -35,6 +36,11 @@ export interface Chat {
   transport?: AgentTransport;
   /** Structured ACP history. PTY chats continue to use raw transcript files. */
   acpTranscript?: AcpTranscriptItem[];
+  /** Last cloud run whose continued session was applied to this chat. */
+  cloudSessionRunId?: string;
+  /** The session changed outside ACP (it came back from the cloud): the next
+   *  start replays it with `session/load` so the transcript shows every turn. */
+  replayOnResume?: boolean;
 }
 
 export interface AgentProfile {
@@ -54,7 +60,7 @@ export interface AgentProfile {
   acpCommand?: string;
   /** How the native CLI (opened alongside ACP) relates to the ACP session. */
   handoff?: HandoffMode;
-  /** Shell command that runs the agent's CLI auth flow, e.g. "codex login". */
+  /** Shell command that runs the agent's CLI auth flow, e.g. "claude". */
   loginCommand?: string;
   /** Env var the ACP agent reads its startup model from, e.g. "ANTHROPIC_MODEL". */
   modelEnvVar?: string;
@@ -110,6 +116,8 @@ export interface Settings {
   theme: Theme;
   connections: Connections;
   cloud?: CloudSettings;
+  /** Shared agent memory (Basic Memory over MCP). Additive; older stores lack it. */
+  memory?: MemorySettings;
 }
 
 export interface Branch {
@@ -248,6 +256,7 @@ interface AppState extends PersistedTree {
 
   settingsOpen: boolean;
   telemetryOpen: boolean;
+  memoryOpen: boolean;
 
   hydrate: (tree: (Partial<PersistedTree> & LegacyTree) | null) => void;
   setDefaultAgent: (agentId: string) => void;
@@ -258,6 +267,8 @@ interface AppState extends PersistedTree {
   closeSettings: () => void;
   openTelemetry: () => void;
   closeTelemetry: () => void;
+  openMemory: () => void;
+  closeMemory: () => void;
   addRepo: (repo: Omit<Repo, "id" | "branches" | "workflow" | "pushOnMerge">) => Repo;
   removeRepo: (repoId: string) => void;
   setRepoHidden: (repoId: string, hidden: boolean) => void;
@@ -267,6 +278,15 @@ interface AppState extends PersistedTree {
   addChat: (repoId: string, branchId: string, chat: Chat) => void;
   removeChat: (repoId: string, branchId: string, chatId: string) => void;
   setActiveChat: (repoId: string, branchId: string, chatId: string) => void;
+  applyCloudSession: (
+    repoId: string,
+    branchId: string,
+    chatId: string,
+    runId: string,
+    sessionId: string,
+  ) => void;
+  /** Reconnect the chat (with a replay) the next time it is on screen. */
+  setChatReplay: (repoId: string, branchId: string, chatId: string, replay: boolean) => void;
   setChatAgentSession: (
     repoId: string,
     branchId: string,
@@ -316,6 +336,7 @@ interface AppState extends PersistedTree {
   setCloudRun: (run: CloudRunRecord) => void;
   removeCloudRun: (runId: string) => void;
   setCloudSettings: (cloud: CloudSettings) => void;
+  setMemorySettings: (memory: MemorySettings) => void;
   setCloudQuickStage: (repoId: string, branch: string, stage: string | null) => void;
   setCloudQuickError: (repoId: string, branch: string, reason: string | null) => void;
 }
@@ -342,16 +363,6 @@ const SEED_AGENTS: AgentProfile[] = [
     defaultModel: "claude-opus-4-8",
   },
   {
-    id: "codex",
-    name: "Codex",
-    command: "codex",
-    promptTemplate: 'codex "{prompt}"',
-    transport: "acp",
-    acpCommand: "npx -y @agentclientprotocol/codex-acp",
-    handoff: "workspace-only",
-    loginCommand: "codex login",
-  },
-  {
     id: "pi",
     name: "Pi",
     command: "pi",
@@ -373,7 +384,9 @@ const seedSettings = (): Settings => ({
  *  custom agents and any user-edited fields untouched. */
 function backfillAgentProfiles(agents: AgentProfile[]): AgentProfile[] {
   const seedById = Object.fromEntries(SEED_AGENTS.map((a) => [a.id, a]));
-  const backfilled = agents.filter((a) => a.id !== "opencode").map((a) => {
+  const backfilled = agents
+    .filter((a) => a.id !== "opencode" && a.id !== "codex")
+    .map((a) => {
     const seed = seedById[a.id];
     if (!seed) return a;
     return {
@@ -430,6 +443,7 @@ export function migrateSettings(
       theme,
       connections,
       ...(tree.settings.cloud ? { cloud: { ...DEFAULT_CLOUD_SETTINGS, ...tree.settings.cloud } } : {}),
+      ...(tree.settings.memory ? { memory: { ...DEFAULT_MEMORY_SETTINGS, ...tree.settings.memory } } : {}),
     };
   }
   const agents = SEED_AGENTS.map((a) => ({ ...a }));
@@ -524,7 +538,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   queues: {},
   workflowDrafts: [],
   workspaceView: "home",
-  setWorkspaceView: (workspaceView) => set({ workspaceView, settingsOpen: false, telemetryOpen: false }),
+  setWorkspaceView: (workspaceView) => set({ workspaceView, settingsOpen: false, telemetryOpen: false, memoryOpen: false }),
   saveWorkflowDraft: (draft) => set((s) => ({
     workflowDrafts: s.workflowDrafts.some((d) => d.id === draft.id)
       ? s.workflowDrafts.map((d) => d.id === draft.id ? draft : d)
@@ -544,6 +558,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   pendingHandoff: {},
   settingsOpen: false,
   telemetryOpen: false,
+  memoryOpen: false,
   cloudRuns: {},
   cloudQuickStages: {},
   cloudQuickErrors: {},
@@ -603,11 +618,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       },
     })),
 
-  openSettings: () => set({ settingsOpen: true, telemetryOpen: false }),
+  openSettings: () => set({ settingsOpen: true, telemetryOpen: false, memoryOpen: false }),
   closeSettings: () => set({ settingsOpen: false }),
 
-  openTelemetry: () => set({ telemetryOpen: true, settingsOpen: false }),
+  openTelemetry: () => set({ telemetryOpen: true, settingsOpen: false, memoryOpen: false }),
   closeTelemetry: () => set({ telemetryOpen: false }),
+  openMemory: () => set({ memoryOpen: true, settingsOpen: false, telemetryOpen: false }),
+  closeMemory: () => set({ memoryOpen: false }),
 
   addRepo: (repo) => {
     const recent: RecentRepo = {
@@ -714,6 +731,26 @@ export const useAppStore = create<AppState>((set, get) => ({
       repos: updateBranch(s.repos, repoId, branchId, (b) => ({
         ...b,
         activeChatId: chatId,
+      })),
+    })),
+
+  applyCloudSession: (repoId, branchId, chatId, runId, sessionId) =>
+    set((s) => ({
+      repos: updateBranch(s.repos, repoId, branchId, (b) => ({
+        ...b,
+        chats: b.chats.map((c) =>
+          c.id === chatId
+            ? { ...c, agentSessionId: sessionId, cloudSessionRunId: runId, replayOnResume: true }
+            : c,
+        ),
+      })),
+    })),
+
+  setChatReplay: (repoId, branchId, chatId, replay) =>
+    set((s) => ({
+      repos: updateBranch(s.repos, repoId, branchId, (b) => ({
+        ...b,
+        chats: b.chats.map((c) => (c.id === chatId ? { ...c, replayOnResume: replay } : c)),
       })),
     })),
 
@@ -877,7 +914,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { cloudQuickErrors: { ...s.cloudQuickErrors, [key]: reason } };
     }),
   setCloudSettings: (cloud) => set((s) => ({ settings: { ...s.settings, cloud } })),
+  setMemorySettings: (memory) => set((s) => ({ settings: { ...s.settings, memory } })),
 }));
+
+export const memorySettingsOf = (s: Settings): MemorySettings => ({
+  ...DEFAULT_MEMORY_SETTINGS,
+  ...(s.memory ?? {}),
+});
 
 export const cloudSettingsOf = (s: Settings): CloudSettings => {
   // `baseVm` belonged to the fork-era settings; a snapshot name replaces it.
