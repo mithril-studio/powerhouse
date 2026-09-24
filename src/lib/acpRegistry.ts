@@ -1,5 +1,6 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  McpServer,
   AgentCapabilities,
   AvailableCommand,
   ClientConnection,
@@ -70,9 +71,15 @@ export async function startAcp(opts: {
   /** Extra environment for the agent process. */
   env?: Record<string, string>;
   resumeSessionId?: string;
+  /** MCP servers every session gets (the shared memory, today). */
+  mcpServers?: McpServer[];
+  /** Runtime-specific session options; runtimes ignore keys they don't know. */
+  meta?: Record<string, unknown>;
   callbacks: AcpCallbacks;
 }): Promise<AcpStartResult> {
   const { chatId, cwd, command, env, resumeSessionId, callbacks } = opts;
+  const mcpServers = opts.mcpServers ?? [];
+  const meta = opts.meta ? { _meta: opts.meta } : {};
   await disposeAcp(chatId);
   const decoder = new TextDecoder();
   const { PROTOCOL_VERSION, client, methods, ndJsonStream } = await import(
@@ -162,12 +169,14 @@ export async function startAcp(opts: {
           ? await connection.agent.request(methods.agent.session.resume, {
               sessionId: resumeSessionId,
               cwd,
-              mcpServers: [],
+              mcpServers,
+              ...meta,
             })
           : await connection.agent.request(methods.agent.session.load, {
               sessionId: resumeSessionId,
               cwd,
-              mcpServers: [],
+              mcpServers,
+              ...meta,
             });
         if (!canResume) callbacks.onSessionReplayChange?.(false);
         sessionId = resumeSessionId;
@@ -178,7 +187,8 @@ export async function startAcp(opts: {
         callbacks.onSessionReplayChange?.(false);
         const response = await connection.agent.request(methods.agent.session.new, {
           cwd,
-          mcpServers: [],
+          mcpServers,
+          ...meta,
         });
         sessionId = response.sessionId;
         modes = response.modes;
@@ -187,7 +197,8 @@ export async function startAcp(opts: {
     } else {
       const response = await connection.agent.request(methods.agent.session.new, {
         cwd,
-        mcpServers: [],
+        mcpServers,
+        ...meta,
       });
       sessionId = response.sessionId;
       modes = response.modes;

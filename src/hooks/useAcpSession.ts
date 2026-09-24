@@ -8,6 +8,7 @@ import type {
 } from "@agentclientprotocol/sdk";
 import {
   agentModelEnv,
+  memorySettingsOf,
   resolveAgent,
   useAppStore,
   type Branch,
@@ -30,6 +31,14 @@ import { notifyTurnFinished } from "../lib/attention";
 import { activityFromStopReason } from "../lib/chatActivity";
 import { consumeAutoSpawn } from "../lib/terminalRegistry";
 import { handoffWatchStart, telemetryAnnotateRun } from "../lib/ipc";
+import {
+  composeBriefedPrompt,
+  fetchBrief,
+  memoryMcpServers,
+  memoryProjectSlug,
+  memoryServerEnsure,
+  memorySessionMeta,
+} from "../lib/memory";
 import type { AgentControlState, ApplyOp } from "../lib/agentControls";
 import type { AcpConnectionState } from "../components/acp/AcpConnectionPanel";
 import type { PendingPermission } from "../components/acp/AcpPermissionCard";
@@ -56,6 +65,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
   const setChatAgentSession = useAppStore((state) => state.setChatAgentSession);
   const updateTranscript = useAppStore((state) => state.updateChatAcpTranscript);
   const profile = resolveAgent(settings, chat.agentId);
+  const memory = useMemo(() => memorySettingsOf(settings), [settings.memory]);
 
   const [connection, setConnection] = useState<AcpConnectionState>("idle");
   const [busy, setBusy] = useState(false);
@@ -86,6 +96,9 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
     [chat.id, chat.title, branch.name, setChatActivity],
   );
 
+  /** True once this session has been briefed from memory (or must not be). */
+  const briefedRef = useRef(false);
+
   const mutateTranscript = useCallback(
     (update: Parameters<typeof updateTranscript>[3]) =>
       updateTranscript(repoId, branch.id, chat.id, update),
@@ -99,8 +112,27 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
       mutateTranscript((items) =>
         appendUserMessage(items, prompt, attachments.map(toRef)),
       );
+      let outbound = prompt;
+      if (memory.enabled && !briefedRef.current) {
+        briefedRef.current = true;
+        const repoName = useAppStore.getState().repos.find((r) => r.id === repoId)?.name ?? "";
+        const project = memoryProjectSlug(repoName);
+        try {
+          const brief = await fetchBrief(memory, project, prompt);
+          if (brief.count > 0) {
+            outbound = composeBriefedPrompt(brief.text, prompt);
+            mutateTranscript((items) =>
+              appendSystemMessage(items, `memory: briefed ${brief.count} notes from global, ${project}`),
+            );
+          }
+        } catch (cause) {
+          mutateTranscript((items) =>
+            appendSystemMessage(items, `memory: brief unavailable (${String(cause)})`),
+          );
+        }
+      }
       try {
-        const response = await sendAcpPrompt(chat.id, promptBlocks(prompt, attachments));
+        const response = await sendAcpPrompt(chat.id, promptBlocks(outbound, attachments));
         finishTurn(activityFromStopReason(response.stopReason));
       } catch (cause) {
         finishTurn("error");
@@ -109,7 +141,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
         );
       }
     },
-    [chat.id, mutateTranscript, finishTurn],
+    [chat.id, mutateTranscript, finishTurn, memory, repoId],
   );
 
   const start = useCallback(
@@ -132,6 +164,17 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
       setDiagnostics("");
       setCommands([]);
       if (!resume) mutateTranscript(() => []);
+      // A fresh session is briefed on its first prompt; a resumed one already
+      // carries its context. Memory unavailable is not fatal: the agent still
+      // runs, just without the brief and with a dead MCP entry it can ignore.
+      briefedRef.current = resume;
+      if (memory.enabled) {
+        await memoryServerEnsure(memory).catch((cause) =>
+          mutateTranscript((items) =>
+            appendSystemMessage(items, `memory: server unavailable (${String(cause)})`),
+          ),
+        );
+      }
 
       try {
         const result = await startAcp({
@@ -141,6 +184,8 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
           // Only fresh chats: the env var outranks a resumed session's model.
           env: resume ? undefined : agentModelEnv(profile),
           resumeSessionId: resume ? chat.agentSessionId : undefined,
+          mcpServers: memoryMcpServers(memory),
+          meta: memorySessionMeta(memory),
           callbacks: {
             onUpdate: (update) =>
               mutateTranscript((items) =>
@@ -237,6 +282,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
       branch.id,
       branch.worktreePath,
       repoId,
+      memory,
       mutateTranscript,
       setChatAgentSession,
       setChatStatus,

@@ -23,6 +23,7 @@ import { SettingsPage } from "./components/SettingsPage";
 import { TelemetryPage } from "./components/telemetry/TelemetryPage";
 import { PowerConfirmationDialog } from "./components/PowerConfirmationDialog";
 import { WorkflowsPage } from "./features/workflows/WorkflowsPage";
+import { MemoryPage } from "./components/memory/MemoryPage";
 
 let booted = false;
 
@@ -150,6 +151,7 @@ export default function App() {
       <SettingsPage />
       <TelemetryPage />
       <PowerConfirmationDialog />
+      <MemoryPage />
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { WorkflowDraft } from "../features/workflows/workflowDrafts";
+import { DEFAULT_MEMORY_SETTINGS, type MemorySettings } from "../lib/memory";
 import type { AcpTranscriptItem } from "../lib/acpTranscript";
 
 export type AgentTransport = "acp" | "pty";
@@ -110,6 +111,8 @@ export interface Settings {
   theme: Theme;
   connections: Connections;
   cloud?: CloudSettings;
+  /** Shared agent memory (Basic Memory over MCP). Additive; older stores lack it. */
+  memory?: MemorySettings;
 }
 
 export interface Branch {
@@ -248,6 +251,7 @@ interface AppState extends PersistedTree {
 
   settingsOpen: boolean;
   telemetryOpen: boolean;
+  memoryOpen: boolean;
 
   hydrate: (tree: (Partial<PersistedTree> & LegacyTree) | null) => void;
   setDefaultAgent: (agentId: string) => void;
@@ -258,6 +262,8 @@ interface AppState extends PersistedTree {
   closeSettings: () => void;
   openTelemetry: () => void;
   closeTelemetry: () => void;
+  openMemory: () => void;
+  closeMemory: () => void;
   addRepo: (repo: Omit<Repo, "id" | "branches" | "workflow" | "pushOnMerge">) => Repo;
   removeRepo: (repoId: string) => void;
   setRepoHidden: (repoId: string, hidden: boolean) => void;
@@ -316,6 +322,7 @@ interface AppState extends PersistedTree {
   setCloudRun: (run: CloudRunRecord) => void;
   removeCloudRun: (runId: string) => void;
   setCloudSettings: (cloud: CloudSettings) => void;
+  setMemorySettings: (memory: MemorySettings) => void;
   setCloudQuickStage: (repoId: string, branch: string, stage: string | null) => void;
   setCloudQuickError: (repoId: string, branch: string, reason: string | null) => void;
 }
@@ -422,6 +429,7 @@ export function migrateSettings(
       theme,
       connections,
       ...(tree.settings.cloud ? { cloud: { ...DEFAULT_CLOUD_SETTINGS, ...tree.settings.cloud } } : {}),
+      ...(tree.settings.memory ? { memory: { ...DEFAULT_MEMORY_SETTINGS, ...tree.settings.memory } } : {}),
     };
   }
   const agents = SEED_AGENTS.map((a) => ({ ...a }));
@@ -536,6 +544,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   pendingHandoff: {},
   settingsOpen: false,
   telemetryOpen: false,
+  memoryOpen: false,
   cloudRuns: {},
   cloudQuickStages: {},
   cloudQuickErrors: {},
@@ -600,6 +609,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   openTelemetry: () => set({ telemetryOpen: true, settingsOpen: false }),
   closeTelemetry: () => set({ telemetryOpen: false }),
+  openMemory: () => set({ memoryOpen: true }),
+  closeMemory: () => set({ memoryOpen: false }),
 
   addRepo: (repo) => {
     const recent: RecentRepo = {
@@ -869,7 +880,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { cloudQuickErrors: { ...s.cloudQuickErrors, [key]: reason } };
     }),
   setCloudSettings: (cloud) => set((s) => ({ settings: { ...s.settings, cloud } })),
+  setMemorySettings: (memory) => set((s) => ({ settings: { ...s.settings, memory } })),
 }));
+
+export const memorySettingsOf = (s: Settings): MemorySettings => ({
+  ...DEFAULT_MEMORY_SETTINGS,
+  ...(s.memory ?? {}),
+});
 
 export const cloudSettingsOf = (s: Settings): CloudSettings => {
   // `baseVm` belonged to the fork-era settings; a snapshot name replaces it.

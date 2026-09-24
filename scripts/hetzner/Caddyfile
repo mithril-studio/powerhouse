@@ -1,0 +1,24 @@
+# /etc/caddy/Caddyfile on the Hetzner host (factory.mithril-studio.com).
+# Adds the shared agent memory route next to the existing factory route.
+# Replace MEMORY_TOKEN with the value of ~/.powerhouse/memory-token, then:
+#   caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile && systemctl reload caddy
+factory.mithril-studio.com {
+	encode zstd gzip
+
+	# Shared agent memory: Basic Memory over streamable-HTTP MCP, bearer-gated.
+	# https://factory.mithril-studio.com/memory/mcp  ->  127.0.0.1:8770/mcp
+	handle_path /memory/* {
+		@unauthorized not header Authorization "Bearer MEMORY_TOKEN"
+		respond @unauthorized 401
+		reverse_proxy 127.0.0.1:8770 {
+			flush_interval -1
+		}
+	}
+
+	# Software Factory control plane, unchanged.
+	handle {
+		reverse_proxy 127.0.0.1:8765 {
+			flush_interval -1
+		}
+	}
+}
