@@ -1,6 +1,14 @@
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ToolCallContent } from "@agentclientprotocol/sdk";
 import type { AcpTranscriptItem } from "../../lib/acpTranscript";
+import {
+  groupTools,
+  summarizeTools,
+  toolLabel,
+  toolVerb,
+  type ToolGroup,
+  type ToolTranscriptItem,
+} from "../../lib/toolDisplay";
 import { CloudResultCard } from "../CloudResultCard";
 import { dataUrl, formatBytes, type AttachmentRef } from "../../lib/attachments";
 import { AcpMarkdown } from "./AcpMarkdown";
@@ -60,45 +68,50 @@ function ToolContent({ item }: { item: ToolCallContent }) {
   return <p className="text-xs text-muted-foreground">Terminal {item.terminalId}</p>;
 }
 
-function ToolItem({ item }: { item: Extract<AcpTranscriptItem, { type: "tool" }> }) {
+const glyphTone = (status: ToolTranscriptItem["status"]) =>
+  status === "failed"
+    ? "text-destructive"
+    : status === "in_progress"
+      ? "text-accent-brand"
+      : "text-muted-foreground/70";
+
+const ToolRow = memo(function ToolRow({ item }: { item: ToolTranscriptItem }) {
   const details = Boolean(
     item.content?.length ||
       item.locations?.length ||
       item.rawInput !== undefined ||
       item.rawOutput !== undefined,
   );
+  const label = toolLabel(item);
   const header = (
     <>
-      <span
-        className={
-          item.status === "failed"
-            ? "text-destructive"
-            : item.status === "in_progress"
-              ? "text-accent-brand"
-              : "text-muted-foreground"
-        }
-        aria-hidden
-      >
+      <span className={`w-3 shrink-0 text-center ${glyphTone(item.status)}`} aria-hidden>
         {statusGlyph[item.status ?? "pending"] ?? "·"}
       </span>
-      <span className="truncate text-xs text-foreground/90">{item.title}</span>
-      {item.kind && (
-        <span className="ml-auto shrink-0 text-[10px] text-muted-foreground/70">
-          {item.kind}
-        </span>
-      )}
+      <span className="w-12 shrink-0 text-muted-foreground/70">{toolVerb(item.kind)}</span>
+      <span
+        className={`min-w-0 truncate ${item.status === "failed" ? "text-destructive" : "text-foreground/80"}`}
+        title={item.title}
+      >
+        {label || item.title}
+      </span>
     </>
   );
 
   if (!details) {
-    return <div className="flex items-center gap-2 py-0.5">{header}</div>;
+    return <div className="flex items-center gap-2 text-xs leading-5">{header}</div>;
   }
   return (
-    <details className="group py-0.5">
-      <summary className="flex cursor-default list-none items-center gap-2 outline-none focus-visible:bg-muted">
+    <details className="group text-xs leading-5">
+      <summary className="flex cursor-default list-none items-center gap-2 outline-none hover:bg-muted/50 focus-visible:bg-muted">
         {header}
       </summary>
-      <div className="ml-1 mt-1 space-y-2 border-l border-border py-1 pl-4">
+      <div className="mb-1 ml-1.5 mt-0.5 space-y-2 border-l border-border py-1 pl-4">
+        {item.title !== label && (
+          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs text-foreground/80">
+            {item.title}
+          </pre>
+        )}
         {item.locations?.map((location) => (
           <p key={`${location.path}:${location.line ?? ""}`} className="text-xs text-muted-foreground">
             {location.path}{location.line ? `:${location.line}` : ""}
@@ -119,6 +132,47 @@ function ToolItem({ item }: { item: Extract<AcpTranscriptItem, { type: "tool" }>
         )}
       </div>
     </details>
+  );
+});
+
+/** Consecutive tool calls as one line — "▸ 14 tool calls · 9 run · 3 read" —
+ *  expandable to the full list. While running, the live call shows under it. */
+function ToolGroupItem({ group }: { group: ToolGroup }) {
+  const [open, setOpen] = useState(false);
+  const { tools } = group;
+  const failed = tools.filter((tool) => tool.status === "failed").length;
+  const active = [...tools]
+    .reverse()
+    .find((tool) => tool.status === "in_progress" || tool.status === "pending");
+  return (
+    <div>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center gap-2 text-left text-xs leading-5 text-muted-foreground outline-none hover:text-foreground focus-visible:bg-muted"
+      >
+        <span className={`w-3 shrink-0 text-center ${active ? "text-accent-brand" : ""}`} aria-hidden>
+          {open ? "▾" : "▸"}
+        </span>
+        <span className="shrink-0 text-foreground/80">{tools.length} tool calls</span>
+        <span className="min-w-0 truncate text-muted-foreground/70">{summarizeTools(tools)}</span>
+        {failed > 0 && <span className="shrink-0 text-destructive">{failed} failed</span>}
+      </button>
+      {open ? (
+        <div className="ml-1.5 border-l border-border pl-3">
+          {tools.map((tool) => (
+            <ToolRow key={tool.id} item={tool} />
+          ))}
+        </div>
+      ) : (
+        active && (
+          <div className="ml-1.5 border-l border-border pl-3">
+            <ToolRow item={active} />
+          </div>
+        )
+      )}
+    </div>
   );
 }
 
@@ -154,7 +208,7 @@ function Attachments({ items }: { items?: AttachmentRef[] }) {
 // Memoised so a streaming chunk re-renders only the message it lands in, not
 // every markdown block above it.
 const TranscriptItem = memo(function TranscriptItem({ item }: { item: AcpTranscriptItem }) {
-  if (item.type === "tool") return <ToolItem item={item} />;
+  if (item.type === "tool") return <ToolRow item={item} />;
   if (item.type === "cloud-result") return <CloudResultCard runId={item.runId} late={item.late} />;
   if (item.type === "usage") return <UsageItem item={item} />;
   if (item.type === "plan") {
@@ -238,6 +292,7 @@ export function AcpTranscript({
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
+  const entries = useMemo(() => groupTools(items), [items]);
 
   useEffect(() => {
     if (followRef.current) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -268,9 +323,13 @@ export function AcpTranscript({
             </p>
           </div>
         )}
-        {items.map((item) => (
-          <TranscriptItem key={item.id} item={item} />
-        ))}
+        {entries.map((entry) =>
+          entry.type === "tool-group" ? (
+            <ToolGroupItem key={entry.id} group={entry} />
+          ) : (
+            <TranscriptItem key={entry.id} item={entry} />
+          ),
+        )}
         {busy && (
           <p className="flex items-center gap-2 text-xs text-accent-brand" role="status">
             <span className="animate-pulse">●</span>
