@@ -267,6 +267,57 @@ export async function deleteRepo(repoId: string) {
   useAppStore.getState().removeRepo(repoId);
 }
 
+/**
+ * Remove a project from the app: tear down every branch's worktree, terminals,
+ * and transcripts, then drop the repo from the store. Best-effort per branch —
+ * a worktree that won't remove is reported but doesn't abort the rest.
+ */
+export async function deleteRepo(repoId: string) {
+  const s = useAppStore.getState();
+  const repo = s.repos.find((r) => r.id === repoId);
+  if (!repo) return;
+
+  const confirmed = await ask(
+    `Remove project “${repo.name}”?\n\n${
+      repo.branches.length > 0
+        ? `Its ${repo.branches.length} branch worktree${
+            repo.branches.length === 1 ? "" : "s"
+          } and any uncommitted changes will be removed. `
+        : ""
+    }The project is removed from the app; the git repository itself is kept.`,
+    { title: "Remove project", kind: "warning", okLabel: "Remove" },
+  );
+  if (!confirmed) return;
+
+  for (const branch of repo.branches) {
+    // Stop the handoff watcher and cancel any in-flight handoff for this branch.
+    void handoffWatchStop(branch.id).catch(() => {});
+    const pendingTimer = s.pendingHandoff[branch.id];
+    if (pendingTimer !== undefined) {
+      window.clearTimeout(pendingTimer);
+      s.clearPendingHandoff(branch.id);
+    }
+
+    for (const chat of branch.chats) {
+      disposeTerminal(chat.id);
+      void disposeAcp(chat.id);
+      void ptyDeleteTranscript(chat.id).catch(() => {});
+    }
+    // Bottom-panel surfaces (ids mirror BottomPanel's shellId/agentCliId).
+    disposeTerminal(`shell-${branch.id}`);
+    void ptyDeleteTranscript(`shell-${branch.id}`).catch(() => {});
+    disposeTerminal(`agentcli-${branch.id}`);
+    void ptyDeleteTranscript(`agentcli-${branch.id}`).catch(() => {});
+    try {
+      await gitRemoveWorktree(repo.path, branch.worktreePath);
+    } catch (err) {
+      await message(String(err), { title: "Could not remove worktree", kind: "error" });
+    }
+  }
+
+  useAppStore.getState().removeRepo(repoId);
+}
+
 /** Snapshot the repo's workflow config and enqueue the branch for validation. */
 export async function enqueueBranch(repoId: string, branchId: string) {
   const s = useAppStore.getState();
