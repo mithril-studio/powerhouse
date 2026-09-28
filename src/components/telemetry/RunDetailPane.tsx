@@ -174,7 +174,14 @@ export function RunDetailPane({ runId, refreshKey }: { runId: string; refreshKey
                 : "not instrumented"
             }
           />
-          <Fact label="cached" value={fmtTokens(run.cachedTokens)} />
+          <Fact
+            label="cache read/write"
+            value={`${fmtTokens(run.cachedTokens)} / ${fmtTokens(run.cacheWriteTokens)}`}
+          />
+          <Fact
+            label="context start/peak"
+            value={`${fmtTokens(run.contextStart)} / ${fmtTokens(run.contextPeak)}`}
+          />
           <Fact label="cost" value={fmtCost(run.costUsd)} />
           <Fact
             label="duration"

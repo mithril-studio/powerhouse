@@ -108,6 +108,7 @@ pub struct UsageDelta {
     pub input: Option<i64>,
     pub output: Option<i64>,
     pub cached: Option<i64>,
+    pub cache_write: Option<i64>,
     pub cost: Option<f64>,
 }
 
@@ -129,6 +130,10 @@ pub enum Delta {
     /// Execution context observed on the wire (last observation wins).
     Context { model: Option<String>, mode: Option<String> },
     Usage(UsageDelta),
+    /// A context-window snapshot (ACP `usage_update`): tokens in context now,
+    /// the window size, and the session's cumulative cost so far. Snapshots,
+    /// not increments — the store turns cost into a per-run delta.
+    Window { used: Option<i64>, size: Option<i64>, session_cost: Option<f64> },
     /// The event is a `session/load` history re-stream: flag it and count
     /// nothing, so replays never inflate totals.
     Replayed,
@@ -285,6 +290,18 @@ impl Projector {
                         deltas.push(Delta::Context { model: None, mode: Some(mode.into()) });
                     }
                 }
+                Some("usage_update") => {
+                    let int = |k: &str| update.and_then(|u| u.get(k)).and_then(|v| v.as_i64());
+                    let session_cost = update
+                        .and_then(|u| u.pointer("/cost/amount"))
+                        .and_then(|v| v.as_f64());
+                    let (used, size) = (int("used"), int("size"));
+                    // pi-acp reports `used: 0` before any turn: no evidence yet.
+                    let used = used.filter(|u| *u > 0);
+                    if used.is_some() || session_cost.is_some() {
+                        deltas.push(Delta::Window { used, size, session_cost });
+                    }
+                }
                 Some("config_option_update") => {
                     if let Some(model) = update.and_then(model_from_config_options) {
                         deltas.push(Delta::Context { model: Some(model), mode: None });
@@ -380,10 +397,16 @@ pub fn extract_usage(value: &Value) -> Option<UsageDelta> {
         input: int(&["inputTokens", "input_tokens"]),
         output: int(&["outputTokens", "output_tokens"]),
         cached: int(&[
+            "cachedReadTokens",
             "cachedTokens",
             "cached_tokens",
             "cacheReadInputTokens",
             "cache_read_input_tokens",
+        ]),
+        cache_write: int(&[
+            "cachedWriteTokens",
+            "cacheCreationInputTokens",
+            "cache_creation_input_tokens",
         ]),
         cost: ["costUsd", "cost_usd", "totalCostUsd", "total_cost_usd", "cost"]
             .iter()
@@ -480,7 +503,7 @@ mod tests {
                     at: 1006,
                 },
                 Delta::TurnClose { idx: 0, stop_reason: Some("end_turn".into()), at: 1007 },
-                Delta::Usage(UsageDelta { input: Some(100), output: Some(25), cached: None, cost: None }),
+                Delta::Usage(UsageDelta { input: Some(100), output: Some(25), cached: None, cache_write: None, cost: None }),
             ]
         );
     }
@@ -540,6 +563,22 @@ mod tests {
     }
 
     #[test]
+    fn usage_update_becomes_a_window_snapshot() {
+        let deltas = feed_all(&[
+            (Direction::In, r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"usage_update","used":0,"size":272000}}}"#),
+            (Direction::In, r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"usage_update","used":49317,"size":1000000}}}"#),
+            (Direction::In, r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"usage_update","used":77437,"size":1000000,"cost":{"amount":1.01,"currency":"USD"}}}}"#),
+        ]);
+        assert_eq!(
+            deltas,
+            vec![
+                Delta::Window { used: Some(49317), size: Some(1_000_000), session_cost: None },
+                Delta::Window { used: Some(77437), size: Some(1_000_000), session_cost: Some(1.01) },
+            ]
+        );
+    }
+
+    #[test]
     fn extracts_usage_from_alternate_shapes() {
         let v: Value = serde_json::from_str(
             r#"{"params":{"update":{"_meta":{"usage":{"input_tokens":5,"cache_read_input_tokens":3,"total_cost_usd":0.01}}}}}"#,
@@ -547,7 +586,22 @@ mod tests {
         .unwrap();
         assert_eq!(
             extract_usage(&v),
-            Some(UsageDelta { input: Some(5), output: None, cached: Some(3), cost: Some(0.01) })
+            Some(UsageDelta { input: Some(5), output: None, cached: Some(3), cache_write: None, cost: Some(0.01) })
+        );
+        // claude-agent-acp's prompt response shape.
+        let v: Value = serde_json::from_str(
+            r#"{"result":{"stopReason":"end_turn","usage":{"inputTokens":290,"outputTokens":7200,"cachedReadTokens":626814,"cachedWriteTokens":96233,"totalTokens":730537}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            extract_usage(&v),
+            Some(UsageDelta {
+                input: Some(290),
+                output: Some(7200),
+                cached: Some(626814),
+                cache_write: Some(96233),
+                cost: None,
+            })
         );
         assert_eq!(extract_usage(&serde_json::json!({"result":{}})), None);
         assert_eq!(extract_usage(&serde_json::json!({"result":{"usage":{}}})), None);

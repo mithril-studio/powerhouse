@@ -54,8 +54,8 @@ fn check_schema(conn: &Connection) -> CheckResult {
     match conn.query_row("SELECT value FROM meta WHERE key = 'schema_version'", [], |r| {
         r.get::<_, String>(0)
     }) {
-        Ok(version) if version == "2" => pass(ID, LABEL, "v2".into()),
-        Ok(version) => fail(ID, LABEL, format!("expected v2, found v{version}")),
+        Ok(version) if version == "3" => pass(ID, LABEL, "v3".into()),
+        Ok(version) => fail(ID, LABEL, format!("expected v3, found v{version}")),
         Err(e) => fail(ID, LABEL, e.to_string()),
     }
 }
