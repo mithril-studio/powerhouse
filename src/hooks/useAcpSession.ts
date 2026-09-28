@@ -41,6 +41,7 @@ import {
   memoryServerEnsure,
   memorySessionMeta,
 } from "../lib/memory";
+import { distillCheckpoint, writeCheckpoint } from "../lib/checkpoint";
 import type { AgentControlState, ApplyOp } from "../lib/agentControls";
 import type { AcpConnectionState } from "../components/acp/AcpConnectionPanel";
 import type { PendingPermission } from "../components/acp/AcpPermissionCard";
@@ -108,6 +109,34 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
 
   /** True once this session has been briefed from memory (or must not be). */
   const briefedRef = useRef(false);
+  /** `project/permalink` of the notes this session was briefed with, carried
+   *  into the checkpoint so outcome labels can credit them later. */
+  const briefedNotesRef = useRef<string[]>([]);
+
+  /** Write one distilled note per session to the memory inbox. Overwrites the
+   *  same note each turn (keyed by chat), so a session leaves exactly one
+   *  checkpoint however many turns it ran. Non-fatal: memory being down never
+   *  affects the run. */
+  const checkpoint = useCallback(() => {
+    if (!memory.enabled) return;
+    const state = useAppStore.getState();
+    const repo = state.repos.find((r) => r.id === repoId);
+    const transcript =
+      repo?.branches
+        .find((b) => b.id === branch.id)
+        ?.chats.find((c) => c.id === chat.id)?.acpTranscript ?? [];
+    const note = distillCheckpoint({
+      transcript,
+      key: chat.id.slice(0, 8),
+      branch: branch.name,
+      agent: agentLabel,
+      at: new Date(),
+      briefed: briefedNotesRef.current,
+    });
+    if (!note) return;
+    const project = memoryProjectSlug(repo?.name ?? "");
+    void writeCheckpoint(memory, project, note).catch(() => {});
+  }, [memory, repoId, branch.id, branch.name, chat.id, agentLabel]);
 
   const mutateTranscript = useCallback(
     (update: Parameters<typeof updateTranscript>[3]) =>
@@ -130,6 +159,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
         try {
           const brief = await fetchBrief(memory, project, prompt);
           if (brief.count > 0) {
+            briefedNotesRef.current = brief.briefed;
             outbound = composeBriefedPrompt(brief.text, prompt);
             mutateTranscript((items) =>
               appendSystemMessage(items, `memory: briefed ${brief.count} notes from global, ${project}`),
@@ -144,6 +174,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
       try {
         const response = await sendAcpPrompt(chat.id, promptBlocks(outbound, attachments));
         finishTurn(activityFromStopReason(response.stopReason));
+        checkpoint();
       } catch (cause) {
         finishTurn("error");
         mutateTranscript((items) =>
@@ -151,7 +182,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
         );
       }
     },
-    [chat.id, mutateTranscript, finishTurn, memory, repoId],
+    [chat.id, mutateTranscript, finishTurn, checkpoint, memory, repoId],
   );
 
   const start = useCallback(

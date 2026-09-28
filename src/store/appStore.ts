@@ -784,14 +784,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       })),
     })),
 
-  // Selecting a project/branch is a navigation — it also leaves the telemetry
-  // and settings pages and the workflows view (which otherwise cover the
-  // main area).
+  // Selecting a project/branch is a navigation — it also leaves the telemetry,
+  // settings, and memory pages and the workflows view (which otherwise cover
+  // the main area).
   select: (repoId, branchId) =>
     set({
       selection: { repoId, branchId },
       telemetryOpen: false,
       settingsOpen: false,
+      memoryOpen: false,
       workspaceView: "home",
     }),
 

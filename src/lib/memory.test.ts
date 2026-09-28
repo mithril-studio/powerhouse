@@ -3,18 +3,26 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 import {
+  activeNotes,
+  autoPromotes,
   briefQuery,
   composeBriefedPrompt,
   DEFAULT_MEMORY_SETTINGS,
   formatBrief,
+  inboxNotes,
+  INBOX_DIR,
+  isInboxNote,
   MAX_BRIEF_CHARS,
   MEMORY_SERVER_NAME,
   memoryMcpServers,
   memoryProjectSlug,
   memorySessionMeta,
+  parseProjectList,
   parseRecent,
   parseSearchResults,
+  promotionFolder,
   rankNotes,
+  routableMemory,
   stripFrontmatter,
   type BriefNote,
 } from "./memory";
@@ -119,6 +127,23 @@ describe("parsers", () => {
     ]);
   });
 
+  it("reads the project list, sorted and de-duplicated", () => {
+    const raw = {
+      projects: [
+        { name: "powerhouse", permalink: "powerhouse" },
+        { name: "global", permalink: "global" },
+        { name: "powerhouse", permalink: "powerhouse" },
+        { permalink: "no-name" },
+      ],
+      default_project: "global",
+    };
+    expect(parseProjectList(raw)).toEqual(["global", "powerhouse"]);
+    expect(parseProjectList(JSON.stringify(raw))).toEqual(["global", "powerhouse"]);
+    expect(parseProjectList(null)).toEqual([]);
+    expect(parseProjectList({})).toEqual([]);
+    expect(parseProjectList("not json")).toEqual([]);
+  });
+
   it("strips frontmatter", () => {
     expect(stripFrontmatter("---\ntitle: x\n---\n\n- [a] b")).toBe("- [a] b");
     expect(stripFrontmatter("- [a] b")).toBe("- [a] b");
@@ -184,6 +209,73 @@ describe("formatBrief", () => {
     const brief = formatBrief(huge, "p");
     expect(brief.length).toBeLessThanOrEqual(MAX_BRIEF_CHARS);
     expect(brief.endsWith("</memory-brief>")).toBe(true);
+  });
+});
+
+describe("inbox flow", () => {
+  it("recognises inbox notes by permalink prefix", () => {
+    expect(isInboxNote(`${INBOX_DIR}/a-gotcha`)).toBe(true);
+    expect(isInboxNote(INBOX_DIR)).toBe(true);
+    expect(isInboxNote("gotcha/a-gotcha")).toBe(false);
+    // A folder that merely starts with the word is not the inbox.
+    expect(isInboxNote("inboxes/x")).toBe(false);
+  });
+
+  it("splits a mixed list into inbox and active, order preserved", () => {
+    const list = [
+      note({ permalink: "inbox/one" }),
+      note({ permalink: "gotcha/two" }),
+      note({ permalink: "inbox/three" }),
+    ];
+    expect(inboxNotes(list).map((n) => n.permalink)).toEqual(["inbox/one", "inbox/three"]);
+    expect(activeNotes(list).map((n) => n.permalink)).toEqual(["gotcha/two"]);
+  });
+
+  it("promotes into the type folder, falling back to note for unknown types", () => {
+    expect(promotionFolder("gotcha")).toBe("gotcha");
+    expect(promotionFolder("correction")).toBe("correction");
+    expect(promotionFolder("")).toBe("note");
+    expect(promotionFolder("misc")).toBe("note");
+  });
+
+  it("auto-promotes only corrections", () => {
+    expect(autoPromotes("correction")).toBe(true);
+    expect(autoPromotes("gotcha")).toBe(false);
+    expect(autoPromotes("")).toBe(false);
+  });
+});
+
+describe("routableMemory", () => {
+  const on = (url: string, token = "tok"): Parameters<typeof routableMemory>[0] => ({
+    enabled: true,
+    url,
+    token,
+  });
+
+  it("passes a routable host with its token", () => {
+    expect(routableMemory(on("https://factory.mithril-studio.com/memory/mcp"))).toEqual({
+      url: "https://factory.mithril-studio.com/memory/mcp",
+      token: "tok",
+    });
+  });
+
+  it("drops loopback endpoints (useless to a VM)", () => {
+    expect(routableMemory(on("http://127.0.0.1:8765/mcp"))).toBeNull();
+    expect(routableMemory(on("http://localhost:8765/mcp"))).toBeNull();
+    expect(routableMemory(on("http://[::1]:8765/mcp"))).toBeNull();
+  });
+
+  it("drops when memory is off, blank, or malformed", () => {
+    expect(routableMemory({ enabled: false, url: "https://h/mcp", token: "t" })).toBeNull();
+    expect(routableMemory(on("   "))).toBeNull();
+    expect(routableMemory(on("not a url"))).toBeNull();
+  });
+});
+
+describe("brief write instruction", () => {
+  it("directs agents to the inbox", () => {
+    const brief = formatBrief([note({})], "powerhouse");
+    expect(brief).toContain("directory `inbox`");
   });
 });
 

@@ -17,7 +17,7 @@ import {
 } from "../lib/cloud";
 import { describeEvent, fmtAgo, latestActivity, presentMachine, presentRun, shortSha, type Tone } from "../lib/cloudView";
 import { importCloudResult } from "../lib/actions";
-import { quickSubmit } from "../lib/quickSubmit";
+import { quickSubmit, quickSubmitBranch } from "../lib/quickSubmit";
 import { DiffView } from "./DiffView";
 
 function dot(tone: Tone) {
@@ -95,6 +95,11 @@ export function CloudPane({ repo, branch }: { repo: Repo; branch?: Branch | null
   );
   const sourcePath = branch?.worktreePath ?? repo.path;
   const sourceLabel = branch?.name ?? repo.defaultBranch;
+  const sending = Boolean(quickStages[`${repo.id}:${sourceLabel}`]);
+  // Same payload as the Cloud button next to the chat tabs: the branch and
+  // its active chat. Only the repo root (no worktree selected) sends the
+  // branch and its plan document alone.
+  const send = () => (branch ? quickSubmitBranch(repo, branch) : quickSubmit(repo, sourcePath, sourceLabel));
   const settings = useAppStore((s) => s.settings);
   const cloud = cloudSettingsOf(settings);
   const [inventory, setInventory] = useState<Inventory | null>(null);
@@ -123,11 +128,16 @@ export function CloudPane({ repo, branch }: { repo: Repo; branch?: Branch | null
         <div className="mb-4 flex items-center gap-2">
           <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{repo.name}</span>
           <button
-            onClick={() => void quickSubmit(repo, sourcePath, sourceLabel)}
-            title={`Send ${sourceLabel} to the cloud: checkpoint, push, and run the plan doc on a boxd VM`}
-            className="h-7 shrink-0 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-all active:translate-y-px focus-visible:ring-3 focus-visible:ring-ring/50"
+            onClick={() => void send()}
+            disabled={sending}
+            title={
+              branch
+                ? `Send ${sourceLabel} and its active chat to the cloud: checkpoint, push, and continue on a boxd VM`
+                : `Send ${sourceLabel} to the cloud: checkpoint, push, and run the plan doc on a boxd VM`
+            }
+            className="h-7 shrink-0 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-all active:translate-y-px focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
           >
-            Send to cloud
+            {sending ? "Sending…" : "Send to cloud"}
           </button>
         </div>
         {failures.map((f) => (
@@ -145,7 +155,8 @@ export function CloudPane({ repo, branch }: { repo: Repo; branch?: Branch | null
               </button>
             </div>
             <p className="mt-1 text-muted-foreground">
-              Credentials and run defaults live in Settings; per-repo env vars in the repo's workflow settings.
+              A run needs the chat's conversation or a plan document under .powerhouse/. Credentials and run
+              defaults live in Settings; per-repo env vars in the repo's workflow settings.
             </p>
           </div>
         ))}

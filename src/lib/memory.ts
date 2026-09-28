@@ -33,6 +33,13 @@ export const MEMORY_SERVER_NAME = "powerhouse-memory";
 /** The scope every session reads besides its own project. */
 export const GLOBAL_PROJECT = "global";
 
+/** Fresh notes (agent writes and run checkpoints) land here, not in the active
+ *  tree. A human approves them on the Memory page, which moves each note out to
+ *  its type folder. Corrections are the exception: the user already said it, so
+ *  they auto-promote. Keeping this a plain directory means the same MCP a
+ *  session uses can write, list, and move — no extra server surface. */
+export const INBOX_DIR = "inbox";
+
 /** The note types the brief knows how to rank. Order = priority. */
 export const NOTE_TYPES = [
   "correction",
@@ -55,6 +62,26 @@ export function memoryProjectSlug(repoName: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
   return slug || "project";
+}
+
+/** Memory creds to hand a cloud run VM: the endpoint and its token, but only
+ *  when the endpoint is reachable from another machine. A loopback URL is the
+ *  laptop's own supervised server and means nothing on a VM, so it is dropped —
+ *  the run just goes without shared memory rather than pointing at itself. */
+export function routableMemory(memory: MemorySettings): { url: string; token: string } | null {
+  if (!memory.enabled) return null;
+  const url = memory.url.trim();
+  if (!url) return null;
+  let host: string;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return null;
+  }
+  if (host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]") {
+    return null;
+  }
+  return { url, token: memory.token };
 }
 
 /** ACP `mcpServers` entries for a session. Empty when memory is off. */
@@ -147,6 +174,27 @@ export function parseRecent(raw: unknown, project: string): BriefNote[] {
     .filter((n) => n.permalink);
 }
 
+/** Project names the memory server tracks, from `list_memory_projects` JSON.
+ *  Sorted and de-duplicated; empty on anything unexpected. */
+export function parseProjectList(raw: unknown): string[] {
+  // The list can arrive as a structured object or, on some transports, as a
+  // JSON string in a text block — accept both.
+  let value = raw;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return [];
+    }
+  }
+  const projects = ((value as Json | null)?.projects ?? []) as unknown[];
+  const names = projects
+    .filter((p): p is Json => typeof p === "object" && p !== null)
+    .map((p) => str(p.name))
+    .filter((n) => n);
+  return [...new Set(names)].sort();
+}
+
 const typeRank = (type: string): number => {
   const i = (NOTE_TYPES as readonly string[]).indexOf(type);
   return i === -1 ? NOTE_TYPES.length : i;
@@ -202,7 +250,7 @@ export function formatBrief(notes: BriefNote[], project: string): string {
     lines.push(...snippet, "");
   }
   lines.push(
-    `Before finishing: if you learned something not derivable from the code (a gotcha with cause and fix, a decision with rationale, a non-default convention), record it with write_note in project \`${project}\`, directory = its type (gotcha, procedure, convention, correction, decision, pointer), body as \`- [category] observation\` lines. Do not record what the code or docs already say.`,
+    `Before finishing: if you learned something not derivable from the code (a gotcha with cause and fix, a decision with rationale, a non-default convention), record it with write_note in project \`${project}\`, directory \`${INBOX_DIR}\`, note_type its kind (gotcha, procedure, convention, correction, decision, pointer), body as \`- [category] observation\` lines. A human reviews the inbox and approves it into memory. Do not record what the code or docs already say.`,
     "</memory-brief>",
   );
   let text = lines.join("\n");
@@ -237,6 +285,9 @@ export const memoryServerEnsure = (memory: MemorySettings) =>
 export interface Brief {
   text: string;
   count: number;
+  /** `project/permalink` of every note in the brief, for outcome labels: a
+   *  session that merges first pass credits the notes that shaped it. */
+  briefed: string[];
 }
 
 /** Search both scopes for the prompt, add recent activity, rank, render. */
@@ -287,7 +338,11 @@ export async function fetchBrief(
       }
     }),
   );
-  return { text: formatBrief(hydrated, project), count: hydrated.length };
+  return {
+    text: formatBrief(hydrated, project),
+    count: hydrated.length,
+    briefed: hydrated.map((n) => `${n.project}/${n.permalink}`),
+  };
 }
 
 /** Body without the YAML frontmatter block. */
@@ -295,3 +350,78 @@ export function stripFrontmatter(content: string): string {
   const match = /^---\n[\s\S]*?\n---\n?/.exec(content);
   return (match ? content.slice(match[0].length) : content).trim();
 }
+
+// ---- inbox / approve flow ---------------------------------------------------
+
+/** A note still awaiting approval: written into the inbox, not yet promoted. */
+export function isInboxNote(permalink: string): boolean {
+  return permalink === INBOX_DIR || permalink.startsWith(`${INBOX_DIR}/`);
+}
+
+/** The inbox subset of a note list, order preserved. */
+export function inboxNotes(notes: BriefNote[]): BriefNote[] {
+  return notes.filter((n) => isInboxNote(n.permalink));
+}
+
+/** The active (already-approved) subset. */
+export function activeNotes(notes: BriefNote[]): BriefNote[] {
+  return notes.filter((n) => !isInboxNote(n.permalink));
+}
+
+/** The folder an approved note moves into: its type, or `note` when the type
+ *  is missing or not one Powerhouse ranks. */
+export function promotionFolder(type: string): string {
+  return (NOTE_TYPES as readonly string[]).includes(type) ? type : "note";
+}
+
+/** Corrections auto-promote (the user already said it); everything else waits
+ *  for a click. */
+export function autoPromotes(type: string): boolean {
+  return type === "correction";
+}
+
+/** Move an inbox note into its type folder, out of the review queue. */
+export const promoteInboxNote = (memory: MemorySettings, note: BriefNote) =>
+  memoryCall(memory, "move_note", {
+    project: note.project,
+    identifier: note.permalink,
+    destination_folder: promotionFolder(note.type),
+  });
+
+/** Drop an inbox note without keeping it. */
+export const discardInboxNote = (memory: MemorySettings, note: BriefNote) =>
+  memoryCall(memory, "delete_note", {
+    project: note.project,
+    identifier: note.permalink,
+  });
+
+// ---- projects ---------------------------------------------------------------
+
+/** Every project the memory server tracks, by name. */
+export const listMemoryProjects = (memory: MemorySettings): Promise<string[]> =>
+  memoryCall(memory, "list_memory_projects", { output_format: "json" }).then(parseProjectList);
+
+/** Stop tracking a whole project. Note files stay on disk (`delete_notes`
+ *  defaults off), so the project can be re-added later; only the registry entry
+ *  and its index go. Callers must never pass `global`. The tool reports some
+ *  failures (e.g. a constrained server) as a plain `# Error` string rather than
+ *  a protocol error, so surface those as a throw too. */
+export const deleteMemoryProject = (memory: MemorySettings, project: string): Promise<unknown> =>
+  memoryCall<unknown>(memory, "delete_project", { project_name: project }).then((result) => {
+    if (typeof result === "string" && result.trimStart().startsWith("# Error")) {
+      throw new Error(result.trim());
+    }
+    return result;
+  });
+
+/** Rewrite an inbox note's body in place, before it is approved. Overwrites the
+ *  same file because the title and directory are unchanged. */
+export const saveInboxNote = (memory: MemorySettings, note: BriefNote, body: string) =>
+  memoryCall(memory, "write_note", {
+    project: note.project,
+    title: note.title,
+    content: body,
+    directory: INBOX_DIR,
+    note_type: note.type || "note",
+    overwrite: true,
+  });

@@ -279,6 +279,13 @@ pub struct SubmitRequest {
     /// travel only in the per-run credentials file.
     #[serde(default)]
     pub env_names: Vec<String>,
+    /// Shared memory host for the run VM: the routable endpoint and its bearer
+    /// token. Empty when memory is off or only reachable on the laptop's
+    /// loopback (a VM cannot reach that). Travels in the credentials file.
+    #[serde(default)]
+    pub memory_url: Option<String>,
+    #[serde(default)]
+    pub memory_token: Option<String>,
     /// Chat the send came from; the finished result returns here. `None` for
     /// Cloud-tab sends with no active chat.
     #[serde(default)]
@@ -498,6 +505,14 @@ fn manifest_temp_path(run_id: &str) -> PathBuf {
         .join(format!("{run_id}.json"))
 }
 
+/// The routable memory endpoint and token to hand a run VM, or None when
+/// memory is off or only on the laptop's loopback. Borrows from the request so
+/// the same helper serves both the advanced and quick submit paths.
+fn memory_creds<'a>(url: &'a Option<String>, token: &'a Option<String>) -> Option<(&'a str, &'a str)> {
+    let url = url.as_deref().map(str::trim).filter(|u| !u.is_empty())?;
+    Some((url, token.as_deref().unwrap_or("")))
+}
+
 /// The whole submission. Every step persists before its remote side effect.
 pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest) -> Result<CloudRunRecord, String> {
     let boxd = mgr.boxd.clone();
@@ -527,7 +542,8 @@ pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest
     let need_claude = manifest.agent.as_ref().is_some_and(|a| a.provider == AgentProvider::Claude);
     let git_remote = manifest.source.remote_url.starts_with("https://").then_some(manifest.source.remote_url.as_str());
     let project_env = secrets::project_env_values(mgr.secrets.as_ref(), &req.repo_id, &req.env_names)?;
-    let credentials_text = secrets::render_run_credentials(mgr.secrets.as_ref(), need_claude, git_remote, &project_env)?;
+    let memory = memory_creds(&req.memory_url, &req.memory_token);
+    let credentials_text = secrets::render_run_credentials(mgr.secrets.as_ref(), need_claude, git_remote, &project_env, memory)?;
     let vm_name = task_vm_name(source.branch.as_deref(), &run_id);
     let ceiling = Some(req.machine_ceiling.unwrap_or(DEFAULT_MACHINE_CEILING));
     // One live run per branch: the VM name is the branch's cloud identity, so
@@ -650,6 +666,9 @@ pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest
             persist(mgr, app, &record)?;
         }
 
+        // Keep a local copy of what travels, for debugging a run after the
+        // fact: `cloud-runs/<run id>/sent.json`. Best effort; never blocks.
+        write_sent_record(mgr, &run_id, &manifest, req.session.as_ref());
         // Transfer the manifest by file, then finalize with a digest check.
         let tmp = manifest_temp_path(&run_id);
         std::fs::create_dir_all(tmp.parent().unwrap()).map_err(|e| e.to_string())?;
@@ -783,6 +802,11 @@ pub struct QuickSubmitRequest {
     pub fake_script: Option<String>,
     #[serde(default)]
     pub env_names: Vec<String>,
+    /// Shared memory host for the run VM; see `SubmitRequest`.
+    #[serde(default)]
+    pub memory_url: Option<String>,
+    #[serde(default)]
+    pub memory_token: Option<String>,
     /// Chat the send came from (`branch.activeChatId`); the result returns here.
     #[serde(default)]
     pub chat_id: Option<String>,
@@ -831,7 +855,7 @@ pub fn do_quick_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: QuickSu
         Ok(env) => env,
         Err(e) => return attention("preflight", e),
     };
-    if let Err(e) = secrets::render_run_credentials(mgr.secrets.as_ref(), need_claude, git_remote, &project_env) {
+    if let Err(e) = secrets::render_run_credentials(mgr.secrets.as_ref(), need_claude, git_remote, &project_env, memory_creds(&req.memory_url, &req.memory_token)) {
         return attention("preflight", e);
     }
     let base = match find_snapshot(mgr.boxd.as_ref(), req.base_snapshot.trim()) {
@@ -845,6 +869,28 @@ pub fn do_quick_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: QuickSu
     if let Some(existing) = holding_run(mgr, &task_vm_name(Some(&branch), "")) {
         return attention("preflight", branch_conflict_message(Some(&branch), &existing));
     }
+    // What the agent will work from: the chat (when it has a transcript) and
+    // the plan document. Neither means the agent would only get a generated
+    // branch snapshot, which it cannot act on; refuse before touching git.
+    let plan = latest_brief_doc(&req.source_path);
+    let session = match req
+        .agent_session_id
+        .as_deref()
+        .filter(|sid| powerhouse_cloud_protocol::validate_run_id(sid).is_ok())
+    {
+        Some(sid) => match super::session::pack(&super::session::claude_home(), &worktree, sid) {
+            Ok(bundle) => bundle,
+            Err(e) => return attention("session", format!("could not pack the chat: {e}")),
+        },
+        None => None,
+    };
+    if plan.is_none() && session.is_none() {
+        return attention("context", missing_context_message(req.agent_session_id.is_some()));
+    }
+    let brief = match plan {
+        Some(doc) => doc.content,
+        None => stub_brief(&worktree),
+    };
 
     // Checkpoint: make the source clean so the strict `inspect_source` in
     // `do_submit` passes; `.powerhouse/` stays excluded from the commit.
@@ -868,24 +914,6 @@ pub fn do_quick_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: QuickSu
         return attention("push", format!("git push failed: {}", super::redact_stderr(&e)));
     }
 
-    let brief = match latest_brief_doc(&req.source_path) {
-        Some(doc) => doc.content,
-        None => stub_brief(&worktree),
-    };
-    // The chat itself. No transcript yet (a chat that never ran) means a
-    // brief-only run, exactly as before.
-    let session = match req
-        .agent_session_id
-        .as_deref()
-        .filter(|sid| powerhouse_cloud_protocol::validate_run_id(sid).is_ok())
-    {
-        Some(sid) => match super::session::pack(&super::session::claude_home(), &worktree, sid) {
-            Ok(bundle) => bundle,
-            Err(e) => return attention("session", format!("could not pack the chat: {e}")),
-        },
-        None => None,
-    };
-
     emit_quick_stage(app, &req.repo_id, &branch, "submitting");
     let submit = SubmitRequest {
         repo_id: req.repo_id.clone(),
@@ -908,6 +936,8 @@ pub fn do_quick_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: QuickSu
         fake_script: req.fake_script,
         brief,
         env_names: req.env_names,
+        memory_url: req.memory_url,
+        memory_token: req.memory_token,
         chat_id: req.chat_id,
         session,
     };
@@ -917,8 +947,22 @@ pub fn do_quick_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: QuickSu
     }
 }
 
-/// No plan document under `.powerhouse/`: a generated snapshot of the branch
-/// so the agent still has context beyond the fixed task line.
+/// Why a send with no chat transcript and no plan document is refused.
+pub fn missing_context_message(chat_attached: bool) -> String {
+    let chat = if chat_attached {
+        "the chat has no messages yet"
+    } else {
+        "no chat is attached (use the Cloud button next to the chat tabs to send the conversation)"
+    };
+    format!(
+        "nothing to work from: {chat}, and there is no plan document under `.powerhouse/` \
+         (a `handoff-*.md` or `*plan*.md`). Write the task in the chat or run /handoff first."
+    )
+}
+
+/// No plan document under `.powerhouse/` but the chat travels: a generated
+/// snapshot of the branch so the agent still has context beyond the fixed
+/// task line.
 fn stub_brief(worktree: &Path) -> String {
     let log = git(worktree, &["log", "--oneline", "-10"]).unwrap_or_default();
     let stat = git(worktree, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
@@ -1008,7 +1052,7 @@ fn https_auth_env_for(mgr: &CloudManager, remote: &str) -> Vec<(String, String)>
     if !remote.starts_with("https://") {
         return vec![];
     }
-    match secrets::render_run_credentials(mgr.secrets.as_ref(), false, Some(remote), &[]) {
+    match secrets::render_run_credentials(mgr.secrets.as_ref(), false, Some(remote), &[], None) {
         Ok(text) => text
             .lines()
             .find_map(|l| l.strip_prefix("GIT_PUBLISH_TOKEN=").map(|t| t.to_string()))
@@ -1038,6 +1082,33 @@ fn verify_remote_ref(mgr: &CloudManager, record: &CloudRunRecord) -> Result<(), 
         ));
     }
     Ok(())
+}
+
+/// What was sent to the VM, minus credentials: the manifest as uploaded (its
+/// brief included) and a summary of the chat bundle (never the transcript,
+/// which already lives under `~/.claude`). Best effort.
+fn write_sent_record(mgr: &CloudManager, run_id: &str, manifest: &RunManifest, session: Option<&SessionBundle>) {
+    let dir = mgr.store.lock().unwrap().cache_dir(run_id);
+    let session = session.filter(|_| manifest.session.is_some()).map(|b| {
+        serde_json::json!({
+            "session_id": b.session_id,
+            "cwd": b.cwd,
+            "claude_version": b.claude_version,
+            "bundle_bytes": b.to_bytes().len(),
+            "files": b.files.iter().map(|f| serde_json::json!({ "path": f.path, "bytes": f.content.len() })).collect::<Vec<_>>(),
+        })
+    });
+    let doc = serde_json::json!({
+        "written_at_ms": now_ms(),
+        "manifest": manifest,
+        "session": session,
+        "credentials": "per-run credentials travel in a separate file and are never stored locally",
+    });
+    if std::fs::create_dir_all(&dir).is_ok() {
+        if let Ok(bytes) = serde_json::to_vec_pretty(&doc) {
+            let _ = std::fs::write(dir.join("sent.json"), bytes);
+        }
+    }
 }
 
 fn diff_cache_path(mgr: &CloudManager, run_id: &str) -> PathBuf {
@@ -2210,7 +2281,7 @@ mod tests {
             machine_ceiling: None, checks: vec![],
             deadline_seconds: 900, permission_mode: "dontAsk".into(), allowed_tools: vec![], max_turns: None,
             max_budget_usd: None, model: None, provider: "fake".into(), fake_script: Some("complete".into()),
-            brief: "# Plan\n1. add file".into(), env_names: vec![], chat_id: None, session: None,
+            brief: "# Plan\n1. add file".into(), env_names: vec![], memory_url: None, memory_token: None, chat_id: None, session: None,
         }
     }
 
@@ -2461,6 +2532,12 @@ mod tests {
 
     /// Origin fetches over https (so the manifest validates) but pushes to
     /// the local bare remote, so quick submit's push lands somewhere real.
+    /// A plan document, so a send without a chat has something to work from.
+    fn write_plan(work: &str) {
+        std::fs::create_dir_all(Path::new(work).join(".powerhouse")).unwrap();
+        std::fs::write(Path::new(work).join(".powerhouse").join("handoff-1.md"), "# The plan\ndo the thing").unwrap();
+    }
+
     fn split_push_origin(work: &str, remote: &Path) {
         std::process::Command::new("git").arg("-C").arg(work).args(["remote", "set-url", "origin", "https://example.invalid/remote.git"]).output().unwrap();
         std::process::Command::new("git").arg("-C").arg(work).args(["config", "remote.origin.pushurl"]).arg(remote).output().unwrap();
@@ -2471,7 +2548,8 @@ mod tests {
             repo_id: "repo".into(), repo_path: source.into(), repo_name: "work".into(), source_path: source.into(),
             base_snapshot: base.into(), machine_ceiling: None, checks: vec![], deadline_seconds: 900,
             permission_mode: "dontAsk".into(), allowed_tools: vec![], max_turns: None, max_budget_usd: None,
-            model: None, provider: "fake".into(), fake_script: Some("complete".into()), env_names: vec![], chat_id: None,
+            model: None, provider: "fake".into(), fake_script: Some("complete".into()), env_names: vec![],
+            memory_url: None, memory_token: None, chat_id: None,
             agent_session_id: None,
         }
     }
@@ -2550,23 +2628,99 @@ mod tests {
     }
 
     #[test]
-    fn quick_submit_without_a_plan_doc_generates_a_stub_brief() {
+    fn quick_submit_without_a_plan_doc_or_chat_is_refused_before_any_side_effect() {
         let (dir, work, remote) = temp_repo_with(false);
         split_push_origin(&work, &remote);
+        std::fs::write(Path::new(&work).join("wip.txt"), "unfinished").unwrap();
         let fake = Arc::new(Fake { echo_submit: true, ..Default::default() });
         fake.snapshot("ph-test-base", "v1");
         fake.on_exec("probe", Ok(probe_json()));
         let mgr = manager(fake.clone(), dir.path());
         let out = do_quick_submit(&mgr, None, quick_request(&work, "ph-test-base")).unwrap();
-        let QuickSubmitOutcome::Accepted { record } = out else { panic!("{out:?}") };
-        let brief = &record.manifest.context.brief_markdown;
-        assert!(brief.contains("Recent commits") && brief.contains("init"), "{brief}");
+        let QuickSubmitOutcome::NeedsAttention { stage, reason } = out else { panic!("{out:?}") };
+        assert_eq!(stage, "context");
+        assert!(reason.contains("no chat is attached") && reason.contains("plan document"), "{reason}");
+        // Nothing moved: no checkpoint, no push, no machine, no record.
+        assert!(!git(Path::new(&work), &["status", "--porcelain"]).unwrap().trim().is_empty());
+        assert_ne!(git(Path::new(&work), &["log", "-1", "--format=%s"]).unwrap(), "WIP: send to cloud");
+        assert!(mgr.store.lock().unwrap().list().is_empty());
+        assert_eq!(fake.count("new "), 0);
+    }
+
+    #[test]
+    fn quick_submit_with_a_chat_that_never_ran_names_the_empty_chat() {
+        with_claude_home(|_home| {
+            let (dir, work, remote) = temp_repo_with(false);
+            split_push_origin(&work, &remote);
+            let fake = Arc::new(Fake { echo_submit: true, ..Default::default() });
+            fake.snapshot("ph-test-base", "v1");
+            fake.on_exec("probe", Ok(session_probe_json()));
+            let mgr = manager(fake.clone(), dir.path());
+            let mut req = quick_request(&work, "ph-test-base");
+            req.agent_session_id = Some(SID.into());
+            let out = do_quick_submit(&mgr, None, req).unwrap();
+            let QuickSubmitOutcome::NeedsAttention { stage, reason } = out else { panic!("{out:?}") };
+            assert_eq!(stage, "context");
+            assert!(reason.contains("no messages yet"), "{reason}");
+            assert!(mgr.store.lock().unwrap().list().is_empty());
+        });
+    }
+
+    #[test]
+    fn quick_submit_with_a_chat_but_no_plan_doc_sends_the_branch_snapshot_as_brief() {
+        with_claude_home(|home| {
+            let (dir, work, remote) = temp_repo_with(false);
+            split_push_origin(&work, &remote);
+            write_transcript(home, &work, &format!("{{\"cwd\":\"{work}\"}}\n"));
+            let fake = Arc::new(Fake { echo_submit: true, ..Default::default() });
+            fake.snapshot("ph-test-base", "v1");
+            fake.on_exec("probe", Ok(session_probe_json()));
+            let mgr = manager(fake.clone(), dir.path());
+            let mut req = quick_request(&work, "ph-test-base");
+            req.agent_session_id = Some(SID.into());
+            let QuickSubmitOutcome::Accepted { record } = do_quick_submit(&mgr, None, req).unwrap() else { panic!("expected accepted") };
+            let brief = &record.manifest.context.brief_markdown;
+            assert!(brief.contains("Recent commits") && brief.contains("init"), "{brief}");
+            assert!(record.session.is_some());
+        });
+    }
+
+    #[test]
+    fn what_was_sent_is_kept_next_to_the_run_without_credentials() {
+        with_claude_home(|home| {
+            let (dir, work, remote) = temp_repo_with(false);
+            split_push_origin(&work, &remote);
+            write_transcript(home, &work, &format!("{{\"cwd\":\"{work}\"}}\n"));
+            std::fs::create_dir_all(Path::new(&work).join(".powerhouse")).unwrap();
+            std::fs::write(Path::new(&work).join(".powerhouse").join("handoff-1.md"), "# The plan").unwrap();
+            let fake = Arc::new(Fake { echo_submit: true, ..Default::default() });
+            fake.snapshot("ph-test-base", "v1");
+            fake.on_exec("probe", Ok(session_probe_json()));
+            let store = mem_secrets(true, true);
+            store.set(&secrets::project_env_slot("repo", "FOO_API_KEY"), "supersecret123").unwrap();
+            let mgr = CloudManager::with(CloudStore::open(dir.path().join("cloud-runs.json")), fake.clone(), store);
+            let mut req = quick_request(&work, "ph-test-base");
+            req.agent_session_id = Some(SID.into());
+            req.env_names = vec!["FOO_API_KEY".into()];
+            let QuickSubmitOutcome::Accepted { record } = do_quick_submit(&mgr, None, req).unwrap() else { panic!("expected accepted") };
+            let path = mgr.store.lock().unwrap().cache_dir(&record.run_id).join("sent.json");
+            let text = std::fs::read_to_string(&path).unwrap();
+            let sent: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(sent["manifest"]["context"]["brief_markdown"], "# The plan");
+            assert_eq!(sent["manifest"]["run_id"], record.run_id);
+            assert_eq!(sent["session"]["session_id"], SID);
+            assert!(sent["session"]["bundle_bytes"].as_u64().unwrap() > 0);
+            assert!(!text.contains("supersecret123"), "credentials leaked into sent.json");
+            // The transcript itself stays out; only its path and size are listed.
+            assert!(!text.contains("{\\\"cwd\\\""), "transcript content leaked into sent.json: {text}");
+        });
     }
 
     #[test]
     fn quick_submit_second_click_points_at_the_live_run() {
         let (dir, work, remote) = temp_repo_with(false);
         split_push_origin(&work, &remote);
+        write_plan(&work);
         let fake = Arc::new(Fake { echo_submit: true, ..Default::default() });
         fake.snapshot("ph-test-base", "v1");
         fake.on_exec("probe", Ok(probe_json()));
@@ -2598,6 +2752,7 @@ mod tests {
     #[test]
     fn quick_submit_surfaces_push_failures_verbatim() {
         let (dir, work, _remote) = temp_repo_with(false);
+        write_plan(&work);
         let fake = base_fake();
         let mgr = manager(fake.clone(), dir.path());
         std::process::Command::new("git").arg("-C").arg(&work).args(["remote", "set-url", "origin", "/nonexistent/remote.git"]).output().unwrap();
@@ -2820,6 +2975,7 @@ mod tests {
         with_claude_home(|_home| {
             let (dir, work, remote) = temp_repo_with(false);
             split_push_origin(&work, &remote);
+            write_plan(&work);
             let fake = Arc::new(Fake { echo_submit: true, ..Default::default() });
             fake.snapshot("ph-test-base", "v1");
             fake.on_exec("probe", Ok(session_probe_json()));
@@ -2923,6 +3079,7 @@ mod tests {
     fn quick_submit_remembers_the_origin_chat() {
         let (dir, work, remote) = temp_repo_with(false);
         split_push_origin(&work, &remote);
+        write_plan(&work);
         let fake = Arc::new(Fake { echo_submit: true, ..Default::default() });
         fake.snapshot("ph-test-base", "v1");
         fake.on_exec("probe", Ok(probe_json()));
@@ -3423,6 +3580,8 @@ mod e2e {
             fake_script: (provider == "fake").then(|| script.clone()),
             brief: format!("# Plan\n\n1. Read the repository layout.\n2. {task}\n3. Make the acceptance check pass: it verifies {expect_file} exists.\n"),
             env_names: vec![],
+            memory_url: std::env::var("POWERHOUSE_CLOUD_E2E_MEMORY_URL").ok(),
+            memory_token: std::env::var("POWERHOUSE_CLOUD_E2E_MEMORY_TOKEN").ok(),
             chat_id: None,
             // POWERHOUSE_CLOUD_E2E_SESSION=<id>: continue that local Claude
             // session of the source checkout instead of starting fresh.
