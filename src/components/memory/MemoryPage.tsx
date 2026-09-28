@@ -38,7 +38,8 @@ async function fetchInbox(
 ): Promise<{ pending: BriefNote[]; promoted: number }> {
   const raw = await memoryCall(memory, "recent_activity", {
     project,
-    timeframe: "3650d",
+    // The server rejects any timeframe over a year; 365d is its ceiling.
+    timeframe: "365d",
     page_size: 100,
     output_format: "json",
   });
