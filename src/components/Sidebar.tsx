@@ -48,6 +48,7 @@ export function Sidebar() {
   const repos = useAppStore((s) => s.repos);
   const recentRepos = useAppStore((s) => s.recentRepos);
   const openSettings = useAppStore((s) => s.openSettings);
+  const settingsOpen = useAppStore((s) => s.settingsOpen);
   const openTelemetry = useAppStore((s) => s.openTelemetry);
   const closeTelemetry = useAppStore((s) => s.closeTelemetry);
   const closeSettings = useAppStore((s) => s.closeSettings);
@@ -249,10 +250,13 @@ export function Sidebar() {
           lines up with the chat's status bar across the divider. */}
       <div className="mt-auto flex h-12 shrink-0 items-center border-t border-border px-2">
         <button
-          onClick={() => openSettings()}
+          onClick={() => (settingsOpen ? closeSettings() : openSettings())}
           title="Settings"
           aria-label="Settings"
-          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+          aria-pressed={settingsOpen}
+          className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium hover:bg-muted hover:text-foreground ${
+            settingsOpen ? "bg-muted text-foreground" : "text-muted-foreground"
+          }`}
         >
           <svg
             viewBox="0 0 24 24"

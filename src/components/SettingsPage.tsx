@@ -678,20 +678,9 @@ export function SettingsPage() {
 
   return (
     <div className="fixed inset-y-0 right-0 left-60 z-40 flex flex-col border-l border-border bg-background">
-      {/* Draggable title strip (traffic-light overlay) with a close affordance. */}
-      <div
-        data-tauri-drag-region
-        className="flex h-11 shrink-0 items-center justify-end px-3"
-      >
-        <button
-          onClick={() => closeSettings()}
-          title="Close settings"
-          aria-label="Close settings"
-          className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-        >
-          ✕
-        </button>
-      </div>
+      {/* Draggable title strip (traffic-light overlay). The sidebar Settings
+          toggle opens and closes this panel, so there is no close button here. */}
+      <div data-tauri-drag-region className="h-11 shrink-0 px-3" />
 
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-4xl px-8 pb-16 pt-2">

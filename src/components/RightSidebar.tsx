@@ -350,7 +350,6 @@ export function RightSidebar({
 }) {
   const rightTab = useAppStore((s) => s.rightTab);
   const setRightTab = useAppStore((s) => s.setRightTab);
-  const toggleRightSidebar = useAppStore((s) => s.toggleRightSidebar);
   const [diffPath, setDiffPath] = useState<string | null>(null);
 
   // Reset the selected diff file when the branch changes.
@@ -377,14 +376,6 @@ export function RightSidebar({
             {t.label}
           </button>
         ))}
-        <button
-          onClick={toggleRightSidebar}
-          title="Close sidebar"
-          aria-label="Close right sidebar"
-          className="ml-0.5 flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-        >
-          ×
-        </button>
       </div>
 
       <div className="min-h-0 flex-1">
