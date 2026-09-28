@@ -127,7 +127,7 @@ pub(crate) fn detect_target_branch(root: &Path) -> String {
 mod tests {
     use super::{
         detect_target_branch, git, git_remove_worktree, git_target_commits, is_github_https,
-        parse_log, registered_worktrees, repo_name_from_url, resolve_worktree_base,
+        parse_log, registered_worktrees, remote_key, repo_name_from_url, resolve_worktree_base,
     };
     use std::path::Path;
 
@@ -135,6 +135,16 @@ mod tests {
         std::fs::write(work.join(file), msg).unwrap();
         git(work, &["add", "."]).unwrap();
         git(work, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", msg]).unwrap();
+    }
+
+    #[test]
+    fn remote_key_matches_spellings_of_the_same_repo() {
+        let k = remote_key("https://github.com/mithril-studio/legal-ai-app.git");
+        assert_eq!(k, "github.com/mithril-studio/legal-ai-app");
+        assert_eq!(remote_key("git@github.com:Mithril-Studio/legal-ai-app.git"), k);
+        assert_eq!(remote_key("https://www.github.com/mithril-studio/legal-ai-app/"), k);
+        assert_eq!(remote_key("ssh://git@github.com/mithril-studio/legal-ai-app"), k);
+        assert_ne!(remote_key("https://github.com/someone-else/legal-ai-app"), k);
     }
 
     #[test]
@@ -326,8 +336,21 @@ mod tests {
     }
 }
 
+/// Canonical `host/owner/repo` form of a remote URL, so HTTPS, SSH and
+/// `.git`-suffixed spellings of the same repository compare equal.
+fn remote_key(url: &str) -> String {
+    let u = url.trim().trim_end_matches('/').to_lowercase();
+    let u = u.strip_suffix(".git").unwrap_or(&u);
+    let u = u.split_once("://").map_or(u, |(_, rest)| rest);
+    let u = u.rsplit_once('@').map_or(u, |(_, rest)| rest);
+    let u = u.strip_prefix("www.").unwrap_or(u);
+    u.replacen(':', "/", 1)
+}
+
 /// Clone a git URL into `dest_parent` (default `~/conductor/repos`) and return
-/// the new repository's info. Never overwrites an existing directory.
+/// the new repository's info. Never overwrites an existing directory: if it is
+/// already a clone of the same remote (e.g. the project was removed from the
+/// app, which leaves the clone on disk), that clone is imported instead.
 #[tauri::command]
 pub fn git_clone_repo(url: String, dest_parent: Option<String>) -> Result<RepoInfo, String> {
     let url = url.trim().to_string();
@@ -343,6 +366,10 @@ pub fn git_clone_repo(url: String, dest_parent: Option<String>) -> Result<RepoIn
     std::fs::create_dir_all(&parent).map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
     let target = parent.join(&name);
     if target.exists() {
+        let existing = git(&target, &["remote", "get-url", "origin"]).unwrap_or_default();
+        if !existing.is_empty() && remote_key(&existing) == remote_key(&url) {
+            return git_validate_repo(target.to_string_lossy().to_string());
+        }
         return Err(format!("{} already exists — pick another location.", target.display()));
     }
     let target_str = target.to_string_lossy().to_string();
