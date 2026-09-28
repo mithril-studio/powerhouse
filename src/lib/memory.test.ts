@@ -17,6 +17,7 @@ import {
   memoryMcpServers,
   memoryProjectSlug,
   memorySessionMeta,
+  parseProjectList,
   parseRecent,
   parseSearchResults,
   promotionFolder,
@@ -124,6 +125,23 @@ describe("parsers", () => {
     expect(parseRecent(raw, "global")).toEqual([
       { title: "A", permalink: "global/decision/a", project: "global", type: "", snippet: "", updatedAt: "2026-09-20T00:00:00Z", score: 0 },
     ]);
+  });
+
+  it("reads the project list, sorted and de-duplicated", () => {
+    const raw = {
+      projects: [
+        { name: "powerhouse", permalink: "powerhouse" },
+        { name: "global", permalink: "global" },
+        { name: "powerhouse", permalink: "powerhouse" },
+        { permalink: "no-name" },
+      ],
+      default_project: "global",
+    };
+    expect(parseProjectList(raw)).toEqual(["global", "powerhouse"]);
+    expect(parseProjectList(JSON.stringify(raw))).toEqual(["global", "powerhouse"]);
+    expect(parseProjectList(null)).toEqual([]);
+    expect(parseProjectList({})).toEqual([]);
+    expect(parseProjectList("not json")).toEqual([]);
   });
 
   it("strips frontmatter", () => {

@@ -3,9 +3,11 @@ import { memorySettingsOf, useAppStore } from "../../store/appStore";
 import {
   activeNotes,
   autoPromotes,
+  deleteMemoryProject,
   discardInboxNote,
   GLOBAL_PROJECT,
   inboxNotes,
+  listMemoryProjects,
   memoryCall,
   memoryProjectSlug,
   memoryServerEnsure,
@@ -59,10 +61,17 @@ export function MemoryPage() {
   const repos = useAppStore((s) => s.repos);
   const memory = useMemo(() => memorySettingsOf(settings), [settings]);
 
+  const [serverProjects, setServerProjects] = useState<string[]>([]);
+
+  // Tabs are the repos you have added plus whatever the memory server itself
+  // tracks — so orphaned projects (a repo since removed) still show up and can
+  // be cleaned up here. Global always leads and is never listed twice.
   const projects = useMemo(() => {
-    const slugs = repos.map((r) => memoryProjectSlug(r.name));
-    return [GLOBAL_PROJECT, ...slugs.filter((s, i) => s !== GLOBAL_PROJECT && slugs.indexOf(s) === i)];
-  }, [repos]);
+    const all = [...repos.map((r) => memoryProjectSlug(r.name)), ...serverProjects].filter(
+      (s) => s !== GLOBAL_PROJECT,
+    );
+    return [GLOBAL_PROJECT, ...all.filter((s, i) => all.indexOf(s) === i)];
+  }, [repos, serverProjects]);
 
   const [project, setProject] = useState<string>(GLOBAL_PROJECT);
   const [view, setView] = useState<"inbox" | "browse">("inbox");
@@ -77,6 +86,8 @@ export function MemoryPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [acting, setActing] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(async () => {
     if (!memory.enabled) return;
@@ -109,6 +120,32 @@ export function MemoryPage() {
       setInbox([]);
     }
   }, [memory, project]);
+
+  const loadProjects = useCallback(async () => {
+    if (!memory.enabled) return;
+    try {
+      setServerProjects(await listMemoryProjects(memory));
+    } catch {
+      // Leave the repo-derived tabs as the fallback; the page still works.
+    }
+  }, [memory]);
+
+  const deleteProject = useCallback(async () => {
+    if (project === GLOBAL_PROJECT) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteMemoryProject(memory, project);
+      setConfirmDelete(false);
+      setSelected(null);
+      setProject(GLOBAL_PROJECT);
+      await loadProjects();
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setDeleting(false);
+    }
+  }, [memory, project, loadProjects]);
 
   const approve = useCallback(
     async (nt: BriefNote) => {
@@ -171,6 +208,7 @@ export function MemoryPage() {
         setStatus(s);
         void load();
         void loadInbox();
+        void loadProjects();
       })
       .catch((cause) => {
         setStatus("failed");
@@ -277,6 +315,7 @@ export function MemoryPage() {
                   onClick={() => {
                     setProject(p);
                     setSelected(null);
+                    setConfirmDelete(false);
                   }}
                   className={`-mb-px border-b pb-1.5 text-[11px] font-semibold uppercase tracking-wider ${
                     project === p
@@ -288,7 +327,39 @@ export function MemoryPage() {
                 </button>
               ))}
             </div>
-            <div className="mb-1 flex items-center gap-1 rounded-lg bg-muted p-0.5">
+            <div className="mb-1 flex items-center gap-2">
+              {project !== GLOBAL_PROJECT &&
+                (confirmDelete ? (
+                  <span className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      disabled={deleting}
+                      onClick={() => void deleteProject()}
+                      title={`Remove ${project} from memory. Note files stay on disk.`}
+                      className="rounded-md bg-destructive/10 px-2 py-0.5 text-[11px] font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50"
+                    >
+                      {deleting ? "Deleting…" : `Delete ${project}`}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={deleting}
+                      onClick={() => setConfirmDelete(false)}
+                      className="rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(true)}
+                    title={`Delete project ${project}`}
+                    className="rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:border-destructive hover:text-destructive"
+                  >
+                    Delete project
+                  </button>
+                ))}
+              <div className="flex items-center gap-1 rounded-lg bg-muted p-0.5">
               {(["inbox", "browse"] as const).map((v) => (
                 <button
                   key={v}
@@ -305,6 +376,7 @@ export function MemoryPage() {
                   {v === "inbox" && inbox.length > 0 ? ` (${inbox.length})` : ""}
                 </button>
               ))}
+              </div>
             </div>
           </div>
 

@@ -174,6 +174,27 @@ export function parseRecent(raw: unknown, project: string): BriefNote[] {
     .filter((n) => n.permalink);
 }
 
+/** Project names the memory server tracks, from `list_memory_projects` JSON.
+ *  Sorted and de-duplicated; empty on anything unexpected. */
+export function parseProjectList(raw: unknown): string[] {
+  // The list can arrive as a structured object or, on some transports, as a
+  // JSON string in a text block — accept both.
+  let value = raw;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return [];
+    }
+  }
+  const projects = ((value as Json | null)?.projects ?? []) as unknown[];
+  const names = projects
+    .filter((p): p is Json => typeof p === "object" && p !== null)
+    .map((p) => str(p.name))
+    .filter((n) => n);
+  return [...new Set(names)].sort();
+}
+
 const typeRank = (type: string): number => {
   const i = (NOTE_TYPES as readonly string[]).indexOf(type);
   return i === -1 ? NOTE_TYPES.length : i;
@@ -372,6 +393,25 @@ export const discardInboxNote = (memory: MemorySettings, note: BriefNote) =>
   memoryCall(memory, "delete_note", {
     project: note.project,
     identifier: note.permalink,
+  });
+
+// ---- projects ---------------------------------------------------------------
+
+/** Every project the memory server tracks, by name. */
+export const listMemoryProjects = (memory: MemorySettings): Promise<string[]> =>
+  memoryCall(memory, "list_memory_projects", { output_format: "json" }).then(parseProjectList);
+
+/** Stop tracking a whole project. Note files stay on disk (`delete_notes`
+ *  defaults off), so the project can be re-added later; only the registry entry
+ *  and its index go. Callers must never pass `global`. The tool reports some
+ *  failures (e.g. a constrained server) as a plain `# Error` string rather than
+ *  a protocol error, so surface those as a throw too. */
+export const deleteMemoryProject = (memory: MemorySettings, project: string): Promise<unknown> =>
+  memoryCall<unknown>(memory, "delete_project", { project_name: project }).then((result) => {
+    if (typeof result === "string" && result.trimStart().startsWith("# Error")) {
+      throw new Error(result.trim());
+    }
+    return result;
   });
 
 /** Rewrite an inbox note's body in place, before it is approved. Overwrites the
