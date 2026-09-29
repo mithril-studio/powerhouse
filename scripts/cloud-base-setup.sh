@@ -114,6 +114,11 @@ if [[ $RESET == 1 ]]; then
   x sudo sh -c 'systemctl stop "powerhouse-run-*.service" 2>/dev/null; rm -rf /var/lib/powerhouse-runner/runner.db* /var/lib/powerhouse-runner/results /var/lib/powerhouse-runner/publish /var/lib/powerhouse-runner/credentials /var/lib/powerhouse-runner-work/*; echo reset'
 fi
 
+echo "→ updating Claude Code to the latest release"
+# The image's Claude ages; new models refuse older CLIs ("version X or newer is
+# required"), so every publish ships the current one.
+x sh -c 'PATH=$HOME/.local/bin:/usr/local/bin:$PATH; claude update >/tmp/claude-update.log 2>&1 || sudo env PATH="$PATH" claude update >>/tmp/claude-update.log 2>&1 || { cat /tmp/claude-update.log; exit 1; }; claude --version'
+
 echo "→ staging Claude for the unprivileged agent identity (/opt/powerhouse/bin)"
 # The image installs Claude under /home/boxd, which powerhouse-agent cannot
 # traverse. Copy the native binary (or wrapper + node) to a world-readable path.
