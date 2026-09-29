@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(scripts/land.sh)",
+      "Bash(scripts/land.sh:*)",
+      "Bash(./scripts/land.sh)",
+      "Bash(./scripts/land.sh:*)",
+      "Bash(scripts/status.sh)",
+      "Bash(scripts/status.sh:*)",
+      "Bash(./scripts/status.sh)",
+      "Bash(./scripts/status.sh:*)"
+    ]
+  }
+}
