@@ -509,6 +509,7 @@ pub fn git_create_worktree(
             git(&repo, &args).map(|_| worktree_str).map_err(|_| first_err)?
         }
     };
+    let _ = git(&repo, &["config", &format!("branch.{branch}.{WORKTREE_MARK}"), "true"]);
     crate::handoff::ensure_powerhouse_dir(Path::new(&created));
     Ok(created)
 }
@@ -723,6 +724,80 @@ fn prune_archived_at(repo: &Path, now: u64) -> Result<u32, String> {
     Ok(pruned)
 }
 
+/// Git config key set on branches the app creates for a worktree, so the
+/// sweep knows a branch whose worktree is gone was ours to clean up.
+const WORKTREE_MARK: &str = "powerhouseworktree";
+/// How far back on the target the sweep looks for a branch's commit subjects.
+const LANDED_SUBJECTS_MAX: &str = "--max-count=1000";
+
+/// Archive local branches that no longer need to be in the branch picker:
+/// branches without a worktree whose work is on `origin/<target>`, whose
+/// upstream was deleted, or whose app-created worktree is gone. Branches
+/// checked out anywhere, the target, and the remote's default are never
+/// touched. Archiving keeps them restorable for 3 days. Returns the names.
+#[tauri::command]
+pub fn git_sweep_branches(repo_path: String, target: String, fetch: bool) -> Result<Vec<String>, String> {
+    let repo = PathBuf::from(&repo_path);
+    if fetch {
+        let _ = fetch_origin(&repo);
+    }
+    sweep_branches_at(&repo, &target, unix_now())
+}
+
+fn sweep_branches_at(repo: &Path, target: &str, now: u64) -> Result<Vec<String>, String> {
+    let _ = git(repo, &["worktree", "prune"]);
+    let checked_out: Vec<String> = git(repo, &["worktree", "list", "--porcelain"])
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.strip_prefix("branch refs/heads/"))
+        .map(String::from)
+        .collect();
+    let mut protected = vec![target.to_string(), "main".to_string(), "master".to_string()];
+    if let Ok(head) = git(repo, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]) {
+        protected.push(head.trim_start_matches("origin/").to_string());
+    }
+
+    let target_ref = format!("refs/remotes/origin/{target}");
+    let has_target = git(repo, &["rev-parse", "--verify", "--quiet", &target_ref]).is_ok();
+    let landed_subjects: std::collections::HashSet<String> = if has_target {
+        git(repo, &["log", LANDED_SUBJECTS_MAX, "--format=%s", &target_ref])
+            .unwrap_or_default()
+            .lines()
+            .map(String::from)
+            .collect()
+    } else {
+        Default::default()
+    };
+
+    let heads = git(repo, &["for-each-ref", "--format=%(refname:short)%09%(upstream:track)", "refs/heads"])?;
+    let mut archived = Vec::new();
+    for line in heads.lines() {
+        let (branch, track) = line.split_once('\t').unwrap_or((line, ""));
+        if branch.is_empty() || protected.iter().any(|p| p == branch) || checked_out.iter().any(|c| c == branch) {
+            continue;
+        }
+        let ours = git(repo, &["config", "--bool", &format!("branch.{branch}.{WORKTREE_MARK}")])
+            .is_ok_and(|v| v == "true");
+        let stale = ours
+            || track == "[gone]"
+            || (has_target && is_landed(repo, branch, &target_ref, &landed_subjects));
+        if stale && archive_branch_at(repo, branch, target, now).is_ok() {
+            archived.push(branch.to_string());
+        }
+    }
+    Ok(archived)
+}
+
+/// Every commit on `branch` is on the target: it is an ancestor, the target
+/// has a patch-equivalent commit (rebased landing), or one with the same
+/// subject (landed after conflict resolution or a squash of one commit).
+fn is_landed(repo: &Path, branch: &str, target_ref: &str, landed_subjects: &std::collections::HashSet<String>) -> bool {
+    let Ok(cherry) = git(repo, &["cherry", target_ref, branch]) else { return false };
+    cherry.lines().filter_map(|l| l.strip_prefix("+ ")).all(|sha| {
+        git(repo, &["log", "-1", "--format=%s", sha]).is_ok_and(|s| landed_subjects.contains(&s))
+    })
+}
+
 #[derive(serde::Serialize)]
 pub struct ChangedFile {
     path: String,
@@ -900,5 +975,77 @@ mod archive_tests {
         let dir = repo_with_branch("feat");
         assert_eq!(archive_branch_at(dir.path(), "nope", "main", 0), Ok(()));
         assert!(archive_branch_at(dir.path(), "main", "main", 0).is_err());
+    }
+
+    /// A commit with real content: empty commits all share one patch-id.
+    fn commit(p: &Path, msg: &str) {
+        std::fs::write(p.join(slugify(msg)), msg).unwrap();
+        git(p, &["add", "-A"]).unwrap();
+        git(p, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", msg]).unwrap();
+    }
+
+    fn heads(dir: &tempfile::TempDir) -> Vec<String> {
+        let out = git(dir.path(), &["for-each-ref", "--format=%(refname:short)", "refs/heads"]).unwrap();
+        out.lines().map(String::from).collect()
+    }
+
+    /// A repo on `main` with a `test` branch mirrored to `refs/remotes/origin/test`.
+    fn repo_with_origin_test() -> tempfile::TempDir {
+        let dir = repo_with_branch("test");
+        git(dir.path(), &["update-ref", "refs/remotes/origin/test", "test"]).unwrap();
+        dir
+    }
+
+    #[test]
+    fn sweep_archives_landed_branches_and_keeps_unlanded_work() {
+        let dir = repo_with_origin_test();
+        let p = dir.path();
+        // Landed as-is.
+        git(p, &["branch", "landed"]).unwrap();
+        // Landed with a different sha (rebased onto a moved target).
+        git(p, &["checkout", "-q", "-b", "rebased"]).unwrap();
+        commit(p, "feat: rebased work");
+        // Not landed.
+        git(p, &["checkout", "-q", "-b", "unlanded", "main"]).unwrap();
+        commit(p, "feat: still in progress");
+        git(p, &["checkout", "-q", "test"]).unwrap();
+        commit(p, "other: moves the target");
+        commit(p, "feat: rebased work");
+        git(p, &["update-ref", "refs/remotes/origin/test", "test"]).unwrap();
+        git(p, &["checkout", "-q", "main"]).unwrap();
+
+        let mut archived = sweep_branches_at(p, "test", 1000).unwrap();
+        archived.sort();
+        assert_eq!(archived, vec!["landed", "rebased"]);
+        assert_eq!(heads(&dir), vec!["main", "test", "unlanded"]);
+        assert_eq!(refs(&dir, ARCHIVE_PREFIX).len(), 2);
+    }
+
+    #[test]
+    fn sweep_never_touches_checked_out_or_protected_branches() {
+        let dir = repo_with_origin_test();
+        let p = dir.path();
+        git(p, &["checkout", "-q", "-b", "current"]).unwrap();
+        let wt = tempfile::tempdir().unwrap();
+        let wt_path = wt.path().join("wt");
+        git(p, &["worktree", "add", "-q", "-b", "in-worktree", wt_path.to_str().unwrap(), "test"]).unwrap();
+
+        assert!(sweep_branches_at(p, "test", 1000).unwrap().is_empty());
+        assert_eq!(heads(&dir), vec!["current", "in-worktree", "main", "test"]);
+    }
+
+    #[test]
+    fn sweep_archives_app_branches_whose_worktree_is_gone() {
+        let dir = repo_with_origin_test();
+        let p = dir.path();
+        git(p, &["checkout", "-q", "-b", "orphan"]).unwrap();
+        commit(p, "feat: never landed");
+        git(p, &["checkout", "-q", "-b", "manual", "main"]).unwrap();
+        commit(p, "feat: a hand-made branch");
+        git(p, &["checkout", "-q", "main"]).unwrap();
+        git(p, &["config", &format!("branch.orphan.{WORKTREE_MARK}"), "true"]).unwrap();
+
+        assert_eq!(sweep_branches_at(p, "test", 1000).unwrap(), vec!["orphan"]);
+        assert_eq!(heads(&dir), vec!["main", "manual", "test"]);
     }
 }

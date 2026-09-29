@@ -14,6 +14,7 @@ import {
   gitArchiveBranch,
   gitPruneArchivedBranches,
   gitRemoveWorktree,
+  gitSweepBranches,
   gitValidateRepo,
   queueCancel,
   queueDismiss,
@@ -209,11 +210,17 @@ export async function deleteBranch(repoId: string, branchId: string) {
 
 const ARCHIVE_SWEEP_MS = 60 * 60 * 1000;
 
-/** Delete archived branches past their 3 days, now and hourly after. */
+/**
+ * Archive stale branches (landed on the target, upstream gone, worktree gone)
+ * and delete archives past their 3 days, now and hourly after.
+ */
 export function startArchivedBranchSweep() {
   const sweep = () => {
     for (const repo of useAppStore.getState().repos) {
-      void gitPruneArchivedBranches(repo.path).catch(() => {});
+      void gitSweepBranches(repo.path, repo.defaultBranch, true)
+        .catch(() => {})
+        .then(() => gitPruneArchivedBranches(repo.path))
+        .catch(() => {});
     }
   };
   sweep();
