@@ -83,6 +83,9 @@ pub struct CloudWorkspace {
     /// Claude session on the VM; follow-up turns resume it.
     pub session_id: Option<String>,
     pub last_result: Option<TurnResult>,
+    /// Also write the project env vars to `~/repo/.env` before each turn.
+    #[serde(default)]
+    pub write_env_file: bool,
 }
 
 // --- store -----------------------------------------------------------------------
@@ -312,6 +315,16 @@ pub fn line_length_command(turn: u32, offset: u64) -> String {
     format!(r#"tail -c +{} "$HOME/.ph/turn-{turn}.jsonl" | head -n 1 | wc -c"#, offset + 1)
 }
 
+/// Printed by [`WRITE_DOTENV_COMMAND`] when git would not ignore `.env`.
+pub const DOTENV_NOT_IGNORED: &str = "PH_DOTENV_NOT_IGNORED";
+
+/// Moves the uploaded `~/.ph/dotenv` to `~/repo/.env` (mode 600), but only when
+/// git ignores `.env` there: a tracked or unignored file could be committed.
+/// The staged copy is removed either way.
+pub const WRITE_DOTENV_COMMAND: &str = r#"cd "$HOME/repo" || exit 1
+if ! git check-ignore -q .env; then rm -f "$HOME/.ph/dotenv"; echo PH_DOTENV_NOT_IGNORED; exit 3; fi
+install -m 600 "$HOME/.ph/dotenv" .env && rm -f "$HOME/.ph/dotenv""#;
+
 /// What the VM clone looks like after a turn: `HEAD`, commits not on the
 /// remote, uncommitted paths. One per line.
 pub const INSPECT_COMMAND: &str = r#"cd "$HOME/repo" && git rev-parse HEAD && (git rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0) && git status --porcelain | wc -l"#;
@@ -525,6 +538,7 @@ mod tests {
             log_offset: 10,
             session_id: None,
             last_result: None,
+            write_env_file: false,
         };
         store.put(ws.clone()).unwrap();
         assert_eq!(Store::open(path.clone()).items, vec![ws]);

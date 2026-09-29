@@ -163,6 +163,8 @@ export interface Repo {
   pushOnMerge: boolean;
   /** Env var names injected into this repo's cloud workspaces; values live in the Keychain. */
   cloudEnvNames?: string[];
+  /** Also write those vars to `.env` in the VM's clone (only when git ignores it). */
+  cloudWriteEnvFile?: boolean;
   /** Tucked out of the project list until "Show hidden projects" is toggled on. */
   hidden?: boolean;
 }
@@ -289,6 +291,7 @@ interface AppState extends PersistedTree {
   /** The branch new worktrees are cut from and the merge queue lands on. */
   setDefaultBranch: (repoId: string, branch: string) => void;
   setRepoEnvNames: (repoId: string, names: string[]) => void;
+  setRepoWriteEnvFile: (repoId: string, on: boolean) => void;
   toggleRightSidebar: () => void;
   setRightTab: (tab: RightTab) => void;
   setRightSidebarWidth: (width: number) => void;
@@ -855,6 +858,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   setRepoEnvNames: (repoId, names) =>
     set((s) => ({
       repos: updateRepo(s.repos, repoId, (r) => ({ ...r, cloudEnvNames: names })),
+    })),
+  setRepoWriteEnvFile: (repoId, on) =>
+    set((s) => ({
+      repos: updateRepo(s.repos, repoId, (r) => ({ ...r, cloudWriteEnvFile: on })),
     })),
 
   toggleRightSidebar: () => set((s) => ({ rightSidebarOpen: !s.rightSidebarOpen })),

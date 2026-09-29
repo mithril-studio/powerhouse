@@ -58,6 +58,7 @@ export interface CloudWorkspace {
   logOffset: number;
   sessionId: string | null;
   lastResult: TurnResult | null;
+  writeEnvFile: boolean;
 }
 
 interface PollResult {
@@ -99,13 +100,14 @@ interface StartRequest {
   model: string | null;
   handoff: string;
   envNames: string[];
+  writeEnvFile: boolean;
 }
 
 export const cloudWorkspaceList = () => invoke<CloudWorkspace[]>("cloud_workspace_list");
 const cloudWorkspaceStart = (request: StartRequest) =>
   invoke<CloudWorkspace>("cloud_workspace_start", { request });
-const cloudWorkspaceSend = (id: string, text: string, envNames: string[]) =>
-  invoke<CloudWorkspace>("cloud_workspace_send", { id, text, envNames });
+const cloudWorkspaceSend = (id: string, text: string, envNames: string[], writeEnvFile: boolean) =>
+  invoke<CloudWorkspace>("cloud_workspace_send", { id, text, envNames, writeEnvFile });
 const cloudWorkspacePoll = (id: string) => invoke<PollResult>("cloud_workspace_poll", { id });
 const cloudWorkspaceStop = (id: string) => invoke<void>("cloud_workspace_stop", { id });
 const cloudWorkspaceArchive = (id: string) => invoke<void>("cloud_workspace_archive", { id });
@@ -275,6 +277,7 @@ export async function sendChatToCloud(repo: Repo, branch: Branch) {
       model,
       handoff,
       envNames: repo.cloudEnvNames ?? [],
+      writeEnvFile: repo.cloudWriteEnvFile ?? false,
     });
     useAppStore.getState().setCloudWorkspace(w);
     note(
@@ -292,10 +295,13 @@ export async function sendChatToCloud(repo: Repo, branch: Branch) {
 export async function messageCloud(w: CloudWorkspace, text: string) {
   if (!w.chatId) return;
   mutateChat(w.chatId, (items) => appendUserMessage(items, text));
-  const envNames =
-    useAppStore.getState().repos.find((r) => r.id === w.repoId)?.cloudEnvNames ?? [];
+  const repo = useAppStore.getState().repos.find((r) => r.id === w.repoId);
   try {
-    useAppStore.getState().setCloudWorkspace(await cloudWorkspaceSend(w.id, text, envNames));
+    useAppStore
+      .getState()
+      .setCloudWorkspace(
+        await cloudWorkspaceSend(w.id, text, repo?.cloudEnvNames ?? [], repo?.cloudWriteEnvFile ?? false),
+      );
   } catch (cause) {
     note(w.chatId, `Cloud: ${String(cause)}`, "error");
   }

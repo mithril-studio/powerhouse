@@ -218,7 +218,7 @@ pub const RESERVED_ENV: [&str; 2] = ["CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN"];
 /// Parses a `.env` file into `(name, value)` pairs, in first-seen order with
 /// the last duplicate's value, plus the number of lines that were skipped as
 /// invalid. Blank lines and `#` comments are ignored; `export ` is optional;
-/// matching quotes are stripped (double quotes unescape `\n` and `\"`), and an
+/// matching quotes are stripped (double quotes unescape `\n`, `\"` and `\\`), and an
 /// unquoted value ends at ` #`.
 pub fn parse_dotenv(text: &str) -> (Vec<(String, String)>, usize) {
     let mut out: Vec<(String, String)> = vec![];
@@ -270,6 +270,7 @@ fn dotenv_value(raw: &str) -> Option<String> {
             '\\' => match chars.next() {
                 Some('n') => value.push('\n'),
                 Some('"') => value.push('"'),
+                Some('\\') => value.push('\\'),
                 Some(other) => {
                     value.push('\\');
                     value.push(other);
@@ -280,6 +281,32 @@ fn dotenv_value(raw: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// `NAME=value` lines for a repo's `.env`, readable by common dotenv parsers:
+/// bare when the value is plain, single-quoted when it has no `'`, else
+/// double-quoted with `\` and `"` escaped. A value with a line break is
+/// refused rather than written in a form some parser would split.
+pub fn render_dotenv(vars: &[(String, String)]) -> Result<String, String> {
+    let mut out = String::new();
+    for (name, value) in vars {
+        if !is_env_var_name(name) {
+            return Err(format!("`{name}` is not a valid environment variable name"));
+        }
+        if value.contains(['\n', '\r']) {
+            return Err(format!("{name} has a line break, which a .env file cannot hold safely"));
+        }
+        let plain = value.chars().all(|c| c.is_ascii_alphanumeric() || "_./:@+,-".contains(c));
+        let rendered = if plain {
+            value.clone()
+        } else if !value.contains('\'') {
+            format!("'{value}'")
+        } else {
+            format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+        };
+        out.push_str(&format!("{name}={rendered}\n"));
+    }
+    Ok(out)
 }
 
 /// `export NAME='value'` lines, single-quoted so any value survives `source`.
@@ -349,6 +376,24 @@ mod tests {
         let file = render_env_file(&[("A".into(), "it's $HOME".into()), ("B".into(), "x".into())]).unwrap();
         assert_eq!(file, "export A='it'\\''s $HOME'\nexport B='x'\n");
         assert!(render_env_file(&[("1BAD".into(), "x".into())]).is_err());
+    }
+
+    #[test]
+    fn dotenv_rendering_quotes_as_needed_and_refuses_line_breaks() {
+        let vars = [
+            ("PLAIN".to_string(), "abc-1.2/x@y".to_string()),
+            ("SPACE".to_string(), "a b $HOME".to_string()),
+            ("QUOTE".to_string(), r#"it's "x" \y"#.to_string()),
+            ("EMPTY".to_string(), String::new()),
+        ];
+        let file = render_dotenv(&vars).unwrap();
+        assert_eq!(file, "PLAIN=abc-1.2/x@y\nSPACE='a b $HOME'\nQUOTE=\"it's \\\"x\\\" \\\\y\"\nEMPTY=\n");
+        // What we write, we read back unchanged.
+        let (back, invalid) = parse_dotenv(&file);
+        assert_eq!(invalid, 0);
+        assert_eq!(back, vars);
+        assert!(render_dotenv(&[("A".into(), "x\ny".into())]).unwrap_err().contains("line break"));
+        assert!(render_dotenv(&[("1A".into(), "x".into())]).is_err());
     }
 
     #[test]

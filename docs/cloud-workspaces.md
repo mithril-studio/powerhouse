@@ -9,7 +9,10 @@ The **Cloud** button continues the active chat and its branch on a boxd VM. One 
 3. VM `ph-<branch-slug>` is created, or reused and started. Fresh boxd machines already have
    `claude`, `node`, `git` and `gh`; no snapshot is involved.
 4. `~/.ph/env` gets the Claude token, a GitHub token and the repo's env vars (outside the repo, so the
-   agent can never commit them). `~/repo` is cloned or fetched and reset to the pushed branch.
+   agent can never commit them). `run.sh` sources it with `set -a`, so the agent and everything it runs
+   see them. `~/repo` is cloned or fetched and reset to the pushed branch. With **Also write `.env`**
+   on (project settings), the project vars (never the tokens) are also written to `~/repo/.env` with
+   mode 600, but only when `git check-ignore` says git ignores it; otherwise the turn refuses to start.
 5. The chat becomes a prompt (`## User` / `## Assistant` turns, tools left out) and `claude -p` starts
    detached with the chat's model and `--dangerously-skip-permissions` (the VM is the sandbox).
 6. Powerhouse reads `~/.ph/turn-<n>.jsonl` from a byte offset every 2.5 s and renders it in the same chat.

@@ -30,6 +30,7 @@ export function ProjectSettingsPage() {
   const close = useAppStore((s) => s.closeProjectSettings);
   const setWorkflow = useAppStore((s) => s.setWorkflow);
   const setDefaultBranch = useAppStore((s) => s.setDefaultBranch);
+  const setRepoWriteEnvFile = useAppStore((s) => s.setRepoWriteEnvFile);
 
   const [steps, setSteps] = useState<WorkflowStep[]>([]);
   const [pushOnMerge, setPushOnMerge] = useState(true);
@@ -218,6 +219,17 @@ export function ProjectSettingsPage() {
             description="Exported to this project's cloud workspaces. Values stay in your Keychain; changes save immediately."
           >
             <RepoEnvEditor repo={repo} />
+            <label className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={repo.cloudWriteEnvFile ?? false}
+                onChange={(e) => setRepoWriteEnvFile(repo.id, e.target.checked)}
+                className="size-3.5 accent-accent-brand"
+              />
+              <span>
+                Also write <code>.env</code> in the repo on the VM (only if git ignores it).
+              </span>
+            </label>
           </Section>
         </div>
       </div>

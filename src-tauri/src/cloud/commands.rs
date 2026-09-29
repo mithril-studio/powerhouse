@@ -80,6 +80,9 @@ pub struct StartRequest {
     /// The chat handed off as text; empty = provision only and wait for a prompt.
     pub handoff: String,
     pub env_names: Vec<String>,
+    /// Also write the project env vars to `~/repo/.env` on the VM.
+    #[serde(default)]
+    pub write_env_file: bool,
 }
 
 // --- start -----------------------------------------------------------------------
@@ -174,6 +177,7 @@ pub fn begin(mgr: &CloudManager, notify: Notify, req: &StartRequest) -> Result<C
             w.branch_name = branch.clone();
             w.session_id = None;
             w.last_result = None;
+            w.write_env_file = req.write_env_file;
             w
         }
         None => CloudWorkspace {
@@ -196,6 +200,7 @@ pub fn begin(mgr: &CloudManager, notify: Notify, req: &StartRequest) -> Result<C
             log_offset: 0,
             session_id: None,
             last_result: None,
+            write_env_file: req.write_env_file,
         },
     };
     w.status = Status::Creating;
@@ -250,6 +255,9 @@ fn provision_inner(mgr: &CloudManager, notify: Notify, w: &mut CloudWorkspace, r
     upload(mgr.boxd.as_ref(), &w.vm_name, "run.sh", ws::RUN_SCRIPT.as_bytes())?;
     exec_ok(mgr.boxd.as_ref(), &w.vm_name, &ws::setup_script(&w.remote_url, &w.branch_name, &name, &email), SETUP_TIMEOUT)
         .map_err(|e| format!("preparing the clone failed: {}", super::redact_stderr(&e)))?;
+    if w.write_env_file {
+        write_dotenv(mgr, w, &req.env_names)?;
+    }
 
     if req.handoff.trim().is_empty() {
         w.status = Status::Ready;
@@ -289,7 +297,7 @@ fn launch_turn(mgr: &CloudManager, notify: Notify, w: &mut CloudWorkspace, promp
 
 // --- send / stop / archive -------------------------------------------------------
 
-pub fn send(mgr: &CloudManager, notify: Notify, id: &str, text: &str, env_names: &[String]) -> Result<CloudWorkspace, String> {
+pub fn send(mgr: &CloudManager, notify: Notify, id: &str, text: &str, env_names: &[String], write_env_file: bool) -> Result<CloudWorkspace, String> {
     let lock = mgr.lock_for(id);
     let _held = lock.lock().unwrap();
     let mut w = mgr.get(id)?;
@@ -300,6 +308,10 @@ pub fn send(mgr: &CloudManager, notify: Notify, id: &str, text: &str, env_names:
     // Tokens may have changed since the last turn.
     let env = env_vars(mgr, &w.repo_id, &w.remote_url, env_names)?;
     upload(mgr.boxd.as_ref(), &w.vm_name, "env", secrets::render_env_file(&env)?.as_bytes())?;
+    w.write_env_file = write_env_file;
+    if write_env_file {
+        write_dotenv(mgr, &w, env_names)?;
+    }
     // A fresh session (no turn yet on this chat) gets the full preamble.
     let prompt = ws::turn_prompt(w.session_id.is_none(), &w.branch_name, text);
     launch_turn(mgr, notify, &mut w, &prompt)?;
@@ -448,6 +460,21 @@ fn env_vars(mgr: &CloudManager, repo_id: &str, remote_url: &str, env_names: &[St
     secrets::workspace_env(mgr.secrets.as_ref(), remote_url, &project, (mgr.github_fallback)())
 }
 
+/// Writes the project env vars (never the tokens) to `~/repo/.env`, staged
+/// through an upload so values never appear in argv, and only when git
+/// ignores `.env` in the clone.
+fn write_dotenv(mgr: &CloudManager, w: &CloudWorkspace, env_names: &[String]) -> Result<(), String> {
+    let vars = secrets::project_env_values(mgr.secrets.as_ref(), &w.repo_id, env_names)?;
+    upload(mgr.boxd.as_ref(), &w.vm_name, "dotenv", secrets::render_dotenv(&vars)?.as_bytes())?;
+    exec_ok(mgr.boxd.as_ref(), &w.vm_name, ws::WRITE_DOTENV_COMMAND, EXEC_TIMEOUT).map(|_| ()).map_err(|e| {
+        if e.contains(ws::DOTENV_NOT_IGNORED) {
+            "`.env` is not gitignored in this repo; not writing it (the agent could commit it).".to_string()
+        } else {
+            format!("writing .env failed: {e}")
+        }
+    })
+}
+
 fn github_token(mgr: &CloudManager, remote_url: &str) -> Option<String> {
     secrets::github_token_for(mgr.secrets.as_ref(), remote_url).or_else(mgr.github_fallback)
 }
@@ -554,8 +581,8 @@ pub async fn cloud_workspace_start(app: AppHandle, request: StartRequest) -> Res
 }
 
 #[tauri::command]
-pub async fn cloud_workspace_send(app: AppHandle, id: String, text: String, env_names: Vec<String>) -> Result<CloudWorkspace, String> {
-    blocking(move || send(&app.state::<CloudManager>(), &emitter(&app), &id, &text, &env_names)).await
+pub async fn cloud_workspace_send(app: AppHandle, id: String, text: String, env_names: Vec<String>, write_env_file: bool) -> Result<CloudWorkspace, String> {
+    blocking(move || send(&app.state::<CloudManager>(), &emitter(&app), &id, &text, &env_names, write_env_file)).await
 }
 
 #[tauri::command]
@@ -755,6 +782,7 @@ mod tests {
             log_offset: 0,
             session_id: None,
             last_result: None,
+            write_env_file: false,
         }
     }
 
@@ -815,7 +843,7 @@ mod tests {
     fn a_running_workspace_refuses_a_second_prompt() {
         let dir = tempfile::tempdir().unwrap();
         let mgr = manager(dir.path(), vec![]);
-        let err = send(&mgr, &|_: &CloudWorkspace| {}, "w1", "more", &[]).unwrap_err();
+        let err = send(&mgr, &|_: &CloudWorkspace| {}, "w1", "more", &[], false).unwrap_err();
         assert!(err.contains("still working"), "{err}");
     }
 
@@ -832,6 +860,7 @@ mod tests {
             model: None,
             handoff: String::new(),
             env_names: vec![],
+            write_env_file: false,
         };
         assert!(begin(&mgr, &|_: &CloudWorkspace| {}, &req).unwrap_err().contains("Supported: Claude"));
     }
@@ -870,6 +899,7 @@ mod tests {
             model: None,
             handoff: String::new(),
             env_names: names,
+            write_env_file: false,
         };
         assert!(begin(&mgr, &|_: &CloudWorkspace| {}, &req).unwrap_err().contains("Claude key missing"));
     }
@@ -935,6 +965,18 @@ echo "{\"type\":\"result\",\"is_error\":false,\"result\":\"did $p with $FAKE_TOK
             let (head, unpushed, dirty) = ws::parse_inspect(&exec_ok(&boxd, &vm, ws::INSPECT_COMMAND, EXEC_TIMEOUT).unwrap());
             assert!(head.is_some());
             assert_eq!((unpushed, dirty), (0, 0));
+
+            // `.env` is refused while git would not ignore it, then written once it is.
+            let dotenv = secrets::render_dotenv(&[("API_KEY".into(), "a b'c".into())]).unwrap();
+            upload(&boxd, &vm, "dotenv", dotenv.as_bytes()).unwrap();
+            let err = exec_ok(&boxd, &vm, ws::WRITE_DOTENV_COMMAND, EXEC_TIMEOUT).unwrap_err();
+            assert!(err.contains(ws::DOTENV_NOT_IGNORED), "{err}");
+            assert!(exec_ok(&boxd, &vm, r#"test ! -e "$HOME/repo/.env" && test ! -e "$HOME/.ph/dotenv""#, EXEC_TIMEOUT).is_ok());
+            exec_ok(&boxd, &vm, r#"echo .env >> "$HOME/repo/.git/info/exclude""#, EXEC_TIMEOUT).unwrap();
+            upload(&boxd, &vm, "dotenv", dotenv.as_bytes()).unwrap();
+            exec_ok(&boxd, &vm, ws::WRITE_DOTENV_COMMAND, EXEC_TIMEOUT).unwrap();
+            let out = exec_ok(&boxd, &vm, r#"cd "$HOME/repo" && stat -c %a .env && cat .env && git status --porcelain"#, EXEC_TIMEOUT).unwrap();
+            assert_eq!(out.trim(), format!("600\n{}", dotenv.trim()), "the .env must be private and invisible to git");
 
             // Turn 1 runs to completion.
             upload(&boxd, &vm, "turn-1.prompt", b"work").unwrap();
