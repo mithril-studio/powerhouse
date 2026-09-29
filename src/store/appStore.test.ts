@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { appendSystemMessage } from "../lib/acpTranscript";
 import {
   agentModelEnv,
   cloudSettingsOf,
@@ -329,5 +330,58 @@ describe("target branch", () => {
     // Everything else on the repo is untouched.
     expect(useAppStore.getState().repos[0].workflow[0].command).toBe("pnpm build");
     expect(useAppStore.getState().repos[0].branches).toHaveLength(1);
+  });
+});
+
+describe("chat updates", () => {
+  beforeEach(() => {
+    useAppStore.getState().hydrate(structuredClone(LEGACY_TREE) as never);
+    const repo = useAppStore.getState().repos[0];
+    const branch = repo.branches[0];
+    useAppStore.setState({ repos: [
+      { ...repo, branches: [
+        { ...branch, chats: [...branch.chats, { id: "c2", title: "Chat 2" }] },
+        { ...branch, id: "b2" },
+      ] },
+      { ...repo, id: "repo-2" },
+    ] });
+  });
+
+  it("changes the addressed chat while preserving other chats, branches and repos", () => {
+    const before = useAppStore.getState().repos;
+    const s = useAppStore.getState();
+    s.applyCloudSession("repo-1", "b1", "c1", "run", "returned-session");
+    s.setChatReplay("repo-1", "b1", "c1", false);
+    s.setChatAgentSession("repo-1", "b1", "c1", "local-session");
+    s.setChatTransport("repo-1", "b1", "c1", "pty");
+    s.updateChatAcpTranscript("repo-1", "b1", "c1", (items) =>
+      appendSystemMessage(items, "Resumed"),
+    );
+    s.updateChatAcpTranscript("repo-1", "b1", "c1", (items) =>
+      appendSystemMessage(items, "Ready"),
+    );
+
+    const after = useAppStore.getState().repos;
+    const chat = after[0].branches[0].chats[0];
+    expect(chat).toMatchObject({
+      id: "c1", title: "Chat 1", cloudSessionRunId: "run",
+      agentSessionId: "local-session", replayOnResume: false, transport: "pty",
+    });
+    expect(chat.acpTranscript).toHaveLength(2);
+    expect(after[0].branches[0].chats[1]).toBe(before[0].branches[0].chats[1]);
+    expect(after[0].branches[1]).toBe(before[0].branches[1]);
+    expect(after[1]).toBe(before[1]);
+    expect(before[0].branches[0].chats[0]).toEqual(LEGACY_TREE.repos[0].branches[0].chats[0]);
+  });
+
+  it("ignores transcript updates for missing repos, branches or chats", () => {
+    const before = useAppStore.getState().repos;
+    const update = vi.fn((items) => items);
+    const s = useAppStore.getState();
+    s.updateChatAcpTranscript("missing", "b1", "c1", update);
+    s.updateChatAcpTranscript("repo-1", "missing", "c1", update);
+    s.updateChatAcpTranscript("repo-1", "b1", "missing", update);
+    expect(update).not.toHaveBeenCalled();
+    expect(useAppStore.getState().repos).toEqual(before);
   });
 });

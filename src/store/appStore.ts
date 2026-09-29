@@ -537,6 +537,18 @@ const updateBranch = (
     branches: r.branches.map((b) => (b.id === branchId ? fn(b) : b)),
   }));
 
+const updateChat = (
+  repos: Repo[],
+  repoId: string,
+  branchId: string,
+  chatId: string,
+  fn: (c: Chat) => Chat,
+) =>
+  updateBranch(repos, repoId, branchId, (b) => ({
+    ...b,
+    chats: b.chats.map((c) => (c.id === chatId ? fn(c) : c)),
+  }));
+
 function withoutKey<T>(record: Record<string, T>, key: string): Record<string, T> {
   if (!(key in record)) return record;
   const { [key]: _removed, ...rest } = record;
@@ -778,51 +790,34 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   applyCloudSession: (repoId, branchId, chatId, runId, sessionId) =>
     set((s) => ({
-      repos: updateBranch(s.repos, repoId, branchId, (b) => ({
-        ...b,
-        chats: b.chats.map((c) =>
-          c.id === chatId
-            ? { ...c, agentSessionId: sessionId, cloudSessionRunId: runId, replayOnResume: true }
-            : c,
-        ),
+      repos: updateChat(s.repos, repoId, branchId, chatId, (c) => ({
+        ...c,
+        agentSessionId: sessionId,
+        cloudSessionRunId: runId,
+        replayOnResume: true,
       })),
     })),
 
   setChatReplay: (repoId, branchId, chatId, replay) =>
     set((s) => ({
-      repos: updateBranch(s.repos, repoId, branchId, (b) => ({
-        ...b,
-        chats: b.chats.map((c) => (c.id === chatId ? { ...c, replayOnResume: replay } : c)),
-      })),
+      repos: updateChat(s.repos, repoId, branchId, chatId, (c) => ({ ...c, replayOnResume: replay })),
     })),
 
   setChatAgentSession: (repoId, branchId, chatId, sessionId) =>
     set((s) => ({
-      repos: updateBranch(s.repos, repoId, branchId, (b) => ({
-        ...b,
-        chats: b.chats.map((c) =>
-          c.id === chatId ? { ...c, agentSessionId: sessionId } : c,
-        ),
-      })),
+      repos: updateChat(s.repos, repoId, branchId, chatId, (c) => ({ ...c, agentSessionId: sessionId })),
     })),
 
   setChatTransport: (repoId, branchId, chatId, transport) =>
     set((s) => ({
-      repos: updateBranch(s.repos, repoId, branchId, (b) => ({
-        ...b,
-        chats: b.chats.map((c) => (c.id === chatId ? { ...c, transport } : c)),
-      })),
+      repos: updateChat(s.repos, repoId, branchId, chatId, (c) => ({ ...c, transport })),
     })),
 
   updateChatAcpTranscript: (repoId, branchId, chatId, update) =>
     set((s) => ({
-      repos: updateBranch(s.repos, repoId, branchId, (b) => ({
-        ...b,
-        chats: b.chats.map((c) =>
-          c.id === chatId
-            ? { ...c, acpTranscript: update(c.acpTranscript ?? []) }
-            : c,
-        ),
+      repos: updateChat(s.repos, repoId, branchId, chatId, (c) => ({
+        ...c,
+        acpTranscript: update(c.acpTranscript ?? []),
       })),
     })),
 
