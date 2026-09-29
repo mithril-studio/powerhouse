@@ -1501,7 +1501,10 @@ pub fn do_release(mgr: &CloudManager, app: Option<&AppHandle>, run_id: &str) -> 
             return Err("the run is still active; cancel it first".into());
         }
         if let Some(vm) = record.task_vm.as_ref() {
-            if record.phase == Phase::Accepted && runner_reports_live(mgr.boxd.as_ref(), &vm.name, run_id)? {
+            // A VM that no longer exists cannot be running the run; there is
+            // no runner to ask, and discarding only has the record to clear.
+            let vm_gone = matches!(mgr.boxd.machine_get(&vm.name), Err(TransportError::NotFound(_)));
+            if record.phase == Phase::Accepted && !vm_gone && runner_reports_live(mgr.boxd.as_ref(), &vm.name, run_id)? {
                 return Err("the runner still reports this run live; cancel it and wait for `cancelled`".into());
             }
         }
@@ -3423,6 +3426,24 @@ mod tests {
         assert_eq!(load(&mgr, run_id).unwrap().machine, MachineState::Holding);
         let err = do_release(&mgr, None, run_id).unwrap_err();
         assert!(err.contains("still reports"), "{err}");
+        assert_eq!(fake.count("remove "), 0);
+    }
+
+    #[test]
+    fn discard_of_a_run_whose_vm_is_already_gone_clears_the_record() {
+        let (dir, work, _remote) = temp_repo_with(false);
+        let fake = base_fake();
+        let mgr = manager(fake.clone(), dir.path());
+        let run_id = "11111111-2222-4333-8444-555555555555";
+        // Recorded as active, but the VM was removed outside Powerhouse.
+        let mut rec = accepted_record(&work, run_id);
+        rec.machine = MachineState::Active;
+        rec.snapshot = Some(snapshot_of(run_id, "completed"));
+        mgr.store.lock().unwrap().put(rec).unwrap();
+        let r = do_release(&mgr, None, run_id).unwrap();
+        assert_eq!(r.machine, MachineState::Released);
+        assert!(r.vm_released && !r.holds_resources() && r.machine_error.is_none());
+        assert_eq!(fake.count("inspect"), 0, "no runner to ask on a missing VM");
         assert_eq!(fake.count("remove "), 0);
     }
 
