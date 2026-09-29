@@ -126,7 +126,8 @@ pub(crate) fn detect_target_branch(root: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        detect_target_branch, git, git_remove_worktree, git_target_commits, is_github_https,
+        detect_target_branch, git, git_file_content, git_remove_worktree, git_target_commits,
+        is_github_https,
         parse_log, registered_worktrees, remote_key, repo_name_from_url, resolve_worktree_base,
     };
     use std::path::Path;
@@ -135,6 +136,23 @@ mod tests {
         std::fs::write(work.join(file), msg).unwrap();
         git(work, &["add", "."]).unwrap();
         git(work, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", msg]).unwrap();
+    }
+
+    #[test]
+    fn file_content_stays_inside_the_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let wt = dir.path().join("wt");
+        std::fs::create_dir_all(wt.join("src")).unwrap();
+        std::fs::write(wt.join("src/a.md"), "# hi").unwrap();
+        std::fs::write(dir.path().join("secret"), "nope").unwrap();
+        let root = wt.to_string_lossy().to_string();
+
+        assert_eq!(git_file_content(root.clone(), "src/a.md".into()).unwrap(), "# hi");
+        assert!(git_file_content(root.clone(), "../secret".into()).is_err());
+        assert!(git_file_content(root.clone(), dir.path().join("secret").to_string_lossy().into()).is_err());
+
+        std::fs::write(wt.join("big"), vec![b'a'; 2 * 1024 * 1024 + 1]).unwrap();
+        assert!(git_file_content(root, "big".into()).unwrap_err().contains("too large"));
     }
 
     #[test]
@@ -793,10 +811,22 @@ pub fn git_list_files(worktree_path: String) -> Result<Vec<String>, String> {
     Ok(files)
 }
 
+/// Largest file the viewer will load; bigger files would freeze the webview.
+const MAX_VIEW_BYTES: u64 = 2 * 1024 * 1024;
+
 /// Working-tree contents of a single file. Binary files return a placeholder.
+/// The path must resolve inside the worktree (no `..` or symlink escapes).
 #[tauri::command]
 pub fn git_file_content(worktree_path: String, path: String) -> Result<String, String> {
-    let full = PathBuf::from(&worktree_path).join(&path);
+    let root = PathBuf::from(&worktree_path).canonicalize().map_err(|e| e.to_string())?;
+    let full = root.join(&path).canonicalize().map_err(|e| e.to_string())?;
+    if !full.starts_with(&root) {
+        return Err(format!("{path} is outside the worktree"));
+    }
+    let size = std::fs::metadata(&full).map_err(|e| e.to_string())?.len();
+    if size > MAX_VIEW_BYTES {
+        return Err(format!("{path} is too large to view ({} KB)", size / 1024));
+    }
     let bytes = std::fs::read(&full).map_err(|e| e.to_string())?;
     if bytes.contains(&0) {
         return Ok("(binary file)".to_string());
