@@ -4,9 +4,8 @@
 //! explicit `cloud_sync` / `cloud_lifecycle_tick` calls. Nothing in this
 //! module is reached by PTY cleanup or app shutdown.
 //!
-//! Lifecycle rules (docs/boxd-cloud-vm-lifecycle-plan.md): every run owns one
-//! VM named for its source branch (`ph-<branch-slug>`, or `ph-<run8>` on a
-//! detached HEAD) created from the base snapshot; a completed, published,
+//! Lifecycle rules: every run owns one VM named for its source branch
+//! (`ph-<branch-slug>`, or `ph-<run8>` on a detached HEAD) created from the base snapshot; a completed, published,
 //! fully cached and remotely verified run releases its VM at once; any other
 //! terminal state holds the VM for `hold_secs()`, then parks it as snapshot
 //! `<vm>-park` and destroys the VM. The intended state is persisted before
@@ -1317,9 +1316,8 @@ fn worktree_for_branch(repo: &Path, branch: &str) -> Option<PathBuf> {
 /// Bring a finished run's result home to the branch that sent it. Idempotent:
 /// does nothing once `returned` is set. Never touches the VM. Retryable
 /// failures (fetch died, push rejected) are recorded in `return_error` and left
-/// for the lifecycle tick, mirroring "release pending". The integration rules
-/// (fast-forward only a clean, unmoved branch; everything else is Diverged) are
-/// in docs/cloud-return-to-branch-spec.md.
+/// for the lifecycle tick, mirroring "release pending". Integration rule:
+/// fast-forward only a clean, unmoved branch; everything else is Diverged.
 fn do_return(mgr: &CloudManager, app: Option<&AppHandle>, record: &mut CloudRunRecord) -> Result<(), String> {
     if record.returned.is_some() {
         return Ok(());

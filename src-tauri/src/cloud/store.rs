@@ -28,8 +28,7 @@ pub enum Phase {
     SubmitFailed,
 }
 
-/// What boxd resources a run holds. Independent of the run state; see
-/// docs/boxd-cloud-vm-lifecycle-plan.md. The intended state is persisted
+/// What boxd resources a run holds. Independent of the run state. The intended state is persisted
 /// *before* the boxd call that realises it, so a lost acknowledgement is
 /// reconciled by name (`ph-<run8>`, `ph-<run8>-park`).
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize, Default)]
@@ -85,8 +84,7 @@ pub struct DiffMeta {
 }
 
 /// How a finished run's result came home to the local branch. Set once, on the
-/// sync that returns it; drives the chat result card. See
-/// docs/cloud-return-to-branch-spec.md.
+/// sync that returns it; drives the chat result card.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ReturnOutcome {

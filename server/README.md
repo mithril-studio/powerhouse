@@ -4,7 +4,7 @@ Always-on workflow coordinator: an authenticated TypeScript service that runs
 durable two-script workflows through [DBOS](https://docs.dbos.dev) on
 Postgres, executing scripts on boxd microVMs via the existing
 `powerhouse-runner` (protocol v3). This is Increment 0b of
-[the workflows plan](../docs/workflows-plan.md).
+the workflows plan (`docs/workflows-plan.md` in the `mithril-studio/workflows` repo).
 
 ## What it proves
 

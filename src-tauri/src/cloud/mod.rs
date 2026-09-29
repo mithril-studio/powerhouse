@@ -1,4 +1,4 @@
-//! Durable cloud agent runs on boxd. See docs/boxd-cloud-agents.md.
+//! Durable cloud agent runs on boxd.
 pub mod commands;
 pub mod secrets;
 pub mod session;

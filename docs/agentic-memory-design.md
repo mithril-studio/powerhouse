@@ -1,6 +1,6 @@
 # Shared agent memory — design
 
-Date: 2026-09-23, updated 2026-09-24. Status: foundation built; memory host on Hetzner. Builds on `docs/agentic-memory-research.md`.
+Date: 2026-09-23, updated 2026-09-24. Status: foundation built; memory host on Hetzner.
 
 Agents in scope: Claude Code and Pi (Pi runs the OpenAI models). Codex is dropped. No vendor memory is used; Claude auto-memory is disabled per session.
 
@@ -175,10 +175,10 @@ What exists now, on branch `add-basic-memory`:
 - `src/hooks/useAcpSession.ts`: ensures the server before every session, passes the MCP entry and meta on session/new, load and resume, and prepends the brief to the first prompt of a fresh session. A system line in the transcript says how many notes were briefed.
 - `src/components/memory/MemoryPage.tsx`: the Memory nav item now opens a page with one tab per scope, search or recent, and a note reader. Read-only; notes are edited in the files.
 - Settings → Memory: on/off, endpoint, bearer token, connection check.
-- `~/.powerhouse/memory`: a git repo with README, `_templates/`, `global/`, `projects/powerhouse/` holding the six `.mem` records migrated by `scripts/memory-migrate-mem.mjs`. Registered as Basic Memory projects `global` (default) and `powerhouse`.
+- `~/.powerhouse/memory`: a git repo with README, `_templates/`, `global/`, `projects/powerhouse/` holding the records migrated from the former repo-local `.mem/` store. Registered as Basic Memory projects `global` (default) and `powerhouse`.
 - `scripts/memory-server.sh`: run the server by hand or on the VM.
 
-Not yet built, in order: the memory VM and the GitHub remote (today the endpoint is loopback and the repo has no remote), the inbox and approve flow (agent writes go straight into the active tree), the host checkpoint at run end, the Pi adapter switch (Pi gets the brief through the prompt but cannot call the MCP tools), outcome labels, consolidation cron. The repo-local `.mem/` files are left in place until every branch has moved to the shared memory.
+Not yet built, in order: the memory VM and the GitHub remote (today the endpoint is loopback and the repo has no remote), the inbox and approve flow (agent writes go straight into the active tree), the host checkpoint at run end, the Pi adapter switch (Pi gets the brief through the prompt but cannot call the MCP tools), outcome labels, consolidation cron. The repo-local `.mem/` store was removed on 2026-09-29; all its records live in shared memory.
 
 ### Write path, cloud reach, and outcome-label data as built (2026-09-24, branch `feature/memory-inbox-checkpoint`)
 
