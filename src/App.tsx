@@ -14,6 +14,7 @@ import { useShortcuts } from "./hooks/useShortcuts";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
 import { ChatPane } from "./components/ChatPane";
+import { FileViewer } from "./components/FileViewer";
 import { BottomPanel } from "./components/BottomPanel";
 import { NewBranchModal } from "./components/NewBranchModal";
 import { WorkflowModal } from "./components/WorkflowModal";
@@ -121,13 +122,21 @@ export default function App() {
                       homeVisible &&
                       r.id === repo?.id &&
                       b.id === branch?.id &&
-                      chat.id === b.activeChatId
+                      chat.id === b.activeChatId &&
+                      !b.activeFile
                     }
                   />
                 )),
               ),
             )}
-          {hydrated && (!branch || branch.chats.length === 0) && (
+          {homeVisible && branch?.activeFile && (
+            <FileViewer
+              key={`${branch.id}:${branch.activeFile}`}
+              worktreePath={branch.worktreePath}
+              path={branch.activeFile}
+            />
+          )}
+          {hydrated && (!branch || (branch.chats.length === 0 && !branch.activeFile)) && (
             <div className="absolute inset-0 flex items-center justify-center">
               <p className="text-muted-foreground">
                 {repos.length === 0

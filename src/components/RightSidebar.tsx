@@ -7,7 +7,6 @@ import {
 } from "../store/appStore";
 import {
   gitChangedFiles,
-  gitFileContent,
   gitFileDiff,
   gitListFiles,
   type ChangedFile,
@@ -103,12 +102,14 @@ function TreeRows({
   depth,
   expanded,
   toggle,
+  activePath,
   onOpenFile,
 }: {
   node: TreeNode;
   depth: number;
   expanded: Set<string>;
   toggle: (path: string) => void;
+  activePath: string | null;
   onOpenFile: (path: string) => void;
 }) {
   // Folders first, then files, each alphabetical.
@@ -128,7 +129,11 @@ function TreeRows({
             <div
               onClick={() => (isDir ? toggle(child.path) : onOpenFile(child.path))}
               style={{ paddingLeft: `${depth * 12 + 8}px` }}
-              className="flex h-7 cursor-default items-center gap-1.5 rounded-md pr-1.5 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+              className={`flex h-7 cursor-default items-center gap-1.5 rounded-md pr-1.5 ${
+                child.path === activePath
+                  ? "bg-muted text-foreground"
+                  : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+              }`}
             >
               <span className="w-3 shrink-0 text-center text-[9px] text-muted-foreground">
                 {isDir ? (open ? "▾" : "▸") : ""}
@@ -142,6 +147,7 @@ function TreeRows({
                 depth={depth + 1}
                 expanded={expanded}
                 toggle={toggle}
+                activePath={activePath}
                 onOpenFile={onOpenFile}
               />
             )}
@@ -152,11 +158,10 @@ function TreeRows({
   );
 }
 
-function FilesTab({ branch }: { branch: Branch }) {
+function FilesTab({ repo, branch }: { repo: Repo; branch: Branch }) {
+  const openFile = useAppStore((s) => s.openFile);
   const [files, setFiles] = useState<string[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [openFile, setOpenFile] = useState<string | null>(null);
-  const [content, setContent] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -166,17 +171,6 @@ function FilesTab({ branch }: { branch: Branch }) {
       .catch((e) => setError(String(e)));
   }, [branch.worktreePath]);
 
-  useEffect(() => {
-    if (!openFile) return;
-    let cancelled = false;
-    void gitFileContent(branch.worktreePath, openFile)
-      .then((c) => !cancelled && setContent(c))
-      .catch((e) => !cancelled && setContent(String(e)));
-    return () => {
-      cancelled = true;
-    };
-  }, [openFile, branch.worktreePath]);
-
   const tree = useMemo(() => buildTree(files), [files]);
   const toggle = (path: string) =>
     setExpanded((prev) => {
@@ -184,28 +178,6 @@ function FilesTab({ branch }: { branch: Branch }) {
       next.has(path) ? next.delete(path) : next.add(path);
       return next;
     });
-
-  if (openFile) {
-    return (
-      <div className="flex h-full flex-col">
-        <div className="flex h-8 shrink-0 items-center gap-1.5 border-b border-border px-2">
-          <button
-            onClick={() => setOpenFile(null)}
-            title="Back to files"
-            className="flex size-5 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
-          >
-            ←
-          </button>
-          <span className="min-w-0 flex-1 truncate font-mono text-xs" dir="rtl">
-            {openFile}
-          </span>
-        </div>
-        <pre className="flex-1 select-text overflow-auto whitespace-pre px-3 py-1.5 font-mono text-xs leading-relaxed">
-          {content}
-        </pre>
-      </div>
-    );
-  }
 
   return (
     <div className="h-full overflow-y-auto px-1.5 py-1.5">
@@ -220,7 +192,8 @@ function FilesTab({ branch }: { branch: Branch }) {
         depth={0}
         expanded={expanded}
         toggle={toggle}
-        onOpenFile={setOpenFile}
+        activePath={branch.activeFile ?? null}
+        onOpenFile={(path) => openFile(repo.id, branch.id, path)}
       />
     </div>
   );
@@ -299,6 +272,7 @@ function DiffTab({
   branch: Branch;
   path: string | null;
 }) {
+  const openFile = useAppStore((s) => s.openFile);
   const [diff, setDiff] = useState("");
 
   useEffect(() => {
@@ -327,10 +301,17 @@ function DiffTab({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-8 shrink-0 items-center border-b border-border px-2">
+      <div className="flex h-8 shrink-0 items-center gap-1.5 border-b border-border px-2">
         <span className="min-w-0 flex-1 truncate font-mono text-xs" dir="rtl">
           {path}
         </span>
+        <button
+          onClick={() => openFile(repo.id, branch.id, path)}
+          title="Open the whole file as a tab"
+          className="h-6 shrink-0 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          Open file
+        </button>
       </div>
       <div className="flex-1 overflow-auto py-1.5">
         <DiffView diff={diff} />
@@ -340,6 +321,52 @@ function DiffTab({
 }
 
 // --- shell ----------------------------------------------------------------
+
+const DEFAULT_WIDTH = 360;
+const MIN_WIDTH = 260;
+/** Room always left for the main sidebar and the chat. */
+const MIN_MAIN = 480;
+
+/** Sidebar width for a drag position, kept usable at any window size. */
+function clampSidebarWidth(width: number, viewport: number): number {
+  return Math.max(MIN_WIDTH, Math.min(width, viewport - MIN_MAIN));
+}
+
+/** Drag the left edge to resize; double-click resets. The width is saved on
+ *  release, not on every move, so a drag doesn't rewrite the store file. */
+function useSidebarWidth() {
+  const saved = useAppStore((s) => s.settings.rightSidebarWidth) ?? DEFAULT_WIDTH;
+  const save = useAppStore((s) => s.setRightSidebarWidth);
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
+
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const handle = e.currentTarget;
+    handle.setPointerCapture(e.pointerId);
+    let width = saved;
+    const move = (ev: PointerEvent) => {
+      width = clampSidebarWidth(window.innerWidth - ev.clientX, window.innerWidth);
+      setDragWidth(width);
+    };
+    const up = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      handle.removeEventListener("pointercancel", up);
+      save(width);
+      setDragWidth(null);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+    handle.addEventListener("pointercancel", up);
+  };
+
+  return {
+    width: dragWidth ?? saved,
+    dragging: dragWidth !== null,
+    onPointerDown,
+    reset: () => save(DEFAULT_WIDTH),
+  };
+}
 
 export function RightSidebar({
   repo,
@@ -351,6 +378,7 @@ export function RightSidebar({
   const rightTab = useAppStore((s) => s.rightTab);
   const setRightTab = useAppStore((s) => s.setRightTab);
   const [diffPath, setDiffPath] = useState<string | null>(null);
+  const resize = useSidebarWidth();
 
   // Reset the selected diff file when the branch changes.
   useEffect(() => setDiffPath(null), [branch?.id]);
@@ -361,7 +389,22 @@ export function RightSidebar({
   };
 
   return (
-    <aside className="flex w-90 shrink-0 flex-col border-l border-border bg-background">
+    <aside
+      // maxWidth keeps the chat usable when the window shrinks after a drag.
+      style={{ width: resize.width, minWidth: MIN_WIDTH, maxWidth: `calc(100vw - ${MIN_MAIN}px)` }}
+      className="relative flex shrink-0 flex-col border-l border-border bg-background"
+    >
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize sidebar"
+        title="Drag to resize · double-click to reset"
+        onPointerDown={resize.onPointerDown}
+        onDoubleClick={resize.reset}
+        className={`absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize transition-colors hover:bg-accent-brand/40 ${
+          resize.dragging ? "bg-accent-brand/40" : ""
+        }`}
+      />
       <div className="flex h-11 shrink-0 items-center gap-0.5 border-b border-border px-1.5">
         {TABS.map((t) => (
           <button
@@ -394,7 +437,7 @@ export function RightSidebar({
         ) : !branch || !repo ? (
           <Empty>Select a branch.</Empty>
         ) : rightTab === "files" ? (
-          <FilesTab key={branch.id} branch={branch} />
+          <FilesTab key={branch.id} repo={repo} branch={branch} />
         ) : rightTab === "changes" ? (
           <ChangesTab key={branch.id} repo={repo} branch={branch} onOpenDiff={openDiff} />
         ) : (

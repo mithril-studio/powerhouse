@@ -264,6 +264,63 @@ describe("chat activity", () => {
   });
 });
 
+describe("file tabs", () => {
+  const seed = () =>
+    useAppStore.setState({
+      repos: [
+        {
+          id: "r",
+          name: "r",
+          path: "/r",
+          defaultBranch: "main",
+          workflow: [],
+          pushOnMerge: false,
+          branches: [{ id: "b", name: "b", worktreePath: "/r", chats: [], activeChatId: "c1" }],
+        },
+      ],
+    });
+  const branch = () => useAppStore.getState().repos[0].branches[0];
+
+  it("opens a file once and focuses it", () => {
+    seed();
+    const { openFile } = useAppStore.getState();
+    openFile("r", "b", "a.md");
+    openFile("r", "b", "b.ts");
+    openFile("r", "b", "a.md");
+    expect(branch().files).toEqual(["a.md", "b.ts"]);
+    expect(branch().activeFile).toBe("a.md");
+  });
+
+  it("closing the active file focuses its neighbour, then falls back to the chat", () => {
+    seed();
+    const { openFile, closeFile } = useAppStore.getState();
+    openFile("r", "b", "a.md");
+    openFile("r", "b", "b.ts");
+    closeFile("r", "b", "b.ts");
+    expect(branch().activeFile).toBe("a.md");
+    closeFile("r", "b", "a.md");
+    expect(branch().activeFile).toBeNull();
+    expect(branch().activeChatId).toBe("c1");
+  });
+
+  it("selecting a chat hides the file but keeps it open", () => {
+    seed();
+    useAppStore.getState().openFile("r", "b", "a.md");
+    useAppStore.getState().setActiveChat("r", "b", "c1");
+    expect(branch().activeFile).toBeNull();
+    expect(branch().files).toEqual(["a.md"]);
+  });
+});
+
+describe("right sidebar width", () => {
+  it("survives a reload", () => {
+    useAppStore.getState().hydrate(structuredClone(LEGACY_TREE) as never);
+    useAppStore.getState().setRightSidebarWidth(512.4);
+    const settings = migrateSettings({ settings: useAppStore.getState().settings });
+    expect(settings.rightSidebarWidth).toBe(512);
+  });
+});
+
 describe("target branch", () => {
   it("retargets one repo's worktree base and merge-queue landing branch", () => {
     useAppStore.getState().hydrate(structuredClone(LEGACY_TREE) as never);

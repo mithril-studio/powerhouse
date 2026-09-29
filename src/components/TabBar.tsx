@@ -11,6 +11,8 @@ interface Props {
 
 export function TabBar({ repo, branch }: Props) {
   const setActiveChat = useAppStore((s) => s.setActiveChat);
+  const openFile = useAppStore((s) => s.openFile);
+  const closeFile = useAppStore((s) => s.closeFile);
   const rightSidebarOpen = useAppStore((s) => s.rightSidebarOpen);
   const toggleRightSidebar = useAppStore((s) => s.toggleRightSidebar);
   const openChatPicker = useAppStore((s) => s.openChatPicker);
@@ -39,7 +41,7 @@ export function TabBar({ repo, branch }: Props) {
             {repo.name}/{branch.name}
           </span>
           {branch.chats.map((chat) => {
-            const active = chat.id === branch.activeChatId;
+            const active = chat.id === branch.activeChatId && !branch.activeFile;
             const agent = resolveAgent(settings, chat.agentId);
             const activity = chatActivity[chat.id];
             return (
@@ -64,6 +66,39 @@ export function TabBar({ repo, branch }: Props) {
                   }}
                   title="Close chat (⌘W)"
                   aria-label={`Close ${chat.title}`}
+                  className="flex size-5 items-center justify-center rounded-sm text-transparent hover:bg-input group-hover:text-muted-foreground hover:!text-foreground"
+                >
+                  ×
+                </button>
+              </div>
+            );
+          })}
+          {(branch.files ?? []).map((path) => {
+            const active = path === branch.activeFile;
+            const name = path.split("/").pop();
+            return (
+              <div
+                key={path}
+                onClick={() => openFile(repo.id, branch.id, path)}
+                title={path}
+                className={`group flex h-7 items-center gap-1 rounded-md pl-2 pr-1 ${
+                  active
+                    ? "bg-muted text-foreground"
+                    : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                }`}
+              >
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" className="shrink-0 opacity-60" aria-hidden>
+                  <path d="M4 2.5h5l3 3V13a.5.5 0 0 1-.5.5h-7A.5.5 0 0 1 4 13V3a.5.5 0 0 1 .5-.5z" />
+                  <path d="M8.8 2.6v3h3" />
+                </svg>
+                <span className="max-w-32 truncate font-mono text-xs">{name}</span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    closeFile(repo.id, branch.id, path);
+                  }}
+                  title="Close file (⌘W)"
+                  aria-label={`Close ${name}`}
                   className="flex size-5 items-center justify-center rounded-sm text-transparent hover:bg-input group-hover:text-muted-foreground hover:!text-foreground"
                 >
                   ×
