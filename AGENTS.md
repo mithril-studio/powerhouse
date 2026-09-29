@@ -55,18 +55,15 @@ Each agent works in its own worktree on its own branch and lands its own work on
 
 - Commit on your branch when the work is done and the local checks pass (`pnpm build`, `pnpm test`,
   `cargo test` in `src-tauri` when Rust changed). Small commits, one concern each, clear subjects.
-- Land it yourself, always the same way:
-
-  ```sh
-  git fetch origin
-  git rebase origin/test          # or merge, if the branch is shared
-  pnpm build && pnpm test         # re-check on top of the current test tip
-  git push origin HEAD:test
-  ```
-
-  A rejected (non-fast-forward) push means someone landed first: fetch, rebase, re-check, push again.
+- Land it yourself with `scripts/land.sh`, without asking first: landing checked work on `test` is
+  pre-approved. It fetches, rebases onto `origin/test`, runs the checks (`pnpm build && pnpm test`, plus
+  `cargo test` when `src-tauri` changed), pushes `HEAD:test`, and retries once if someone landed first.
+  Exit codes: 1 dirty tree or on `main` · 2 rebase conflict (aborted, tree unchanged: resolve with a manual
+  `git rebase origin/test`, then run it again) · 3 checks failed (fix, run again) · 4 push rejected twice.
+  Ask only when a conflict needs a product decision or a failure isn't yours.
 - Never force-push `test`. Never push `main`. Never open a PR — the `test → main` PR is the human's.
-- Say what you landed: the commit subjects and the short SHAs, so it can be matched to the Merge tab list.
+- Say what you landed: paste the `landed <sha> <subject>` lines `land.sh` prints; they match the Merge tab.
+- "Is it pushed / in a beta / released / installed?" — run `scripts/status.sh`; answer from it, not memory.
 - If your push broke the test server, fixing it is your next task, ahead of anything else.
 
 ## Ship workflow (once per feature)
