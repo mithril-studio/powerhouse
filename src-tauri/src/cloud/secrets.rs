@@ -198,6 +198,76 @@ pub fn workspace_env(
     Ok(vars)
 }
 
+/// Variables Powerhouse sets itself; a project value must never shadow them.
+pub const RESERVED_ENV: [&str; 2] = ["CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN"];
+
+/// Parses a `.env` file into `(name, value)` pairs, in first-seen order with
+/// the last duplicate's value, plus the number of lines that were skipped as
+/// invalid. Blank lines and `#` comments are ignored; `export ` is optional;
+/// matching quotes are stripped (double quotes unescape `\n` and `\"`), and an
+/// unquoted value ends at ` #`.
+pub fn parse_dotenv(text: &str) -> (Vec<(String, String)>, usize) {
+    let mut out: Vec<(String, String)> = vec![];
+    let mut invalid = 0;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").map(str::trim_start).unwrap_or(line);
+        let Some((key, raw)) = line.split_once('=') else {
+            invalid += 1;
+            continue;
+        };
+        let key = key.trim();
+        if !is_env_var_name(key) {
+            invalid += 1;
+            continue;
+        }
+        let Some(value) = dotenv_value(raw.trim()) else {
+            invalid += 1;
+            continue;
+        };
+        match out.iter_mut().find(|(k, _)| k == key) {
+            Some(slot) => slot.1 = value,
+            None => out.push((key.to_string(), value)),
+        }
+    }
+    (out, invalid)
+}
+
+/// One value: quoted (up to the matching quote) or bare (up to ` #`).
+/// `None` for an unterminated quote.
+fn dotenv_value(raw: &str) -> Option<String> {
+    let quote = raw.chars().next().filter(|c| *c == '"' || *c == '\'');
+    let Some(q) = quote else {
+        let bare = raw.find(" #").map(|i| &raw[..i]).unwrap_or(raw);
+        return Some(bare.trim_end().to_string());
+    };
+    let body = &raw[1..];
+    if q == '\'' {
+        return body.find('\'').map(|end| body[..end].to_string());
+    }
+    let mut value = String::new();
+    let mut chars = body.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return Some(value),
+            '\\' => match chars.next() {
+                Some('n') => value.push('\n'),
+                Some('"') => value.push('"'),
+                Some(other) => {
+                    value.push('\\');
+                    value.push(other);
+                }
+                None => return None,
+            },
+            c => value.push(c),
+        }
+    }
+    None
+}
+
 /// `export NAME='value'` lines, single-quoted so any value survives `source`.
 pub fn render_env_file(vars: &[(String, String)]) -> Result<String, String> {
     let mut out = String::new();
@@ -265,6 +335,36 @@ mod tests {
         let file = render_env_file(&[("A".into(), "it's $HOME".into()), ("B".into(), "x".into())]).unwrap();
         assert_eq!(file, "export A='it'\\''s $HOME'\nexport B='x'\n");
         assert!(render_env_file(&[("1BAD".into(), "x".into())]).is_err());
+    }
+
+    #[test]
+    fn dotenv_parsing() {
+        let text = r#"
+# comment
+PLAIN=abc
+export EXPORTED=yes
+SINGLE='$HOME # not a comment'
+DOUBLE="line1\nline2 \"q\" # kept"
+BARE=value # trailing comment
+EMPTY=
+SPACED = padded
+1BAD=x
+no_equals_sign
+OPEN="never closed
+PLAIN=overridden
+"#;
+        let (vars, invalid) = parse_dotenv(text);
+        let get = |k: &str| vars.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+        assert_eq!(get("PLAIN"), Some("overridden"));
+        assert_eq!(vars[0].0, "PLAIN", "a duplicate keeps its first position");
+        assert_eq!(get("EXPORTED"), Some("yes"));
+        assert_eq!(get("SINGLE"), Some("$HOME # not a comment"));
+        assert_eq!(get("DOUBLE"), Some("line1\nline2 \"q\" # kept"));
+        assert_eq!(get("BARE"), Some("value"));
+        assert_eq!(get("EMPTY"), Some(""));
+        assert_eq!(get("SPACED"), Some("padded"));
+        assert_eq!(vars.len(), 7);
+        assert_eq!(invalid, 3); // 1BAD, no_equals_sign, OPEN
     }
 
     #[test]

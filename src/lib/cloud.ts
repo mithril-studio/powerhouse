@@ -77,6 +77,13 @@ export interface EnvVarStatus {
   set: boolean;
 }
 
+export interface EnvImport {
+  imported: string[];
+  /** `NAME: reason`, never a value. */
+  skipped: string[];
+  invalid: number;
+}
+
 interface StartRequest {
   repoId: string;
   branchId: string;
@@ -104,6 +111,8 @@ export const cloudSetSecret = (name: string, value: string, remoteUrl?: string |
   invoke<SecretStatus>("cloud_set_secret", { name, value, remoteUrl: remoteUrl ?? null });
 export const cloudProjectEnvStatus = (repoId: string, names: string[]) =>
   invoke<EnvVarStatus[]>("cloud_project_env_status", { repoId, names });
+export const cloudImportEnvFile = (repoId: string, worktreePath: string, file: string) =>
+  invoke<EnvImport>("cloud_import_env_file", { repoId, worktreePath, file });
 
 // --- selectors -------------------------------------------------------------------
 
