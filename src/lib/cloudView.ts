@@ -64,6 +64,8 @@ export function presentRun(r: CloudRunRecord): RunPresentation {
       } else if (err) detail = `${err.stage}: ${err.message}`;
       else if (state === "cancelled") detail = "Processes confirmed stopped; partial work kept in the cloud.";
       else if (r.snapshot?.cancel_requested) detail = "Cancel requested — waiting for the runner to confirm.";
+      // Submit keeps a note past acceptance only when the chat stayed home.
+      if (r.phase_detail) detail = detail ? `${detail} · ${r.phase_detail}` : r.phase_detail;
       if (r.last_sync_error) {
         detail = `Offline — last confirmed ${fmtAgo(r.snapshot?.updated_at_ms ?? r.receipt?.accepted_at_ms ?? r.created_at_ms)}${detail ? ` · ${detail}` : ""}`;
       }

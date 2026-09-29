@@ -210,6 +210,11 @@ export interface RunSummary {
   sourceSha: string | null;
   model: string | null;
   mode: string | null;
+  cacheWriteTokens: number | null;
+  /** Tokens in context at the first snapshot: what the agent starts with. */
+  contextStart: number | null;
+  contextPeak: number | null;
+  contextWindow: number | null;
 }
 
 export interface TurnRow {

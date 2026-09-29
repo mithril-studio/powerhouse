@@ -9,6 +9,9 @@ step() { printf '\n\033[1m── %s\033[0m\n' "$1"; }
 step "rust: unit tests (telemetry store, projector, metrics, migration)"
 (cd src-tauri && cargo test --quiet)
 
+step "scripts: land.sh sandbox (exit codes, retry, never force-push)"
+./scripts/land.test.sh
+
 step "ts: typecheck"
 npx tsc
 

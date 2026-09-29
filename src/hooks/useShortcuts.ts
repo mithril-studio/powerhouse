@@ -68,7 +68,11 @@ export function useShortcuts() {
         const branch = s.repos
           .find((r) => r.id === repoId)
           ?.branches.find((b) => b.id === branchId);
-        if (repoId && branchId && branch?.activeChatId) {
+        if (repoId && branchId && branch?.activeFile) {
+          e.preventDefault();
+          e.stopPropagation();
+          s.closeFile(repoId, branchId, branch.activeFile);
+        } else if (repoId && branchId && branch?.activeChatId) {
           e.preventDefault();
           e.stopPropagation();
           deleteChat(repoId, branchId, branch.activeChatId);

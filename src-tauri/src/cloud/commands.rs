@@ -275,6 +275,10 @@ pub struct SubmitRequest {
     /// Plan/context markdown rendered by Powerhouse (handoff doc, notes).
     #[serde(default)]
     pub brief: String,
+    /// The brief is the generated branch snapshot, not a plan document: on
+    /// its own it gives the agent nothing to act on.
+    #[serde(skip)]
+    pub brief_is_generated: bool,
     /// Per-project env var names; values come from the Keychain per repo and
     /// travel only in the per-run credentials file.
     #[serde(default)]
@@ -641,18 +645,33 @@ pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest
             ));
         }
         // A base snapshot from before session handoff can still run the
-        // branch from its brief; the chat then stays on this Mac.
+        // branch from a plan document; the chat then stays on this Mac. With
+        // only the generated snapshot as brief the agent would be told to
+        // continue a conversation it never received, so refuse instead.
+        let mut downgrade_note = None;
         if manifest.session.is_some() && probe.session_protocol_version != Some(SESSION_PROTOCOL_VERSION) {
+            if req.brief_is_generated {
+                return Err(format!(
+                    "the runner in snapshot {name} cannot continue a chat, and there is no plan document under `.powerhouse/` to send instead. \
+                     Publish a new base snapshot (`scripts/cloud-base-setup.sh --publish-snapshot {name}`), or run /handoff and send again.",
+                    name = base.name
+                ));
+            }
+            if manifest.task.text == SESSION_TASK_TEXT {
+                manifest.task.text = QUICK_TASK_TEXT.into();
+            }
             manifest.session = None;
             manifest.protocol_version = PROTOCOL_VERSION;
             digest = manifest.digest();
             record.manifest = manifest.clone();
             record.manifest_digest = digest.clone();
             record.session = None;
-            record.phase_detail = Some(format!(
-                "The runner in snapshot {} cannot continue a chat yet, so the cloud agent starts from the brief. Publish a new base snapshot to send the chat too.",
+            let note = format!(
+                "The runner in snapshot {} cannot continue a chat yet, so the cloud agent starts from the plan document. Publish a new base snapshot to send the chat too.",
                 base.name
-            ));
+            );
+            record.phase_detail = Some(note.clone());
+            downgrade_note = Some(note);
             persist(mgr, app, &record)?;
         }
         if !probe.agent_user_ready || !probe.store_ready {
@@ -734,7 +753,8 @@ pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest
         }
         record.receipt = Some(receipt);
         record.phase = Phase::Accepted;
-        record.phase_detail = None;
+        // The only detail worth keeping past acceptance: the chat stayed home.
+        record.phase_detail = downgrade_note;
         persist(mgr, app, &record)?;
         Ok(())
     })();
@@ -837,6 +857,27 @@ fn emit_quick_stage(app: Option<&AppHandle>, repo_id: &str, branch: &str, stage:
 /// pick the newest plan document as the brief (or generate a stub), then run
 /// the normal submission with the caller's last-used settings.
 pub fn do_quick_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: QuickSubmitRequest) -> Result<QuickSubmitOutcome, String> {
+    let (repo_name, source_path) = (req.repo_name.clone(), req.source_path.clone());
+    let out = quick_submit(mgr, app, req);
+    // A refused send creates no run record; keep its reason on disk so it can
+    // be read after the card is dismissed. Best effort; never blocks.
+    let reason = match &out {
+        Ok(QuickSubmitOutcome::NeedsAttention { stage, reason }) => Some((stage.as_str(), reason.as_str())),
+        Err(e) => Some(("error", e.as_str())),
+        Ok(QuickSubmitOutcome::Accepted { .. }) => None,
+    };
+    if let Some((stage, reason)) = reason {
+        let line = serde_json::json!({ "ts_ms": now_ms(), "repo": repo_name, "source_path": source_path, "stage": stage, "reason": reason });
+        let path = mgr.store.lock().unwrap().refusal_log_path();
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            use std::io::Write;
+            let _ = writeln!(f, "{line}");
+        }
+    }
+    out
+}
+
+fn quick_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: QuickSubmitRequest) -> Result<QuickSubmitOutcome, String> {
     let worktree = PathBuf::from(&req.source_path);
     let attention = |stage: &str, reason: String| Ok(QuickSubmitOutcome::NeedsAttention { stage: stage.into(), reason });
 
@@ -887,6 +928,7 @@ pub fn do_quick_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: QuickSu
     if plan.is_none() && session.is_none() {
         return attention("context", missing_context_message(req.agent_session_id.is_some()));
     }
+    let brief_is_generated = plan.is_none();
     let brief = match plan {
         Some(doc) => doc.content,
         None => stub_brief(&worktree),
@@ -905,12 +947,21 @@ pub fn do_quick_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: QuickSu
             return attention("checkpoint", format!("could not checkpoint the dirty worktree: {e}"));
         }
     }
-    // Push with the user's own git credentials; the Powerhouse token is only
-    // for the VM. Never force; git's own message explains a refusal.
+    // Push with the user's own git credentials. A Mac with none for the host
+    // (a GUI app has no terminal to prompt in) falls back to Powerhouse's
+    // GitHub token for this repo, the one the VM publishes with. Never force;
+    // git's own message explains a refusal.
     emit_quick_stage(app, &req.repo_id, &branch, "pushing");
     let has_upstream = git(&worktree, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]).is_ok();
     let push_args: Vec<&str> = if has_upstream { vec!["push", "origin", &branch] } else { vec!["push", "-u", "origin", &branch] };
-    if let Err(e) = git(&worktree, &push_args) {
+    let pushed = git_with_env(&worktree, &push_args, &[]).or_else(|e| {
+        let token_env = https_auth_env_for(mgr, &remote_url);
+        if token_env.is_empty() {
+            return Err(e);
+        }
+        git_with_env(&worktree, &push_args, &token_env)
+    });
+    if let Err(e) = pushed {
         return attention("push", format!("git push failed: {}", super::redact_stderr(&e)));
     }
 
@@ -935,6 +986,7 @@ pub fn do_quick_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: QuickSu
         provider: req.provider,
         fake_script: req.fake_script,
         brief,
+        brief_is_generated,
         env_names: req.env_names,
         memory_url: req.memory_url,
         memory_token: req.memory_token,
@@ -1449,7 +1501,10 @@ pub fn do_release(mgr: &CloudManager, app: Option<&AppHandle>, run_id: &str) -> 
             return Err("the run is still active; cancel it first".into());
         }
         if let Some(vm) = record.task_vm.as_ref() {
-            if record.phase == Phase::Accepted && runner_reports_live(mgr.boxd.as_ref(), &vm.name, run_id)? {
+            // A VM that no longer exists cannot be running the run; there is
+            // no runner to ask, and discarding only has the record to clear.
+            let vm_gone = matches!(mgr.boxd.machine_get(&vm.name), Err(TransportError::NotFound(_)));
+            if record.phase == Phase::Accepted && !vm_gone && runner_reports_live(mgr.boxd.as_ref(), &vm.name, run_id)? {
                 return Err("the runner still reports this run live; cancel it and wait for `cancelled`".into());
             }
         }
@@ -2281,7 +2336,7 @@ mod tests {
             machine_ceiling: None, checks: vec![],
             deadline_seconds: 900, permission_mode: "dontAsk".into(), allowed_tools: vec![], max_turns: None,
             max_budget_usd: None, model: None, provider: "fake".into(), fake_script: Some("complete".into()),
-            brief: "# Plan\n1. add file".into(), env_names: vec![], memory_url: None, memory_token: None, chat_id: None, session: None,
+            brief: "# Plan\n1. add file".into(), brief_is_generated: false, env_names: vec![], memory_url: None, memory_token: None, chat_id: None, session: None,
         }
     }
 
@@ -2762,6 +2817,11 @@ mod tests {
         assert_eq!(stage, "push");
         assert!(reason.contains("git push failed"), "{reason}");
         assert!(mgr.store.lock().unwrap().list().is_empty());
+        // No run exists, so the refusal is kept on disk instead.
+        let log = std::fs::read_to_string(mgr.store.lock().unwrap().refusal_log_path()).unwrap();
+        let entry: serde_json::Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
+        assert_eq!(entry["stage"], "push");
+        assert!(entry["reason"].as_str().unwrap().contains("git push failed"), "{entry}");
     }
 
     #[test]
@@ -2951,7 +3011,32 @@ mod tests {
     }
 
     #[test]
-    fn an_older_runner_gets_a_brief_only_run_and_the_chat_stays_local() {
+    fn an_older_runner_with_a_plan_doc_runs_the_plan_and_the_chat_stays_local() {
+        with_claude_home(|home| {
+            let (dir, work, remote) = temp_repo_with(false);
+            split_push_origin(&work, &remote);
+            write_transcript(home, &work, "{}\n");
+            std::fs::create_dir_all(Path::new(&work).join(".powerhouse")).unwrap();
+            std::fs::write(Path::new(&work).join(".powerhouse").join("handoff-20260922-101010.md"), "# The plan").unwrap();
+            let fake = Arc::new(Fake { echo_submit: true, ..Default::default() });
+            fake.snapshot("ph-test-base", "v1");
+            fake.on_exec("probe", Ok(probe_json()));
+            let mgr = manager(fake.clone(), dir.path());
+            let mut req = quick_request(&work, "ph-test-base");
+            req.agent_session_id = Some(SID.into());
+            let QuickSubmitOutcome::Accepted { record } = do_quick_submit(&mgr, None, req).unwrap() else { panic!("expected accepted") };
+            assert_eq!(record.manifest.protocol_version, PROTOCOL_VERSION);
+            assert!(record.manifest.session.is_none() && record.session.is_none());
+            // The agent is pointed at the brief, not at a conversation it never got.
+            assert_eq!(record.manifest.task.text, QUICK_TASK_TEXT);
+            assert_eq!(record.manifest_digest, record.manifest.digest());
+            assert!(record.phase_detail.as_deref().is_some_and(|d| d.contains("cannot continue a chat")), "{:?}", record.phase_detail);
+            assert!(!fake.calls().iter().any(|c| c.contains("--session")), "{:?}", fake.calls());
+        });
+    }
+
+    #[test]
+    fn an_older_runner_without_a_plan_doc_refuses_instead_of_dropping_the_chat() {
         with_claude_home(|home| {
             let (dir, work, remote) = temp_repo_with(false);
             split_push_origin(&work, &remote);
@@ -2962,11 +3047,14 @@ mod tests {
             let mgr = manager(fake.clone(), dir.path());
             let mut req = quick_request(&work, "ph-test-base");
             req.agent_session_id = Some(SID.into());
-            let QuickSubmitOutcome::Accepted { record } = do_quick_submit(&mgr, None, req).unwrap() else { panic!("expected accepted") };
-            assert_eq!(record.manifest.protocol_version, PROTOCOL_VERSION);
-            assert!(record.manifest.session.is_none() && record.session.is_none());
-            assert_eq!(record.manifest_digest, record.manifest.digest());
-            assert!(!fake.calls().iter().any(|c| c.contains("--session")), "{:?}", fake.calls());
+            let out = do_quick_submit(&mgr, None, req).unwrap();
+            let QuickSubmitOutcome::NeedsAttention { stage, reason } = out else { panic!("expected a refusal: {out:?}") };
+            assert_eq!(stage, "submit");
+            assert!(reason.contains("cannot continue a chat") && reason.contains("--publish-snapshot ph-test-base"), "{reason}");
+            assert!(!fake.calls().iter().any(|c| c.contains("submit --manifest")), "{:?}", fake.calls());
+            let record = mgr.store.lock().unwrap().list().into_iter().next().expect("record kept");
+            assert_eq!(record.phase, Phase::SubmitFailed);
+            assert!(record.vm_released, "the machine that never ran anything is released");
         });
     }
 
@@ -3342,6 +3430,24 @@ mod tests {
     }
 
     #[test]
+    fn discard_of_a_run_whose_vm_is_already_gone_clears_the_record() {
+        let (dir, work, _remote) = temp_repo_with(false);
+        let fake = base_fake();
+        let mgr = manager(fake.clone(), dir.path());
+        let run_id = "11111111-2222-4333-8444-555555555555";
+        // Recorded as active, but the VM was removed outside Powerhouse.
+        let mut rec = accepted_record(&work, run_id);
+        rec.machine = MachineState::Active;
+        rec.snapshot = Some(snapshot_of(run_id, "completed"));
+        mgr.store.lock().unwrap().put(rec).unwrap();
+        let r = do_release(&mgr, None, run_id).unwrap();
+        assert_eq!(r.machine, MachineState::Released);
+        assert!(r.vm_released && !r.holds_resources() && r.machine_error.is_none());
+        assert_eq!(fake.count("inspect"), 0, "no runner to ask on a missing VM");
+        assert_eq!(fake.count("remove "), 0);
+    }
+
+    #[test]
     fn lost_snapshot_save_ack_is_reconciled_by_name() {
         let (dir, work, _remote) = temp_repo_with(false);
         let fake = Arc::new(Fake { save_timeout_but_exists: true, ..Default::default() });
@@ -3529,6 +3635,75 @@ mod tests {
 mod e2e {
     use super::*;
 
+    /// The "Send to cloud" button end to end on real boxd with the real
+    /// agent: checkpoint, push (the Powerhouse-token fallback included), pack
+    /// the chat, submit, follow the run, bring the chat home, release the VM.
+    /// POWERHOUSE_CLOUD_QUICK_E2E_SOURCE=<worktree on a branch>
+    /// POWERHOUSE_CLOUD_QUICK_E2E_SESSION=<Claude session id started in it>
+    #[test]
+    #[ignore]
+    fn cloud_e2e_quick_send_with_the_chat() {
+        let Ok(source) = std::env::var("POWERHOUSE_CLOUD_QUICK_E2E_SOURCE") else { return };
+        let sid = std::env::var("POWERHOUSE_CLOUD_QUICK_E2E_SESSION").expect("POWERHOUSE_CLOUD_QUICK_E2E_SESSION");
+        let base = std::env::var("POWERHOUSE_CLOUD_E2E_SNAPSHOT").unwrap_or_else(|_| "powerhouse-base".into());
+        let model = std::env::var("POWERHOUSE_CLOUD_E2E_MODEL").unwrap_or_else(|_| "claude-opus-5-5".into());
+        let dir = tempfile::tempdir().unwrap();
+        let store_path = dir.path().join("cloud-runs.json");
+        let mgr = CloudManager::with(CloudStore::open(store_path), Arc::new(BoxdCli::default()), Arc::new(secrets::Keychain));
+        let req = QuickSubmitRequest {
+            repo_id: "e2e".into(),
+            repo_path: source.clone(),
+            repo_name: Path::new(&source).file_name().unwrap().to_string_lossy().into(),
+            source_path: source.clone(),
+            base_snapshot: base,
+            machine_ceiling: None,
+            checks: vec![],
+            deadline_seconds: 1200,
+            permission_mode: "acceptEdits".into(),
+            allowed_tools: ["Read", "Edit", "Write", "Glob", "Grep", "Bash"].map(String::from).to_vec(),
+            max_turns: Some(30),
+            max_budget_usd: Some(2.0),
+            model: Some(model),
+            provider: "claude".into(),
+            fake_script: None,
+            env_names: vec![],
+            memory_url: None,
+            memory_token: None,
+            chat_id: Some("e2e-chat".into()),
+            agent_session_id: Some(sid.clone()),
+        };
+        let out = do_quick_submit(&mgr, None, req).expect("quick submit");
+        let QuickSubmitOutcome::Accepted { record } = out else { panic!("refused: {out:?}") };
+        let run_id = record.run_id.clone();
+        eprintln!("accepted run {run_id} on {:?}; protocol {} session {:?} detail {:?}", record.task_vm, record.manifest.protocol_version, record.manifest.session, record.phase_detail);
+        assert!(record.manifest.session.is_some(), "the chat must travel");
+        let deadline = Instant::now() + Duration::from_secs(1500);
+        let mut r = load(&mgr, &run_id).unwrap();
+        while Instant::now() < deadline {
+            r = do_sync(&mgr, None, &run_id, false).expect("sync");
+            eprintln!("state={:?} machine={:?} events={} err={:?}", r.state(), r.machine, r.events.len(), r.last_sync_error);
+            if r.state().map(|s| s.is_terminal()).unwrap_or(false) {
+                break;
+            }
+            std::thread::sleep(Duration::from_secs(10));
+        }
+        let res = r.result.clone();
+        eprintln!("SUMMARY: {:?}", res.as_ref().map(|x| &x.summary));
+        eprintln!("CHANGED: {:?} published={:?}", res.as_ref().map(|x| &x.changed_files), res.as_ref().map(|x| x.published));
+        assert_eq!(r.state(), Some(RunState::Completed), "{:?}", r.snapshot);
+        let deadline = Instant::now() + Duration::from_secs(300);
+        while r.machine != MachineState::Released && Instant::now() < deadline {
+            let _ = do_lifecycle_tick(&mgr, None);
+            r = load(&mgr, &run_id).unwrap();
+            if r.machine != MachineState::Released {
+                std::thread::sleep(Duration::from_secs(5));
+            }
+        }
+        eprintln!("machine={:?} merr={:?} session={:?} returned={:?}", r.machine, r.machine_error, r.session, r.returned);
+        assert_eq!(r.machine, MachineState::Released, "{:?}", r.machine_error);
+        eprintln!("QUICK E2E OK: run {run_id}");
+    }
+
     #[test]
     #[ignore]
     fn cloud_e2e_fake_agent_through_desktop_backend() {
@@ -3579,6 +3754,7 @@ mod e2e {
             provider: provider.clone(),
             fake_script: (provider == "fake").then(|| script.clone()),
             brief: format!("# Plan\n\n1. Read the repository layout.\n2. {task}\n3. Make the acceptance check pass: it verifies {expect_file} exists.\n"),
+            brief_is_generated: false,
             env_names: vec![],
             memory_url: std::env::var("POWERHOUSE_CLOUD_E2E_MEMORY_URL").ok(),
             memory_token: std::env::var("POWERHOUSE_CLOUD_E2E_MEMORY_TOKEN").ok(),

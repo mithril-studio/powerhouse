@@ -118,6 +118,8 @@ export interface Settings {
   cloud?: CloudSettings;
   /** Shared agent memory (Basic Memory over MCP). Additive; older stores lack it. */
   memory?: MemorySettings;
+  /** Right sidebar width in px, set by dragging its left edge. */
+  rightSidebarWidth?: number;
 }
 
 export interface Branch {
@@ -126,6 +128,10 @@ export interface Branch {
   worktreePath: string;
   chats: Chat[];
   activeChatId: string | null;
+  /** Files open as read-only tabs, by worktree-relative path. */
+  files?: string[];
+  /** The open file shown in place of the active chat; absent = the chat. */
+  activeFile?: string | null;
   /** Set true once this branch lands on main via the queue (green dot). */
   merged?: boolean;
 }
@@ -278,6 +284,9 @@ interface AppState extends PersistedTree {
   addChat: (repoId: string, branchId: string, chat: Chat) => void;
   removeChat: (repoId: string, branchId: string, chatId: string) => void;
   setActiveChat: (repoId: string, branchId: string, chatId: string) => void;
+  /** Open `path` as a tab (or focus it if already open). */
+  openFile: (repoId: string, branchId: string, path: string) => void;
+  closeFile: (repoId: string, branchId: string, path: string) => void;
   applyCloudSession: (
     repoId: string,
     branchId: string,
@@ -321,6 +330,7 @@ interface AppState extends PersistedTree {
   closeWorkflowModal: () => void;
   toggleRightSidebar: () => void;
   setRightTab: (tab: RightTab) => void;
+  setRightSidebarWidth: (width: number) => void;
   openRightTab: (tab: RightTab) => void;
 
   openChatPicker: () => void;
@@ -444,6 +454,9 @@ export function migrateSettings(
       connections,
       ...(tree.settings.cloud ? { cloud: { ...DEFAULT_CLOUD_SETTINGS, ...tree.settings.cloud } } : {}),
       ...(tree.settings.memory ? { memory: { ...DEFAULT_MEMORY_SETTINGS, ...tree.settings.memory } } : {}),
+      ...(typeof tree.settings.rightSidebarWidth === "number"
+        ? { rightSidebarWidth: tree.settings.rightSidebarWidth }
+        : {}),
     };
   }
   const agents = SEED_AGENTS.map((a) => ({ ...a }));
@@ -709,6 +722,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...b,
         chats: [...b.chats, chat],
         activeChatId: chat.id,
+        activeFile: null,
       })),
     })),
 
@@ -731,7 +745,35 @@ export const useAppStore = create<AppState>((set, get) => ({
       repos: updateBranch(s.repos, repoId, branchId, (b) => ({
         ...b,
         activeChatId: chatId,
+        activeFile: null,
       })),
+    })),
+
+  openFile: (repoId, branchId, path) =>
+    set((s) => ({
+      repos: updateBranch(s.repos, repoId, branchId, (b) => {
+        const files = b.files ?? [];
+        return {
+          ...b,
+          files: files.includes(path) ? files : [...files, path],
+          activeFile: path,
+        };
+      }),
+    })),
+
+  closeFile: (repoId, branchId, path) =>
+    set((s) => ({
+      repos: updateBranch(s.repos, repoId, branchId, (b) => {
+        const all = b.files ?? [];
+        const files = all.filter((f) => f !== path);
+        let activeFile = b.activeFile ?? null;
+        if (activeFile === path) {
+          // Next file over, or back to the active chat when none are left.
+          const idx = all.indexOf(path);
+          activeFile = files[Math.min(idx, files.length - 1)] ?? null;
+        }
+        return { ...b, files, activeFile };
+      }),
     })),
 
   applyCloudSession: (repoId, branchId, chatId, runId, sessionId) =>
@@ -860,6 +902,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   toggleRightSidebar: () => set((s) => ({ rightSidebarOpen: !s.rightSidebarOpen })),
   setRightTab: (tab) => set({ rightTab: tab }),
+  setRightSidebarWidth: (width) =>
+    set((s) => ({ settings: { ...s.settings, rightSidebarWidth: Math.round(width) } })),
   openRightTab: (tab) => set({ rightSidebarOpen: true, rightTab: tab }),
 
   openChatPicker: () => set({ chatPickerOpen: true }),

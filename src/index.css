@@ -335,3 +335,36 @@
   max-width: 100%;
   border: 1px solid var(--border);
 }
+
+/* File viewer: markdown reads like a document, code gets line numbers. */
+.file-md {
+  font-size: 0.875rem;
+  line-height: 1.65;
+}
+.file-md h1 { font-size: 1.6em; }
+.file-md h2 { font-size: 1.3em; }
+.file-md h3 { font-size: 1.1em; }
+/* Source files hard-wrap paragraphs; reflow them. */
+.file-md p { white-space: normal; }
+.file-code pre {
+  /* The app background, not the Shiki theme's. */
+  background-color: transparent !important;
+  padding: 0.5rem 0;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+.file-code code {
+  counter-reset: line;
+}
+.file-code .line::before {
+  counter-increment: line;
+  content: counter(line);
+  display: inline-block;
+  width: 3.5em;
+  padding-right: 1em;
+  text-align: right;
+  color: var(--muted-foreground);
+  opacity: 0.5;
+  user-select: none;
+}

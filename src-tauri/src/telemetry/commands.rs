@@ -46,12 +46,17 @@ pub struct RunSummary {
     pub source_sha: Option<String>,
     pub model: Option<String>,
     pub mode: Option<String>,
+    pub cache_write_tokens: Option<i64>,
+    pub context_start: Option<i64>,
+    pub context_peak: Option<i64>,
+    pub context_window: Option<i64>,
 }
 
 const RUN_COLUMNS: &str = "run_id, source, coverage, chat_id, provider_session_id, resumed,
     agent_name, repo_label, branch_label, started_at, ended_at, exit_code, end_reason,
     dropped_events, parse_errors, usage_events, input_tokens, output_tokens, cached_tokens,
-    cost_usd, turn_count, tool_call_count, repo_id, source_sha, model, mode";
+    cost_usd, turn_count, tool_call_count, repo_id, source_sha, model, mode,
+    cache_write_tokens, context_start, context_peak, context_window";
 
 fn run_from_row(row: &Row) -> rusqlite::Result<RunSummary> {
     Ok(RunSummary {
@@ -81,6 +86,10 @@ fn run_from_row(row: &Row) -> rusqlite::Result<RunSummary> {
         source_sha: row.get(23)?,
         model: row.get(24)?,
         mode: row.get(25)?,
+        cache_write_tokens: row.get(26)?,
+        context_start: row.get(27)?,
+        context_peak: row.get(28)?,
+        context_window: row.get(29)?,
     })
 }
 

@@ -57,6 +57,12 @@ describe("presentRun", () => {
     expect(p.detail).toMatch(/Safe to close/);
   });
 
+  it("keeps the submit note visible once accepted", () => {
+    const p = presentRun(base({ phase_detail: "The runner in snapshot b cannot continue a chat yet" }));
+    expect(p.detail).toMatch(/Safe to close/);
+    expect(p.detail).toMatch(/cannot continue a chat/);
+  });
+
   it("shows completed as ready for review, never merged, and reports absent checks honestly", () => {
     const r = base({
       snapshot: snap({

@@ -61,6 +61,10 @@ const base: RunSummary = {
   sourceSha: null,
   model: null,
   mode: null,
+  cacheWriteTokens: null,
+  contextStart: null,
+  contextPeak: null,
+  contextWindow: null,
 };
 
 describe("runStatus", () => {

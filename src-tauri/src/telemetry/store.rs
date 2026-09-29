@@ -3,7 +3,7 @@
 // `rebuild()` re-derives from raw events through the same `ingest` path the
 // live writer uses — replay must reproduce identical totals.
 use super::projector::{parse_line, Delta, Direction, Projector};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 
 /// Raw lines are evidence, but a runaway tool result shouldn't balloon the
 /// database; oversized lines are cut and flagged `truncated`.
@@ -45,7 +45,12 @@ CREATE TABLE IF NOT EXISTS runs (
   cached_tokens       INTEGER,
   cost_usd            REAL,
   turn_count          INTEGER NOT NULL DEFAULT 0,
-  tool_call_count     INTEGER NOT NULL DEFAULT 0
+  tool_call_count     INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens  INTEGER,
+  context_start       INTEGER,                 -- tokens in context at the first snapshot
+  context_peak        INTEGER,
+  context_window      INTEGER,
+  cost_session_usd    REAL                     -- last session-cumulative cost seen (delta baseline)
 );
 CREATE INDEX IF NOT EXISTS runs_started ON runs(started_at DESC);
 CREATE INDEX IF NOT EXISTS runs_chat ON runs(chat_id, started_at);
@@ -119,13 +124,31 @@ ALTER TABLE runs ADD COLUMN model TEXT;
 ALTER TABLE runs ADD COLUMN mode TEXT;
 "#;
 
+/// v2 → v3: cache-write tokens, context-window snapshots, and the cost
+/// baseline. Run a rebuild afterwards to backfill them from raw events.
+const MIGRATE_V2_V3: &str = r#"
+ALTER TABLE runs ADD COLUMN cache_write_tokens INTEGER;
+ALTER TABLE runs ADD COLUMN context_start INTEGER;
+ALTER TABLE runs ADD COLUMN context_peak INTEGER;
+ALTER TABLE runs ADD COLUMN context_window INTEGER;
+ALTER TABLE runs ADD COLUMN cost_session_usd REAL;
+"#;
+
 pub fn open_db(path: &std::path::Path) -> Result<Connection, String> {
-    let conn = Connection::open(path).map_err(|e| e.to_string())?;
-    init_schema(&conn)?;
+    let mut conn = Connection::open(path).map_err(|e| e.to_string())?;
+    if init_schema(&conn)? {
+        // One-time backfill of the columns the upgrade added. A failure only
+        // leaves them empty; the Telemetry page can rebuild again.
+        if let Err(e) = rebuild(&mut conn) {
+            eprintln!("[telemetry] post-upgrade rebuild failed: {e}");
+        }
+    }
     Ok(conn)
 }
 
-pub fn init_schema(conn: &Connection) -> Result<(), String> {
+/// Returns true when an existing database was upgraded, so its projections
+/// should be rebuilt to fill the new columns.
+pub fn init_schema(conn: &Connection) -> Result<bool, String> {
     conn.execute_batch(
         "PRAGMA journal_mode = WAL;\nPRAGMA synchronous = NORMAL;\nPRAGMA foreign_keys = ON;",
     )
@@ -141,12 +164,15 @@ pub fn init_schema(conn: &Connection) -> Result<(), String> {
     if version == 1 {
         conn.execute_batch(MIGRATE_V1_V2).map_err(|e| e.to_string())?;
     }
+    if version == 1 || version == 2 {
+        conn.execute_batch(MIGRATE_V2_V3).map_err(|e| e.to_string())?;
+    }
     conn.execute(
-        "INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', '2')",
+        "INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', '3')",
         [],
     )
     .map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(version == 1 || version == 2)
 }
 
 /// Startup hygiene: any run still open belongs to a previous app launch and
@@ -438,6 +464,7 @@ fn apply_delta(conn: &Connection, run_id: &str, delta: &Delta) -> Result<(), Str
             add_int("input_tokens", u.input)?;
             add_int("output_tokens", u.output)?;
             add_int("cached_tokens", u.cached)?;
+            add_int("cache_write_tokens", u.cache_write)?;
             if let Some(cost) = u.cost {
                 conn.execute(
                     "UPDATE runs SET cost_usd = COALESCE(cost_usd, 0) + ?2 WHERE run_id = ?1",
@@ -451,9 +478,60 @@ fn apply_delta(conn: &Connection, run_id: &str, delta: &Delta) -> Result<(), Str
             )
             .map_err(err)?;
         }
+        Delta::Window { used, size, session_cost } => {
+            conn.execute(
+                "UPDATE runs SET context_start  = COALESCE(context_start, ?2),
+                                 context_peak   = CASE WHEN ?2 IS NULL THEN context_peak
+                                                       ELSE MAX(COALESCE(context_peak, 0), ?2) END,
+                                 context_window = COALESCE(?3, context_window)
+                 WHERE run_id = ?1",
+                params![run_id, used, size],
+            )
+            .map_err(err)?;
+            if let Some(total) = *session_cost {
+                let delta = match cost_baseline(conn, run_id)? {
+                    Some(last) if total >= last => total - last,
+                    // No baseline, or the adapter restarted its counter.
+                    _ => total,
+                };
+                conn.execute(
+                    "UPDATE runs SET cost_usd = COALESCE(cost_usd, 0) + ?2, cost_session_usd = ?3
+                     WHERE run_id = ?1",
+                    params![run_id, delta, total],
+                )
+                .map_err(err)?;
+            }
+        }
         Delta::Replayed => {}
     }
     Ok(())
+}
+
+/// The session-cumulative cost already accounted for before this snapshot:
+/// this run's last snapshot, else the last snapshot of the most recent
+/// earlier run of the same provider session (a resume carries the total over).
+fn cost_baseline(conn: &Connection, run_id: &str) -> Result<Option<f64>, String> {
+    let (last, session, started): (Option<f64>, Option<String>, i64) = conn
+        .query_row(
+            "SELECT cost_session_usd, provider_session_id, started_at FROM runs WHERE run_id = ?1",
+            params![run_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .map_err(|e| e.to_string())?;
+    if last.is_some() {
+        return Ok(last);
+    }
+    let Some(session) = session else { return Ok(None) };
+    conn.query_row(
+        "SELECT cost_session_usd FROM runs
+         WHERE provider_session_id = ?1 AND run_id != ?2 AND cost_session_usd IS NOT NULL
+           AND (started_at < ?3 OR (started_at = ?3 AND run_id < ?2))
+         ORDER BY started_at DESC, run_id DESC LIMIT 1",
+        params![session, run_id, started],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(|e| e.to_string())
 }
 
 fn cap_raw(raw: &str) -> (&str, bool) {
@@ -487,57 +565,65 @@ pub fn rebuild(conn: &mut Connection) -> Result<RebuildReport, String> {
                          parse_errors = 0, usage_events = 0,
                          input_tokens = NULL, output_tokens = NULL,
                          cached_tokens = NULL, cost_usd = NULL,
+                         cache_write_tokens = NULL, context_start = NULL,
+                         context_peak = NULL, context_window = NULL,
+                         cost_session_usd = NULL,
                          turn_count = 0, tool_call_count = 0,
                          mode = NULL;",
     )
     .map_err(|e| e.to_string())?;
 
     let mut report = RebuildReport::default();
-    // Batched keyset pagination: SQLite behavior is undefined when a table is
-    // updated while a SELECT over it is still stepping, so each batch is
-    // collected before its events are re-ingested (which UPDATEs `events`).
-    let mut cursor: (String, i64) = (String::new(), 0);
-    let mut current: Option<(String, Projector)> = None;
-    loop {
-        let batch: Vec<(String, i64, String, i64, String)> = {
-            let mut stmt = tx
-                .prepare(
-                    "SELECT run_id, seq, direction, ingest_time, raw FROM events
-                     WHERE run_id > ?1 OR (run_id = ?1 AND seq > ?2)
-                     ORDER BY run_id, seq LIMIT 500",
-                )
-                .map_err(|e| e.to_string())?;
-            let rows = stmt
-                .query_map(params![cursor.0, cursor.1], |row| {
-                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
-                })
-                .map_err(|e| e.to_string())?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
-        };
-        if batch.is_empty() {
-            break;
-        }
-        for (run_id, seq, direction, ingest_time, raw) in &batch {
-            let is_new_run = current.as_ref().map(|(id, _)| id != run_id).unwrap_or(true);
-            if is_new_run {
-                report.runs += 1;
-                current = Some((run_id.clone(), Projector::default()));
+    // Runs replay oldest first: a resumed run's cost baseline is the previous
+    // run of the same session, which must already be re-derived.
+    let run_ids: Vec<String> = {
+        let mut stmt = tx
+            .prepare(
+                "SELECT run_id FROM runs WHERE run_id IN (SELECT DISTINCT run_id FROM events)
+                 ORDER BY started_at, run_id",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([], |row| row.get(0)).map_err(|e| e.to_string())?;
+        rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?
+    };
+    for run_id in &run_ids {
+        report.runs += 1;
+        let mut proj = Projector::default();
+        // Batched keyset pagination: SQLite behavior is undefined when a table
+        // is updated while a SELECT over it is still stepping, so each batch is
+        // collected before its events are re-ingested (which UPDATEs `events`).
+        let mut cursor: i64 = i64::MIN;
+        loop {
+            let batch: Vec<(i64, String, i64, String)> = {
+                let mut stmt = tx
+                    .prepare(
+                        "SELECT seq, direction, ingest_time, raw FROM events
+                         WHERE run_id = ?1 AND seq > ?2 ORDER BY seq LIMIT 500",
+                    )
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt
+                    .query_map(params![run_id, cursor], |row| {
+                        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                    })
+                    .map_err(|e| e.to_string())?;
+                rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+            };
+            let Some((last_seq, ..)) = batch.last() else { break };
+            cursor = *last_seq;
+            for (seq, direction, ingest_time, raw) in &batch {
+                ingest_event(
+                    &tx,
+                    &mut proj,
+                    run_id,
+                    *seq,
+                    Direction::parse(direction),
+                    *ingest_time,
+                    raw,
+                    false,
+                )?;
+                report.events += 1;
             }
-            let proj = &mut current.as_mut().expect("just set").1;
-            ingest_event(
-                &tx,
-                proj,
-                run_id,
-                *seq,
-                Direction::parse(direction),
-                *ingest_time,
-                raw,
-                false,
-            )?;
-            report.events += 1;
         }
-        let (run_id, seq, ..) = batch.last().expect("non-empty batch");
-        cursor = (run_id.clone(), *seq);
     }
     tx.commit().map_err(|e| e.to_string())?;
     Ok(report)
@@ -700,7 +786,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, "2");
+        assert_eq!(version, "3");
     }
 
     /// A terminal queue run for metric tests.
@@ -813,6 +899,55 @@ mod tests {
             .unwrap();
         assert_eq!(status.as_deref(), Some("completed"));
         assert!(ended.is_some());
+    }
+
+    /// Feeds a session/resume (or new) plus usage_update snapshots into a run.
+    fn window_run(conn: &Connection, run_id: &str, started_at: i64, snapshots: &[(i64, Option<f64>)]) {
+        insert_run(conn, &RunStart { started_at, ..spec(run_id) }, "boot-1").unwrap();
+        let mut lines = vec![
+            ("out", r#"{"jsonrpc":"2.0","id":1,"method":"session/resume","params":{"sessionId":"sess-1"}}"#.to_string()),
+            ("in", r#"{"jsonrpc":"2.0","id":1,"result":{}}"#.to_string()),
+        ];
+        for (used, cost) in snapshots {
+            let cost = cost.map(|c| format!(r#","cost":{{"amount":{c},"currency":"USD"}}"#)).unwrap_or_default();
+            lines.push(("in", format!(
+                r#"{{"jsonrpc":"2.0","method":"session/update","params":{{"update":{{"sessionUpdate":"usage_update","used":{used},"size":1000000{cost}}}}}}}"#
+            )));
+        }
+        let mut proj = Projector::default();
+        for (i, (dir, raw)) in lines.iter().enumerate() {
+            let dir = if *dir == "out" { Direction::Out } else { Direction::In };
+            ingest_event(conn, &mut proj, run_id, i as i64 + 1, dir, started_at + i as i64, raw, true).unwrap();
+        }
+    }
+
+    fn cost_and_context(conn: &Connection, run_id: &str) -> (Option<f64>, Option<i64>, Option<i64>, Option<i64>) {
+        conn.query_row(
+            "SELECT cost_usd, context_start, context_peak, context_window FROM runs WHERE run_id = ?1",
+            params![run_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn session_cost_snapshots_become_per_run_cost() {
+        let mut conn = mem();
+        // First run: session total climbs to 3.0.
+        window_run(&conn, "a", 1_000, &[(40_000, None), (90_000, Some(1.0)), (60_000, Some(3.0))]);
+        // Resumed run: the adapter carries the session total over (3.0 → 5.5).
+        window_run(&conn, "b", 2_000, &[(200_000, Some(4.0)), (210_000, Some(5.5))]);
+        // Resumed again, but the adapter restarted its counter at 0.
+        window_run(&conn, "c", 3_000, &[(50_000, Some(0.5))]);
+
+        let check = |conn: &Connection| {
+            assert_eq!(cost_and_context(conn, "a"), (Some(3.0), Some(40_000), Some(90_000), Some(1_000_000)));
+            assert_eq!(cost_and_context(conn, "b"), (Some(2.5), Some(200_000), Some(210_000), Some(1_000_000)));
+            assert_eq!(cost_and_context(conn, "c").0, Some(0.5));
+        };
+        check(&conn);
+        rebuild(&mut conn).unwrap();
+        check(&conn);
     }
 
     #[test]
@@ -1012,7 +1147,7 @@ mod tests {
         let version: String = conn
             .query_row("SELECT value FROM meta WHERE key='schema_version'", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, "2");
+        assert_eq!(version, "3");
     }
 
     #[test]
