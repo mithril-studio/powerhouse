@@ -51,7 +51,7 @@ function FolderIcon({ open }: { open: boolean }) {
   );
 }
 
-function FileIcon() {
+export function FileIcon() {
   return (
     <svg
       width="14"
@@ -327,11 +327,6 @@ const MIN_WIDTH = 260;
 /** Room always left for the main sidebar and the chat. */
 const MIN_MAIN = 480;
 
-/** Sidebar width for a drag position, kept usable at any window size. */
-function clampSidebarWidth(width: number, viewport: number): number {
-  return Math.max(MIN_WIDTH, Math.min(width, viewport - MIN_MAIN));
-}
-
 /** Drag the left edge to resize; double-click resets. The width is saved on
  *  release, not on every move, so a drag doesn't rewrite the store file. */
 function useSidebarWidth() {
@@ -345,7 +340,7 @@ function useSidebarWidth() {
     handle.setPointerCapture(e.pointerId);
     let width = saved;
     const move = (ev: PointerEvent) => {
-      width = clampSidebarWidth(window.innerWidth - ev.clientX, window.innerWidth);
+      width = Math.max(MIN_WIDTH, window.innerWidth - ev.clientX);
       setDragWidth(width);
     };
     const up = () => {
@@ -390,7 +385,7 @@ export function RightSidebar({
 
   return (
     <aside
-      // maxWidth keeps the chat usable when the window shrinks after a drag.
+      // maxWidth keeps the chat usable on a narrow window, whatever was saved.
       style={{ width: resize.width, minWidth: MIN_WIDTH, maxWidth: `calc(100vw - ${MIN_MAIN}px)` }}
       className="relative flex shrink-0 flex-col border-l border-border bg-background"
     >

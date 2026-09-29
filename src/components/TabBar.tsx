@@ -3,6 +3,7 @@ import { deleteChat } from "../lib/actions";
 import { startHandoff } from "../lib/handoff";
 import { quickSubmitBranch } from "../lib/quickSubmit";
 import { ActivityDot } from "./ActivityDot";
+import { FileIcon } from "./RightSidebar";
 
 interface Props {
   repo: Repo | null;
@@ -87,10 +88,7 @@ export function TabBar({ repo, branch }: Props) {
                     : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
                 }`}
               >
-                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" className="shrink-0 opacity-60" aria-hidden>
-                  <path d="M4 2.5h5l3 3V13a.5.5 0 0 1-.5.5h-7A.5.5 0 0 1 4 13V3a.5.5 0 0 1 .5-.5z" />
-                  <path d="M8.8 2.6v3h3" />
-                </svg>
+                <FileIcon />
                 <span className="max-w-32 truncate font-mono text-xs">{name}</span>
                 <button
                   onClick={(e) => {
