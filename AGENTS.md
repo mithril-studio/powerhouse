@@ -23,11 +23,10 @@ worktree branch → agent pushes to test → test server + signed beta pre-relea
   deliberately unprotected. Every push triggers `.github/workflows/beta.yml`, which builds a **signed +
   notarized** beta and publishes it as a GitHub **pre-release** on `mithril-studio/powerhouse` (never shipped
   to users); the test server also deploys from it.
-- **Ship by**: when a feature is complete, run the ship workflow against `test` (lint, tests, build, run the
-  app, AI review of the diff against `main`). Green → verify the installed beta contains the intended work,
-  open a PR from `test` into `main`, merge, and push a `v<version>` tag (matching `src-tauri/tauri.conf.json`
-  `version`) to fire `.github/workflows/release.yml`, which builds/signs/notarizes and publishes to
-  `powerhouse-releases`.
+- **Ship by**: `/ship` (see "Ship workflow" below): `scripts/ship.sh check` → AI review of the diff →
+  verify the installed beta contains the intended work → `scripts/ship.sh open` → the human merges →
+  `scripts/ship.sh tag` pushes the `v<version>` tag (matching `src-tauri/tauri.conf.json` `version`), which
+  fires `.github/workflows/release.yml` to build/sign/notarize and publish to `powerhouse-releases`.
 
 Why this exists: a production release once went out missing work that was assumed to be included. The beta
 gate is the mandatory place to catch that — a real installed build, not just a green CI check.
@@ -68,11 +67,20 @@ Each agent works in its own worktree on its own branch and lands its own work on
 
 ## Ship workflow (once per feature)
 
-Run before the `test → main` PR, never per commit. It cuts a throwaway worktree from `origin/test` and runs,
-in order: install, lint, tests, build, launch the app for a smoke check, and an AI review of the whole diff
-against `main`. It runs on the shared workflow runner below. Status: the runner and step validation exist;
-the "run a workflow against a branch in a throwaway worktree" wrapper and the AI-review step type are the
-next two pieces.
+Run before the `test → main` PR, never per commit. Today it is `scripts/ship.sh`, driven by the `/ship` skill
+(human-invoked only):
+
+- `scripts/ship.sh check` — commits in the release, version bumped past the last `v*` tag and consistent in
+  all four files, a beta with an uploaded DMG on the `test` tip, and `verify.sh` in a throwaway worktree of
+  `origin/test`. Prints `READY` or the reasons it isn't. The AI review of `origin/main...origin/test` is the
+  skill's step, not the script's.
+- `scripts/bump.sh patch|minor|major|X.Y.Z` — bumps the version everywhere and commits; land it with
+  `land.sh`. A release whose version already exists is refused by `release.sh`, so bump first.
+- `scripts/ship.sh open` — opens the `test → main` PR listing every commit. The human merges it.
+- `scripts/ship.sh tag` — after the merge: tags `v<version>` on `main`, pushes the tag, follows
+  `release.yml`, checks the assets via the per-release endpoint, and waits until the updater serves it.
+
+Still to come: the same steps as a workflow on the shared runner below, with a smoke launch of the app.
 
 ## Workflow runner
 
