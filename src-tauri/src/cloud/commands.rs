@@ -857,6 +857,27 @@ fn emit_quick_stage(app: Option<&AppHandle>, repo_id: &str, branch: &str, stage:
 /// pick the newest plan document as the brief (or generate a stub), then run
 /// the normal submission with the caller's last-used settings.
 pub fn do_quick_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: QuickSubmitRequest) -> Result<QuickSubmitOutcome, String> {
+    let (repo_name, source_path) = (req.repo_name.clone(), req.source_path.clone());
+    let out = quick_submit(mgr, app, req);
+    // A refused send creates no run record; keep its reason on disk so it can
+    // be read after the card is dismissed. Best effort; never blocks.
+    let reason = match &out {
+        Ok(QuickSubmitOutcome::NeedsAttention { stage, reason }) => Some((stage.as_str(), reason.as_str())),
+        Err(e) => Some(("error", e.as_str())),
+        Ok(QuickSubmitOutcome::Accepted { .. }) => None,
+    };
+    if let Some((stage, reason)) = reason {
+        let line = serde_json::json!({ "ts_ms": now_ms(), "repo": repo_name, "source_path": source_path, "stage": stage, "reason": reason });
+        let path = mgr.store.lock().unwrap().refusal_log_path();
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            use std::io::Write;
+            let _ = writeln!(f, "{line}");
+        }
+    }
+    out
+}
+
+fn quick_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: QuickSubmitRequest) -> Result<QuickSubmitOutcome, String> {
     let worktree = PathBuf::from(&req.source_path);
     let attention = |stage: &str, reason: String| Ok(QuickSubmitOutcome::NeedsAttention { stage: stage.into(), reason });
 
@@ -926,12 +947,21 @@ pub fn do_quick_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: QuickSu
             return attention("checkpoint", format!("could not checkpoint the dirty worktree: {e}"));
         }
     }
-    // Push with the user's own git credentials; the Powerhouse token is only
-    // for the VM. Never force; git's own message explains a refusal.
+    // Push with the user's own git credentials. A Mac with none for the host
+    // (a GUI app has no terminal to prompt in) falls back to Powerhouse's
+    // GitHub token for this repo, the one the VM publishes with. Never force;
+    // git's own message explains a refusal.
     emit_quick_stage(app, &req.repo_id, &branch, "pushing");
     let has_upstream = git(&worktree, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]).is_ok();
     let push_args: Vec<&str> = if has_upstream { vec!["push", "origin", &branch] } else { vec!["push", "-u", "origin", &branch] };
-    if let Err(e) = git(&worktree, &push_args) {
+    let pushed = git_with_env(&worktree, &push_args, &[]).or_else(|e| {
+        let token_env = https_auth_env_for(mgr, &remote_url);
+        if token_env.is_empty() {
+            return Err(e);
+        }
+        git_with_env(&worktree, &push_args, &token_env)
+    });
+    if let Err(e) = pushed {
         return attention("push", format!("git push failed: {}", super::redact_stderr(&e)));
     }
 
@@ -2784,6 +2814,11 @@ mod tests {
         assert_eq!(stage, "push");
         assert!(reason.contains("git push failed"), "{reason}");
         assert!(mgr.store.lock().unwrap().list().is_empty());
+        // No run exists, so the refusal is kept on disk instead.
+        let log = std::fs::read_to_string(mgr.store.lock().unwrap().refusal_log_path()).unwrap();
+        let entry: serde_json::Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
+        assert_eq!(entry["stage"], "push");
+        assert!(entry["reason"].as_str().unwrap().contains("git push failed"), "{entry}");
     }
 
     #[test]

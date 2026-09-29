@@ -307,6 +307,12 @@ impl CloudStore {
         self.path.parent().unwrap_or(Path::new(".")).join(stem).join(run_id)
     }
 
+    /// Sends refused before a run existed, one JSON line each, next to the
+    /// store file: `<store>/../cloud-refusals.jsonl`.
+    pub fn refusal_log_path(&self) -> PathBuf {
+        self.path.parent().unwrap_or(Path::new(".")).join("cloud-refusals.jsonl")
+    }
+
     pub fn list(&self) -> Vec<CloudRunRecord> {
         let mut v: Vec<_> = self.runs.values().cloned().collect();
         v.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
