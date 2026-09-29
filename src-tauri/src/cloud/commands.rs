@@ -275,6 +275,10 @@ pub struct SubmitRequest {
     /// Plan/context markdown rendered by Powerhouse (handoff doc, notes).
     #[serde(default)]
     pub brief: String,
+    /// The brief is the generated branch snapshot, not a plan document: on
+    /// its own it gives the agent nothing to act on.
+    #[serde(skip)]
+    pub brief_is_generated: bool,
     /// Per-project env var names; values come from the Keychain per repo and
     /// travel only in the per-run credentials file.
     #[serde(default)]
@@ -641,18 +645,33 @@ pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest
             ));
         }
         // A base snapshot from before session handoff can still run the
-        // branch from its brief; the chat then stays on this Mac.
+        // branch from a plan document; the chat then stays on this Mac. With
+        // only the generated snapshot as brief the agent would be told to
+        // continue a conversation it never received, so refuse instead.
+        let mut downgrade_note = None;
         if manifest.session.is_some() && probe.session_protocol_version != Some(SESSION_PROTOCOL_VERSION) {
+            if req.brief_is_generated {
+                return Err(format!(
+                    "the runner in snapshot {name} cannot continue a chat, and there is no plan document under `.powerhouse/` to send instead. \
+                     Publish a new base snapshot (`scripts/cloud-base-setup.sh --publish-snapshot {name}`), or run /handoff and send again.",
+                    name = base.name
+                ));
+            }
+            if manifest.task.text == SESSION_TASK_TEXT {
+                manifest.task.text = QUICK_TASK_TEXT.into();
+            }
             manifest.session = None;
             manifest.protocol_version = PROTOCOL_VERSION;
             digest = manifest.digest();
             record.manifest = manifest.clone();
             record.manifest_digest = digest.clone();
             record.session = None;
-            record.phase_detail = Some(format!(
-                "The runner in snapshot {} cannot continue a chat yet, so the cloud agent starts from the brief. Publish a new base snapshot to send the chat too.",
+            let note = format!(
+                "The runner in snapshot {} cannot continue a chat yet, so the cloud agent starts from the plan document. Publish a new base snapshot to send the chat too.",
                 base.name
-            ));
+            );
+            record.phase_detail = Some(note.clone());
+            downgrade_note = Some(note);
             persist(mgr, app, &record)?;
         }
         if !probe.agent_user_ready || !probe.store_ready {
@@ -734,7 +753,8 @@ pub fn do_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: SubmitRequest
         }
         record.receipt = Some(receipt);
         record.phase = Phase::Accepted;
-        record.phase_detail = None;
+        // The only detail worth keeping past acceptance: the chat stayed home.
+        record.phase_detail = downgrade_note;
         persist(mgr, app, &record)?;
         Ok(())
     })();
@@ -887,6 +907,7 @@ pub fn do_quick_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: QuickSu
     if plan.is_none() && session.is_none() {
         return attention("context", missing_context_message(req.agent_session_id.is_some()));
     }
+    let brief_is_generated = plan.is_none();
     let brief = match plan {
         Some(doc) => doc.content,
         None => stub_brief(&worktree),
@@ -935,6 +956,7 @@ pub fn do_quick_submit(mgr: &CloudManager, app: Option<&AppHandle>, req: QuickSu
         provider: req.provider,
         fake_script: req.fake_script,
         brief,
+        brief_is_generated,
         env_names: req.env_names,
         memory_url: req.memory_url,
         memory_token: req.memory_token,
@@ -2281,7 +2303,7 @@ mod tests {
             machine_ceiling: None, checks: vec![],
             deadline_seconds: 900, permission_mode: "dontAsk".into(), allowed_tools: vec![], max_turns: None,
             max_budget_usd: None, model: None, provider: "fake".into(), fake_script: Some("complete".into()),
-            brief: "# Plan\n1. add file".into(), env_names: vec![], memory_url: None, memory_token: None, chat_id: None, session: None,
+            brief: "# Plan\n1. add file".into(), brief_is_generated: false, env_names: vec![], memory_url: None, memory_token: None, chat_id: None, session: None,
         }
     }
 
@@ -2951,7 +2973,32 @@ mod tests {
     }
 
     #[test]
-    fn an_older_runner_gets_a_brief_only_run_and_the_chat_stays_local() {
+    fn an_older_runner_with_a_plan_doc_runs_the_plan_and_the_chat_stays_local() {
+        with_claude_home(|home| {
+            let (dir, work, remote) = temp_repo_with(false);
+            split_push_origin(&work, &remote);
+            write_transcript(home, &work, "{}\n");
+            std::fs::create_dir_all(Path::new(&work).join(".powerhouse")).unwrap();
+            std::fs::write(Path::new(&work).join(".powerhouse").join("handoff-20260922-101010.md"), "# The plan").unwrap();
+            let fake = Arc::new(Fake { echo_submit: true, ..Default::default() });
+            fake.snapshot("ph-test-base", "v1");
+            fake.on_exec("probe", Ok(probe_json()));
+            let mgr = manager(fake.clone(), dir.path());
+            let mut req = quick_request(&work, "ph-test-base");
+            req.agent_session_id = Some(SID.into());
+            let QuickSubmitOutcome::Accepted { record } = do_quick_submit(&mgr, None, req).unwrap() else { panic!("expected accepted") };
+            assert_eq!(record.manifest.protocol_version, PROTOCOL_VERSION);
+            assert!(record.manifest.session.is_none() && record.session.is_none());
+            // The agent is pointed at the brief, not at a conversation it never got.
+            assert_eq!(record.manifest.task.text, QUICK_TASK_TEXT);
+            assert_eq!(record.manifest_digest, record.manifest.digest());
+            assert!(record.phase_detail.as_deref().is_some_and(|d| d.contains("cannot continue a chat")), "{:?}", record.phase_detail);
+            assert!(!fake.calls().iter().any(|c| c.contains("--session")), "{:?}", fake.calls());
+        });
+    }
+
+    #[test]
+    fn an_older_runner_without_a_plan_doc_refuses_instead_of_dropping_the_chat() {
         with_claude_home(|home| {
             let (dir, work, remote) = temp_repo_with(false);
             split_push_origin(&work, &remote);
@@ -2962,11 +3009,14 @@ mod tests {
             let mgr = manager(fake.clone(), dir.path());
             let mut req = quick_request(&work, "ph-test-base");
             req.agent_session_id = Some(SID.into());
-            let QuickSubmitOutcome::Accepted { record } = do_quick_submit(&mgr, None, req).unwrap() else { panic!("expected accepted") };
-            assert_eq!(record.manifest.protocol_version, PROTOCOL_VERSION);
-            assert!(record.manifest.session.is_none() && record.session.is_none());
-            assert_eq!(record.manifest_digest, record.manifest.digest());
-            assert!(!fake.calls().iter().any(|c| c.contains("--session")), "{:?}", fake.calls());
+            let out = do_quick_submit(&mgr, None, req).unwrap();
+            let QuickSubmitOutcome::NeedsAttention { stage, reason } = out else { panic!("expected a refusal: {out:?}") };
+            assert_eq!(stage, "submit");
+            assert!(reason.contains("cannot continue a chat") && reason.contains("--publish-snapshot ph-test-base"), "{reason}");
+            assert!(!fake.calls().iter().any(|c| c.contains("submit --manifest")), "{:?}", fake.calls());
+            let record = mgr.store.lock().unwrap().list().into_iter().next().expect("record kept");
+            assert_eq!(record.phase, Phase::SubmitFailed);
+            assert!(record.vm_released, "the machine that never ran anything is released");
         });
     }
 
@@ -3579,6 +3629,7 @@ mod e2e {
             provider: provider.clone(),
             fake_script: (provider == "fake").then(|| script.clone()),
             brief: format!("# Plan\n\n1. Read the repository layout.\n2. {task}\n3. Make the acceptance check pass: it verifies {expect_file} exists.\n"),
+            brief_is_generated: false,
             env_names: vec![],
             memory_url: std::env::var("POWERHOUSE_CLOUD_E2E_MEMORY_URL").ok(),
             memory_token: std::env::var("POWERHOUSE_CLOUD_E2E_MEMORY_TOKEN").ok(),
