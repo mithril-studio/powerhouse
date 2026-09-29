@@ -3614,6 +3614,75 @@ mod tests {
 mod e2e {
     use super::*;
 
+    /// The "Send to cloud" button end to end on real boxd with the real
+    /// agent: checkpoint, push (the Powerhouse-token fallback included), pack
+    /// the chat, submit, follow the run, bring the chat home, release the VM.
+    /// POWERHOUSE_CLOUD_QUICK_E2E_SOURCE=<worktree on a branch>
+    /// POWERHOUSE_CLOUD_QUICK_E2E_SESSION=<Claude session id started in it>
+    #[test]
+    #[ignore]
+    fn cloud_e2e_quick_send_with_the_chat() {
+        let Ok(source) = std::env::var("POWERHOUSE_CLOUD_QUICK_E2E_SOURCE") else { return };
+        let sid = std::env::var("POWERHOUSE_CLOUD_QUICK_E2E_SESSION").expect("POWERHOUSE_CLOUD_QUICK_E2E_SESSION");
+        let base = std::env::var("POWERHOUSE_CLOUD_E2E_SNAPSHOT").unwrap_or_else(|_| "powerhouse-base".into());
+        let model = std::env::var("POWERHOUSE_CLOUD_E2E_MODEL").unwrap_or_else(|_| "claude-opus-5-5".into());
+        let dir = tempfile::tempdir().unwrap();
+        let store_path = dir.path().join("cloud-runs.json");
+        let mgr = CloudManager::with(CloudStore::open(store_path), Arc::new(BoxdCli::default()), Arc::new(secrets::Keychain));
+        let req = QuickSubmitRequest {
+            repo_id: "e2e".into(),
+            repo_path: source.clone(),
+            repo_name: Path::new(&source).file_name().unwrap().to_string_lossy().into(),
+            source_path: source.clone(),
+            base_snapshot: base,
+            machine_ceiling: None,
+            checks: vec![],
+            deadline_seconds: 1200,
+            permission_mode: "acceptEdits".into(),
+            allowed_tools: ["Read", "Edit", "Write", "Glob", "Grep", "Bash"].map(String::from).to_vec(),
+            max_turns: Some(30),
+            max_budget_usd: Some(2.0),
+            model: Some(model),
+            provider: "claude".into(),
+            fake_script: None,
+            env_names: vec![],
+            memory_url: None,
+            memory_token: None,
+            chat_id: Some("e2e-chat".into()),
+            agent_session_id: Some(sid.clone()),
+        };
+        let out = do_quick_submit(&mgr, None, req).expect("quick submit");
+        let QuickSubmitOutcome::Accepted { record } = out else { panic!("refused: {out:?}") };
+        let run_id = record.run_id.clone();
+        eprintln!("accepted run {run_id} on {:?}; protocol {} session {:?} detail {:?}", record.task_vm, record.manifest.protocol_version, record.manifest.session, record.phase_detail);
+        assert!(record.manifest.session.is_some(), "the chat must travel");
+        let deadline = Instant::now() + Duration::from_secs(1500);
+        let mut r = load(&mgr, &run_id).unwrap();
+        while Instant::now() < deadline {
+            r = do_sync(&mgr, None, &run_id, false).expect("sync");
+            eprintln!("state={:?} machine={:?} events={} err={:?}", r.state(), r.machine, r.events.len(), r.last_sync_error);
+            if r.state().map(|s| s.is_terminal()).unwrap_or(false) {
+                break;
+            }
+            std::thread::sleep(Duration::from_secs(10));
+        }
+        let res = r.result.clone();
+        eprintln!("SUMMARY: {:?}", res.as_ref().map(|x| &x.summary));
+        eprintln!("CHANGED: {:?} published={:?}", res.as_ref().map(|x| &x.changed_files), res.as_ref().map(|x| x.published));
+        assert_eq!(r.state(), Some(RunState::Completed), "{:?}", r.snapshot);
+        let deadline = Instant::now() + Duration::from_secs(300);
+        while r.machine != MachineState::Released && Instant::now() < deadline {
+            let _ = do_lifecycle_tick(&mgr, None);
+            r = load(&mgr, &run_id).unwrap();
+            if r.machine != MachineState::Released {
+                std::thread::sleep(Duration::from_secs(5));
+            }
+        }
+        eprintln!("machine={:?} merr={:?} session={:?} returned={:?}", r.machine, r.machine_error, r.session, r.returned);
+        assert_eq!(r.machine, MachineState::Released, "{:?}", r.machine_error);
+        eprintln!("QUICK E2E OK: run {run_id}");
+    }
+
     #[test]
     #[ignore]
     fn cloud_e2e_fake_agent_through_desktop_backend() {
