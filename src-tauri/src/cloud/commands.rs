@@ -739,6 +739,16 @@ echo "{\"type\":\"result\",\"is_error\":false,\"result\":\"did $p with $FAKE_TOK
             upload(&boxd, &vm, "fake-claude", fake.as_bytes()).unwrap();
             exec_ok(&boxd, &vm, r#"rm -f "$HOME/.local/bin/claude"; cp "$HOME/.ph/fake-claude" "$HOME/.local/bin/claude" && chmod +x "$HOME/.local/bin/claude""#, EXEC_TIMEOUT).unwrap();
 
+            // The real setup script against a public repo: clone, branch, upstream.
+            let setup = ws::setup_script("https://github.com/octocat/Hello-World.git", "master", "PH Test", "ph@test");
+            let out = exec_ok(&boxd, &vm, &format!("rmdir \"$HOME/repo\" && {setup}"), SETUP_TIMEOUT).unwrap();
+            assert!(out.contains("ready"), "{out}");
+            // Idempotent on a reused VM.
+            assert!(exec_ok(&boxd, &vm, &setup, SETUP_TIMEOUT).unwrap().contains("ready"));
+            let (head, unpushed, dirty) = ws::parse_inspect(&exec_ok(&boxd, &vm, ws::INSPECT_COMMAND, EXEC_TIMEOUT).unwrap());
+            assert!(head.is_some());
+            assert_eq!((unpushed, dirty), (0, 0));
+
             // Turn 1 runs to completion.
             upload(&boxd, &vm, "turn-1.prompt", b"work").unwrap();
             exec_ok(&boxd, &vm, &ws::launch_command(1, Some("opus"), None), EXEC_TIMEOUT).unwrap();
