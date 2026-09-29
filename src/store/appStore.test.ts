@@ -183,11 +183,17 @@ describe("page navigation overlays", () => {
       settingsOpen: false,
       telemetryOpen: false,
       memoryOpen: false,
+      projectSettingsRepoId: null,
     });
+
+    useAppStore.getState().openProjectSettings("repo-1");
+    expect(useAppStore.getState()).toEqual(
+      expect.objectContaining({ projectSettingsRepoId: "repo-1", settingsOpen: false }),
+    );
 
     useAppStore.getState().openSettings();
     expect(useAppStore.getState()).toEqual(
-      expect.objectContaining({ settingsOpen: true, memoryOpen: false, telemetryOpen: false }),
+      expect.objectContaining({ settingsOpen: true, memoryOpen: false, telemetryOpen: false, projectSettingsRepoId: null }),
     );
 
     useAppStore.getState().openMemory();

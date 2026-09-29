@@ -216,7 +216,6 @@ interface AppState extends PersistedTree {
   /** chatId → agent turn state; absent means idle or already seen. */
   chatActivity: Record<string, ChatActivity>;
   branchModalRepoId: string | null;
-  workflowModalRepoId: string | null;
   rightSidebarOpen: boolean;
   rightTab: RightTab;
   chatPickerOpen: boolean;
@@ -231,6 +230,8 @@ interface AppState extends PersistedTree {
   settingsOpen: boolean;
   telemetryOpen: boolean;
   memoryOpen: boolean;
+  /** Repo whose project settings page is open, if any. */
+  projectSettingsRepoId: string | null;
 
   hydrate: (tree: (Partial<PersistedTree> & LegacyTree) | null) => void;
   setDefaultAgent: (agentId: string) => void;
@@ -239,6 +240,8 @@ interface AppState extends PersistedTree {
   setGithubConnection: (github: GithubConnection) => void;
   openSettings: () => void;
   closeSettings: () => void;
+  openProjectSettings: (repoId: string) => void;
+  closeProjectSettings: () => void;
   openTelemetry: () => void;
   closeTelemetry: () => void;
   openMemory: () => void;
@@ -286,8 +289,6 @@ interface AppState extends PersistedTree {
   /** The branch new worktrees are cut from and the merge queue lands on. */
   setDefaultBranch: (repoId: string, branch: string) => void;
   setRepoEnvNames: (repoId: string, names: string[]) => void;
-  openWorkflowModal: (repoId: string) => void;
-  closeWorkflowModal: () => void;
   toggleRightSidebar: () => void;
   setRightTab: (tab: RightTab) => void;
   setRightSidebarWidth: (width: number) => void;
@@ -532,7 +533,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   queues: {},
   workflowDrafts: [],
   workspaceView: "home",
-  setWorkspaceView: (workspaceView) => set({ workspaceView, settingsOpen: false, telemetryOpen: false, memoryOpen: false }),
+  setWorkspaceView: (workspaceView) => set({ workspaceView, settingsOpen: false, telemetryOpen: false, memoryOpen: false, projectSettingsRepoId: null }),
   saveWorkflowDraft: (draft) => set((s) => ({
     workflowDrafts: s.workflowDrafts.some((d) => d.id === draft.id)
       ? s.workflowDrafts.map((d) => d.id === draft.id ? draft : d)
@@ -542,7 +543,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   chatStatus: {},
   chatActivity: {},
   branchModalRepoId: null,
-  workflowModalRepoId: null,
   rightSidebarOpen: false,
   rightTab: "changes",
   chatPickerOpen: false,
@@ -553,6 +553,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   settingsOpen: false,
   telemetryOpen: false,
   memoryOpen: false,
+  projectSettingsRepoId: null,
   cloudWorkspaces: {},
 
   hydrate: (tree) =>
@@ -611,12 +612,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       },
     })),
 
-  openSettings: () => set({ settingsOpen: true, telemetryOpen: false, memoryOpen: false }),
+  openSettings: () => set({ settingsOpen: true, telemetryOpen: false, memoryOpen: false, projectSettingsRepoId: null }),
   closeSettings: () => set({ settingsOpen: false }),
+  openProjectSettings: (repoId) =>
+    set({ projectSettingsRepoId: repoId, settingsOpen: false, telemetryOpen: false, memoryOpen: false }),
+  closeProjectSettings: () => set({ projectSettingsRepoId: null }),
 
-  openTelemetry: () => set({ telemetryOpen: true, settingsOpen: false, memoryOpen: false }),
+  openTelemetry: () => set({ telemetryOpen: true, settingsOpen: false, memoryOpen: false, projectSettingsRepoId: null }),
   closeTelemetry: () => set({ telemetryOpen: false }),
-  openMemory: () => set({ memoryOpen: true, settingsOpen: false, telemetryOpen: false }),
+  openMemory: () => set({ memoryOpen: true, settingsOpen: false, telemetryOpen: false, projectSettingsRepoId: null }),
   closeMemory: () => set({ memoryOpen: false }),
 
   addRepo: (repo) => {
@@ -790,6 +794,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       telemetryOpen: false,
       settingsOpen: false,
       memoryOpen: false,
+      projectSettingsRepoId: null,
       workspaceView: "home",
     }),
 
@@ -851,9 +856,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({
       repos: updateRepo(s.repos, repoId, (r) => ({ ...r, cloudEnvNames: names })),
     })),
-
-  openWorkflowModal: (repoId) => set({ workflowModalRepoId: repoId }),
-  closeWorkflowModal: () => set({ workflowModalRepoId: null }),
 
   toggleRightSidebar: () => set((s) => ({ rightSidebarOpen: !s.rightSidebarOpen })),
   setRightTab: (tab) => set({ rightTab: tab }),

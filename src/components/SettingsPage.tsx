@@ -33,7 +33,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const GITHUB_APPS_URL = "https://github.com/settings/applications";
 
 /** A section block: left-hand label/description, right-hand controls. */
-function Section({
+export function Section({
   title,
   description,
   children,

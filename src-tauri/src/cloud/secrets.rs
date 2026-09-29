@@ -80,7 +80,7 @@ pub fn project_env_values(store: &dyn SecretStore, repo_id: &str, names: &[Strin
     }
     if !missing.is_empty() {
         return Err(format!(
-            "no value is stored for the project env var(s) {}. Set them in the repo's workflow settings, or remove them there.",
+            "no value is stored for the project env var(s) {}. Set them in the project settings (right-click the project), or remove them there.",
             missing.join(", ")
         ));
     }

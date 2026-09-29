@@ -17,10 +17,10 @@ import { ChatPane } from "./components/ChatPane";
 import { FileViewer } from "./components/FileViewer";
 import { BottomPanel } from "./components/BottomPanel";
 import { NewBranchModal } from "./components/NewBranchModal";
-import { WorkflowModal } from "./components/WorkflowModal";
 import { RightSidebar } from "./components/RightSidebar";
 import { NewChatPicker } from "./components/NewChatPicker";
 import { SettingsPage } from "./components/SettingsPage";
+import { ProjectSettingsPage } from "./components/ProjectSettingsPage";
 import { TelemetryPage } from "./components/telemetry/TelemetryPage";
 import { PowerConfirmationDialog } from "./components/PowerConfirmationDialog";
 import { WorkflowsPage } from "./features/workflows/WorkflowsPage";
@@ -155,9 +155,9 @@ export default function App() {
       {!homeVisible && <WorkflowsPage />}
       {homeVisible && hydrated && rightSidebarOpen && <RightSidebar repo={repo} branch={branch} />}
       <NewBranchModal />
-      <WorkflowModal />
       <NewChatPicker />
       <SettingsPage />
+      <ProjectSettingsPage />
       <TelemetryPage />
       <PowerConfirmationDialog />
       <MemoryPage />

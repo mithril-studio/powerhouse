@@ -28,7 +28,7 @@ its next prompt. Deleting the branch deletes its VM too.
 | Backend | `src-tauri/src/cloud/` (`workspace.rs` pure + tested, `commands.rs` flow) |
 | Frontend | `src/lib/cloud.ts` (IPC, poll loop, actions), `src/lib/cloudStream.ts` (stream-json → transcript) |
 | Credentials | Settings → Cloud (Keychain). GitHub falls back to the GitHub connection. |
-| Per-repo env vars | Repo workflow settings |
+| Per-repo env vars | Project settings (right-click the project, or Merge tab → Edit workflow) |
 
 The `cloud/` runner crates and `scripts/cloud-base-setup.sh` belong to the workflow coordinator
 (`server/`), not to cloud workspaces.

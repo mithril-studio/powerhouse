@@ -40,13 +40,13 @@ release". Write commit subjects for that list: one line, imperative, says what c
 
 Below the list, **Merge** lands the selected worktree branch on the target with the merge queue. With no
 workflow steps configured it only checks that the merge is clean, then fast-forwards and pushes — a one-click
-alternative to pushing by hand. Steps can be configured under **Edit workflow** but are not the gate; the
+alternative to pushing by hand. Steps can be configured under **Edit workflow** (the project settings page) but are not the gate; the
 ship workflow is.
 
 **Target branch.** Each project stores one target branch: new worktrees are cut from it, diffs are shown
 against it, the Merge tab lists it, and the queue lands on it. `origin/test` is chosen automatically when a
-project is added if it exists (`detect_target_branch`); otherwise the remote default. Change it in **Edit
-workflow → Target branch**. For this repo it is `test`.
+project is added if it exists (`detect_target_branch`); otherwise the remote default. Change it in **Project
+settings → General** (right-click the project, or Merge tab → Edit workflow). For this repo it is `test`.
 
 ## Rules for agents working in a worktree
 
