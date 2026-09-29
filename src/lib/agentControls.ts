@@ -139,8 +139,3 @@ export function cycleMode(state: AgentControlState): ModeCycle | Unsupported {
   const next = modes.options[(index + 1) % modes.options.length];
   return { supported: true, apply: next.apply, label: next.label };
 }
-
-/** The active label of a resolved selector, for compact footer display. */
-export function currentLabel(selector: Selector | Unsupported): string | undefined {
-  return selector.supported ? selector.current?.label : undefined;
-}

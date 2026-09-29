@@ -165,15 +165,6 @@ export interface SessionHandoff {
   returned: SessionReturn | null;
 }
 
-export interface SourceInfo {
-  sha: string;
-  branch: string | null;
-  remote_url: string | null;
-  dirty: boolean;
-  on_remote: boolean;
-  problems: string[];
-}
-
 /** One row of `boxd snapshots list`. */
 export interface SnapshotInfo {
   name: string;
@@ -206,42 +197,6 @@ export interface SecretStatus {
   github: boolean;
   /** Keychain entry that serves the queried remote, e.g. `github_token:mithril-studio`. */
   github_slot: string | null;
-}
-
-export interface HandoffDoc {
-  path: string;
-  content: string;
-}
-
-export interface SubmitRequest {
-  repoId: string;
-  repoPath: string;
-  repoName: string;
-  sourcePath: string;
-  task: string;
-  acceptanceCriteria: string[];
-  /** Base snapshot name; the task VM is created from its current version. */
-  baseSnapshot: string;
-  /** Version shown in the form; submission refuses if it changed since. */
-  baseSnapshotVersion: string | null;
-  machineCeiling: number | null;
-  checks: { name: string; command: string }[];
-  deadlineSeconds: number;
-  permissionMode: string;
-  allowedTools: string[];
-  maxTurns: number | null;
-  maxBudgetUsd: number | null;
-  model: string | null;
-  provider: "claude" | "fake";
-  fakeScript?: string | null;
-  /** Plan/context markdown handed to the agent as `.powerhouse/cloud-task.md`. */
-  brief: string;
-  /** Per-project env var names; values come from the Keychain per repo. */
-  envNames: string[];
-  /** Routable shared-memory endpoint and token for the run VM; null when memory
-   *  is off or only on the laptop's loopback. */
-  memoryUrl?: string | null;
-  memoryToken?: string | null;
 }
 
 /** One-click submission: the brief is auto-picked, the task text is fixed. */
@@ -287,13 +242,8 @@ export interface QuickSubmitStage {
 // --- ipc -----------------------------------------------------------------------
 
 export const cloudListRuns = () => invoke<CloudRunRecord[]>("cloud_list_runs");
-export const cloudInspectSource = (sourcePath: string) =>
-  invoke<SourceInfo>("cloud_inspect_source", { sourcePath });
-export const cloudListSnapshots = () => invoke<SnapshotInfo[]>("cloud_list_snapshots");
 export const cloudInventory = (baseSnapshot?: string | null, ceiling?: number | null) =>
   invoke<Inventory>("cloud_inventory", { baseSnapshot: baseSnapshot ?? null, ceiling: ceiling ?? null });
-export const cloudSubmit = (request: SubmitRequest) =>
-  invoke<CloudRunRecord>("cloud_submit", { request });
 export const cloudQuickSubmit = (request: QuickSubmitRequest) =>
   invoke<QuickSubmitOutcome>("cloud_quick_submit", { request });
 export const cloudSync = (runId: string, forceEvents = false) =>
@@ -336,13 +286,6 @@ export const cloudSecretStatus = (remoteUrl?: string | null) =>
 /** `name`: `claude_oauth_token`, `github_token`, or `github_token:<owner>[/<repo>]`. */
 export const cloudSetSecret = (name: string, value: string, remoteUrl?: string | null) =>
   invoke<SecretStatus>("cloud_set_secret", { name, value, remoteUrl: remoteUrl ?? null });
-/** Owner of an https GitHub-style remote, for scoped token slots. */
-export const remoteOwner = (remoteUrl: string | null | undefined): string | null => {
-  const m = /^https:\/\/[^/]+\/([^/]+)\/([^/]+?)(?:\.git)?$/.exec(remoteUrl ?? "");
-  return m ? m[1] : null;
-};
-export const cloudLatestHandoff = (sourcePath: string) =>
-  invoke<HandoffDoc | null>("cloud_latest_handoff", { sourcePath });
 /** Which of a repo's configured env names have a stored value (values never cross). */
 export const cloudProjectEnvStatus = (repoId: string, names: string[]) =>
   invoke<{ name: string; set: boolean }[]>("cloud_project_env_status", { repoId, names });
