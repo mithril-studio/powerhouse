@@ -150,10 +150,31 @@ export async function createBranch(repoId: string, name: string, base?: string) 
   createChat(repoId, branch.id);
 }
 
-export function deleteChat(repoId: string, branchId: string, chatId: string) {
+function disposeChat(chatId: string) {
   disposeTerminal(chatId);
   void disposeAcp(chatId);
   void ptyDeleteTranscript(chatId).catch(() => {});
+}
+
+function disposeBranch(branch: Branch) {
+  const s = useAppStore.getState();
+  void handoffWatchStop(branch.id).catch(() => {});
+  const pendingTimer = s.pendingHandoff[branch.id];
+  if (pendingTimer !== undefined) {
+    window.clearTimeout(pendingTimer);
+    s.clearPendingHandoff(branch.id);
+  }
+
+  for (const chat of branch.chats) disposeChat(chat.id);
+  // Bottom-panel surfaces (ids mirror BottomPanel's shellId/agentCliId).
+  for (const id of [`shell-${branch.id}`, `agentcli-${branch.id}`]) {
+    disposeTerminal(id);
+    void ptyDeleteTranscript(id).catch(() => {});
+  }
+}
+
+export function deleteChat(repoId: string, branchId: string, chatId: string) {
+  disposeChat(chatId);
   useAppStore.getState().removeChat(repoId, branchId, chatId);
 }
 
@@ -171,24 +192,7 @@ export async function deleteBranch(repoId: string, branchId: string) {
   });
   if (!confirmed) return;
 
-  // Stop the handoff watcher and cancel any in-flight handoff for this branch.
-  void handoffWatchStop(branchId).catch(() => {});
-  const pendingTimer = s.pendingHandoff[branchId];
-  if (pendingTimer !== undefined) {
-    window.clearTimeout(pendingTimer);
-    s.clearPendingHandoff(branchId);
-  }
-
-  for (const chat of branch.chats) {
-    disposeTerminal(chat.id);
-    void disposeAcp(chat.id);
-    void ptyDeleteTranscript(chat.id).catch(() => {});
-  }
-  // Bottom-panel surfaces (ids mirror BottomPanel's shellId/agentCliId).
-  disposeTerminal(`shell-${branchId}`);
-  void ptyDeleteTranscript(`shell-${branchId}`).catch(() => {});
-  disposeTerminal(`agentcli-${branchId}`);
-  void ptyDeleteTranscript(`agentcli-${branchId}`).catch(() => {});
+  disposeBranch(branch);
   try {
     await gitRemoveWorktree(repo.path, branch.worktreePath);
   } catch (err) {
@@ -239,24 +243,7 @@ export async function deleteRepo(repoId: string) {
   if (!confirmed) return;
 
   for (const branch of repo.branches) {
-    // Stop the handoff watcher and cancel any in-flight handoff for this branch.
-    void handoffWatchStop(branch.id).catch(() => {});
-    const pendingTimer = s.pendingHandoff[branch.id];
-    if (pendingTimer !== undefined) {
-      window.clearTimeout(pendingTimer);
-      s.clearPendingHandoff(branch.id);
-    }
-
-    for (const chat of branch.chats) {
-      disposeTerminal(chat.id);
-      void disposeAcp(chat.id);
-      void ptyDeleteTranscript(chat.id).catch(() => {});
-    }
-    // Bottom-panel surfaces (ids mirror BottomPanel's shellId/agentCliId).
-    disposeTerminal(`shell-${branch.id}`);
-    void ptyDeleteTranscript(`shell-${branch.id}`).catch(() => {});
-    disposeTerminal(`agentcli-${branch.id}`);
-    void ptyDeleteTranscript(`agentcli-${branch.id}`).catch(() => {});
+    disposeBranch(branch);
     try {
       await gitRemoveWorktree(repo.path, branch.worktreePath);
     } catch (err) {
