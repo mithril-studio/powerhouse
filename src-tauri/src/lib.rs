@@ -96,6 +96,7 @@ pub fn run() {
             cloud::commands::cloud_set_secret,
             cloud::commands::cloud_project_env_status,
             cloud::commands::cloud_import_env_file,
+            cloud::commands::cloud_readiness,
             telemetry::commands::telemetry_list_runs,
             telemetry::commands::telemetry_run_detail,
             telemetry::commands::telemetry_run_events,

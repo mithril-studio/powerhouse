@@ -63,6 +63,20 @@ pub fn is_project_env_slot(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Configured names without a stored value. An invalid name is an error.
+pub fn missing_project_env(store: &dyn SecretStore, repo_id: &str, names: &[String]) -> Result<Vec<String>, String> {
+    let mut missing = vec![];
+    for name in names {
+        if !is_env_var_name(name) {
+            return Err(format!("`{name}` is not a valid environment variable name"));
+        }
+        if store.get(&project_env_slot(repo_id, name))?.filter(|v| !v.trim().is_empty()).is_none() {
+            missing.push(name.clone());
+        }
+    }
+    Ok(missing)
+}
+
 /// Resolve a repo's configured env names to `(name, value)` pairs. Every
 /// configured name must have a stored value: a silent skip would send a run
 /// out with a half-configured environment.

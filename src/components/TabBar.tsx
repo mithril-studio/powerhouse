@@ -1,7 +1,14 @@
 import { resolveAgent, useAppStore, type Branch, type Repo } from "../store/appStore";
 import { deleteChat } from "../lib/actions";
 import { startHandoff } from "../lib/handoff";
-import { isCloudBusy, sendChatToCloud, workspaceForBranch } from "../lib/cloud";
+import { useEffect, useState } from "react";
+import {
+  cloudReadiness,
+  isCloudBusy,
+  sendChatToCloud,
+  workspaceForBranch,
+  type Readiness,
+} from "../lib/cloud";
 import { ActivityDot } from "./ActivityDot";
 import { FileIcon } from "./RightSidebar";
 
@@ -33,6 +40,25 @@ export function TabBar({ repo, branch }: Props) {
   const cloudBusy = cloud ? isCloudBusy(cloud) : false;
   // One workspace per branch; a failed start may be retried.
   const cloudLocked = cloud ? cloud.status !== "failed" || cloud.turn > 0 : false;
+
+  // Missing keys show before the click. Rechecked when the branch changes and
+  // when a settings page closes, since that is where keys get fixed.
+  const settingsOpen = useAppStore((s) => s.settingsOpen || s.projectSettingsRepoId !== null);
+  const envNames = (repo?.cloudEnvNames ?? []).join(",");
+  const [readiness, setReadiness] = useState<Readiness | null>(null);
+  useEffect(() => {
+    setReadiness(null);
+    if (!repo || !branch || settingsOpen) return;
+    let live = true;
+    void cloudReadiness(repo.id, branch.worktreePath, repo.cloudEnvNames ?? [])
+      .then((r) => live && setReadiness(r))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repo?.id, branch?.id, branch?.worktreePath, envNames, settingsOpen]);
+  const notReady = !cloudLocked && readiness !== null && !readiness.ready;
 
   return (
     <div
@@ -128,12 +154,17 @@ export function TabBar({ repo, branch }: Props) {
             title={
               cloud
                 ? `This branch is in the cloud on ${cloud.vmName}`
-                : "Continue this chat and its branch on a cloud machine"
+                : notReady
+                  ? `Not ready for the cloud:\n${readiness.missing.join("\n")}`
+                  : "Continue this chat and its branch on a cloud machine"
             }
             className="flex h-7 items-center gap-1.5 rounded-md bg-foreground px-2.5 text-xs font-medium text-background hover:bg-foreground/90 disabled:opacity-50"
           >
             {cloudBusy && (
               <span className="size-2 animate-pulse rounded-full bg-background/70" />
+            )}
+            {notReady && (
+              <span aria-label="Not ready" className="size-2 rounded-full bg-amber-500" />
             )}
             {cloudBusy ? "In cloud…" : cloudLocked ? "In cloud" : "Cloud"}
           </button>

@@ -8,7 +8,7 @@ import {
   type AgentProfile,
   type Theme,
 } from "../store/appStore";
-import { cloudSecretStatus, cloudSetSecret, type SecretStatus } from "../lib/cloud";
+import { cloudSecretStatus, cloudSetSecret, runInShell, type SecretStatus } from "../lib/cloud";
 import {
   DEFAULT_MEMORY_SETTINGS,
   memoryServerEnsure,
@@ -509,6 +509,8 @@ const cloudInput =
 /** Credentials for cloud workspaces. Everything else is inherited from the
  * chat (agent, model) and the repo (env vars). */
 function CloudSection() {
+  const branchId = useAppStore((s) => s.selection.branchId);
+  const closeSettings = useAppStore((s) => s.closeSettings);
   const [secrets, setSecrets] = useState<SecretStatus | null>(null);
   const [claudeInput, setClaudeInput] = useState("");
   const [githubInput, setGithubInput] = useState("");
@@ -556,7 +558,28 @@ function CloudSection() {
             >
               {claudeInput.trim() ? "Save" : "Clear"}
             </button>
+            <button
+              onClick={() => {
+                if (!branchId) return;
+                closeSettings();
+                runInShell(branchId, "claude setup-token");
+              }}
+              disabled={!branchId}
+              title={
+                branchId
+                  ? "Runs `claude setup-token` in this branch's shell. Paste the token it prints here."
+                  : "Select a branch first; the command runs in its shell."
+              }
+              className="h-8 shrink-0 rounded-lg border border-border px-2 text-muted-foreground hover:text-foreground disabled:opacity-50"
+            >
+              Get token
+            </button>
           </div>
+          {!secrets?.claude && (
+            <p className="text-muted-foreground">
+              No token yet? <span className="text-foreground">Get token</span> runs <code>claude setup-token</code> in the bottom shell; paste the token it prints above.
+            </p>
+          )}
           <input
             type="password"
             value={githubInput}

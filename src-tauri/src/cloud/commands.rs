@@ -24,6 +24,8 @@ pub struct CloudManager {
     pub store: Mutex<Store>,
     pub boxd: Arc<dyn Boxd>,
     pub secrets: Arc<dyn SecretStore>,
+    /// Powerhouse's GitHub connection, used when no Keychain token serves a remote.
+    pub github_fallback: fn() -> Option<String>,
     /// One lock per workspace: start/send/stop/archive wait, polls skip.
     locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
 }
@@ -36,7 +38,7 @@ impl Default for CloudManager {
 
 impl CloudManager {
     pub fn with(store: Store, boxd: Arc<dyn Boxd>, secrets: Arc<dyn SecretStore>) -> Self {
-        Self { store: Mutex::new(store), boxd, secrets, locks: Mutex::new(HashMap::new()) }
+        Self { store: Mutex::new(store), boxd, secrets, github_fallback: crate::github::token, locks: Mutex::new(HashMap::new()) }
     }
 
     fn lock_for(&self, id: &str) -> Arc<Mutex<()>> {
@@ -82,6 +84,71 @@ pub struct StartRequest {
 
 // --- start -----------------------------------------------------------------------
 
+struct Preflight {
+    branch: String,
+    remote_url: String,
+}
+
+/// Everything a start needs that can be checked locally, without side effects:
+/// a checked-out branch, a GitHub-style `origin`, the Claude token, a GitHub
+/// token for that remote, and a value for every project env var. Returns every
+/// problem, not just the first, so the Cloud button can list them.
+fn preflight(mgr: &CloudManager, repo_id: &str, worktree: &Path, env_names: &[String]) -> Result<Preflight, Vec<String>> {
+    let mut problems = vec![];
+    let branch = git(worktree, &["symbolic-ref", "--short", "-q", "HEAD"]).ok().filter(|b| !b.is_empty());
+    if branch.is_none() {
+        problems.push("The worktree is on a detached HEAD; check out a branch first.".to_string());
+    }
+    let remote_url = match git(worktree, &["remote", "get-url", "origin"]) {
+        Err(_) => {
+            problems.push("The repository has no `origin` remote for the cloud machine to clone.".to_string());
+            None
+        }
+        Ok(origin) => {
+            let url = ws::https_remote(&origin);
+            if url.is_none() {
+                problems.push(format!("The cloud machine needs a GitHub-style remote; `origin` is {origin}."));
+            }
+            url
+        }
+    };
+    let store = mgr.secrets.as_ref();
+    let claude = store.get(secrets::CLAUDE_OAUTH).map(|v| v.is_some_and(|v| !v.trim().is_empty()));
+    match claude {
+        Ok(true) => {}
+        Ok(false) => problems.push("Claude key missing, set it in Settings → Cloud.".to_string()),
+        Err(e) => problems.push(e),
+    }
+    if let Some(url) = &remote_url {
+        if github_token(mgr, url).is_none() {
+            problems.push("GitHub token missing, connect GitHub or add one in Settings → Cloud.".to_string());
+        }
+    }
+    match secrets::missing_project_env(store, repo_id, env_names) {
+        Ok(missing) if missing.is_empty() => {}
+        Ok(missing) => problems.push(format!("No value for {}, set it in Project settings.", missing.join(", "))),
+        Err(e) => problems.push(e),
+    }
+    match (branch, remote_url) {
+        (Some(branch), Some(remote_url)) if problems.is_empty() => Ok(Preflight { branch, remote_url }),
+        _ => Err(problems),
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct Readiness {
+    pub ready: bool,
+    /// One sentence per problem, saying where to fix it.
+    pub missing: Vec<String>,
+}
+
+pub fn readiness(mgr: &CloudManager, repo_id: &str, worktree: &Path, env_names: &[String]) -> Readiness {
+    match preflight(mgr, repo_id, worktree, env_names) {
+        Ok(_) => Readiness { ready: true, missing: vec![] },
+        Err(missing) => Readiness { ready: false, missing },
+    }
+}
+
 /// Validates what can be checked locally and records the workspace; the slow
 /// part (checkpoint, push, VM, clone, first turn) is [`provision`], run in the
 /// background so the chat shows each stage.
@@ -89,17 +156,9 @@ pub fn begin(mgr: &CloudManager, notify: Notify, req: &StartRequest) -> Result<C
     if req.agent != "claude" {
         return Err("This agent cannot run in the cloud yet. Supported: Claude.".into());
     }
-    let worktree = Path::new(&req.worktree_path);
-    let branch = git(worktree, &["symbolic-ref", "--short", "-q", "HEAD"])
-        .ok()
-        .filter(|b| !b.is_empty())
-        .ok_or("The worktree is on a detached HEAD; check out a branch first.")?;
-    let origin = git(worktree, &["remote", "get-url", "origin"])
-        .map_err(|_| "The repository has no `origin` remote for the cloud machine to clone.".to_string())?;
-    let remote_url = ws::https_remote(&origin)
-        .ok_or_else(|| format!("The cloud machine needs a GitHub-style remote; `origin` is {origin}."))?;
-    // Fail on missing credentials now, not after a VM exists.
-    env_vars(mgr, &req.repo_id, &remote_url, &req.env_names)?;
+    // Fail on a missing branch, remote or credential now, not after a VM exists.
+    let Preflight { branch, remote_url } =
+        preflight(mgr, &req.repo_id, Path::new(&req.worktree_path), &req.env_names).map_err(|p| p.join(" "))?;
 
     let existing = mgr.store.lock().unwrap().for_branch(&req.branch_id).cloned();
     let mut w = match existing {
@@ -386,11 +445,11 @@ pub fn pull_local(worktree: &Path, branch: &str) -> String {
 
 fn env_vars(mgr: &CloudManager, repo_id: &str, remote_url: &str, env_names: &[String]) -> Result<Vec<(String, String)>, String> {
     let project = secrets::project_env_values(mgr.secrets.as_ref(), repo_id, env_names)?;
-    secrets::workspace_env(mgr.secrets.as_ref(), remote_url, &project, crate::github::token())
+    secrets::workspace_env(mgr.secrets.as_ref(), remote_url, &project, (mgr.github_fallback)())
 }
 
 fn github_token(mgr: &CloudManager, remote_url: &str) -> Option<String> {
-    secrets::github_token_for(mgr.secrets.as_ref(), remote_url).or_else(crate::github::token)
+    secrets::github_token_for(mgr.secrets.as_ref(), remote_url).or_else(mgr.github_fallback)
 }
 
 fn token_env(token: &str) -> Vec<(String, String)> {
@@ -627,6 +686,11 @@ pub fn import_env_file(store: &dyn SecretStore, repo_id: &str, dir: &Path, file:
     Ok(out)
 }
 
+#[tauri::command]
+pub async fn cloud_readiness(app: AppHandle, repo_id: String, worktree_path: String, env_names: Vec<String>) -> Result<Readiness, String> {
+    blocking(move || Ok(readiness(&app.state::<CloudManager>(), &repo_id, Path::new(&worktree_path), &env_names))).await
+}
+
 /// `file` defaults to `.env`; only a filename in the worktree is accepted.
 #[tauri::command]
 pub fn cloud_import_env_file(state: State<CloudManager>, repo_id: String, worktree_path: String, file: Option<String>) -> Result<EnvImport, String> {
@@ -697,7 +761,9 @@ mod tests {
     fn manager(dir: &Path, answers: Vec<(&'static str, String)>) -> CloudManager {
         let mut store = Store::open(dir.join("ws.json"));
         store.put(running(dir)).unwrap();
-        CloudManager::with(store, Arc::new(FakeBoxd { answers, scripts: Mutex::new(vec![]) }), Arc::new(MemoryStore::default()))
+        let mut mgr = CloudManager::with(store, Arc::new(FakeBoxd { answers, scripts: Mutex::new(vec![]) }), Arc::new(MemoryStore::default()));
+        mgr.github_fallback = || None;
+        mgr
     }
 
     #[test]
@@ -768,6 +834,44 @@ mod tests {
             env_names: vec![],
         };
         assert!(begin(&mgr, &|_: &CloudWorkspace| {}, &req).unwrap_err().contains("Supported: Claude"));
+    }
+
+    #[test]
+    fn readiness_lists_every_missing_key_until_they_are_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        git(&repo, &["init", "-q", "-b", "feat"]).unwrap();
+        git(&repo, &["remote", "add", "origin", "git@github.com:a/b.git"]).unwrap();
+        let mgr = manager(dir.path(), vec![]);
+        let names = vec!["API_KEY".to_string()];
+
+        let r = readiness(&mgr, "r", &repo, &names);
+        assert!(!r.ready);
+        assert_eq!(r.missing.len(), 3, "{:?}", r.missing);
+        assert!(r.missing[0].contains("Claude key missing"), "{:?}", r.missing);
+        assert!(r.missing[1].contains("GitHub token missing"), "{:?}", r.missing);
+        assert!(r.missing[2].contains("API_KEY"), "{:?}", r.missing);
+
+        mgr.secrets.set(secrets::CLAUDE_OAUTH, "tok").unwrap();
+        mgr.secrets.set("github_token:a", "gh").unwrap();
+        mgr.secrets.set(&secrets::project_env_slot("r", "API_KEY"), "v").unwrap();
+        let r = readiness(&mgr, "r", &repo, &names);
+        assert!(r.ready, "{:?}", r.missing);
+
+        // `begin` refuses with the same reasons, before any VM exists.
+        mgr.secrets.clear(secrets::CLAUDE_OAUTH).unwrap();
+        let req = StartRequest {
+            repo_id: "r".into(),
+            branch_id: "b2".into(),
+            worktree_path: repo.to_string_lossy().into(),
+            chat_id: None,
+            agent: "claude".into(),
+            model: None,
+            handoff: String::new(),
+            env_names: names,
+        };
+        assert!(begin(&mgr, &|_: &CloudWorkspace| {}, &req).unwrap_err().contains("Claude key missing"));
     }
 
     #[test]

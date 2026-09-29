@@ -77,6 +77,12 @@ export interface EnvVarStatus {
   set: boolean;
 }
 
+export interface Readiness {
+  ready: boolean;
+  /** One sentence per problem, saying where to fix it. */
+  missing: string[];
+}
+
 export interface EnvImport {
   imported: string[];
   /** `NAME: reason`, never a value. */
@@ -111,6 +117,8 @@ export const cloudSetSecret = (name: string, value: string, remoteUrl?: string |
   invoke<SecretStatus>("cloud_set_secret", { name, value, remoteUrl: remoteUrl ?? null });
 export const cloudProjectEnvStatus = (repoId: string, names: string[]) =>
   invoke<EnvVarStatus[]>("cloud_project_env_status", { repoId, names });
+export const cloudReadiness = (repoId: string, worktreePath: string, envNames: string[]) =>
+  invoke<Readiness>("cloud_readiness", { repoId, worktreePath, envNames });
 export const cloudImportEnvFile = (repoId: string, worktreePath: string, file: string) =>
   invoke<EnvImport>("cloud_import_env_file", { repoId, worktreePath, file });
 
@@ -340,9 +348,14 @@ export async function deleteCloudWorkspace(id: string) {
   useAppStore.getState().removeCloudWorkspace(id);
 }
 
-/** Opens a shell on the VM in the bottom panel. */
-export function openCloudShell(w: CloudWorkspace) {
+/** Opens the branch's shell in the bottom panel and runs `command` in it. */
+export function runInShell(branchId: string, command: string) {
   useAppStore.getState().openBottomPanel("shell");
   // The panel spawns its shell on first show; give it a moment.
-  window.setTimeout(() => void ptyWrite(`shell-${w.branchId}`, `boxd connect ${w.vmName}\r`).catch(() => {}), 600);
+  window.setTimeout(() => void ptyWrite(`shell-${branchId}`, `${command}\r`).catch(() => {}), 600);
+}
+
+/** Opens a shell on the VM in the bottom panel. */
+export function openCloudShell(w: CloudWorkspace) {
+  runInShell(w.branchId, `boxd connect ${w.vmName}`);
 }

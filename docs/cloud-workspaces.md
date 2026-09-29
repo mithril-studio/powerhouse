@@ -27,7 +27,8 @@ its next prompt. Deleting the branch deletes its VM too.
 | Workspace records | `~/.powerhouse/cloud-workspaces.json` |
 | Backend | `src-tauri/src/cloud/` (`workspace.rs` pure + tested, `commands.rs` flow) |
 | Frontend | `src/lib/cloud.ts` (IPC, poll loop, actions), `src/lib/cloudStream.ts` (stream-json → transcript) |
-| Credentials | Settings → Cloud (Keychain). GitHub falls back to the GitHub connection. |
+| Credentials | Settings → Cloud (Keychain). GitHub falls back to the GitHub connection. **Get token** runs `claude setup-token` in the branch shell. |
+| Readiness | `cloud_readiness` runs the same `preflight()` as a start, without side effects. The Cloud button shows an amber dot and lists what is missing in its tooltip. |
 | Per-repo env vars | Project settings (right-click the project, or Merge tab → Edit workflow). **Import from .env** reads `.env` (or `.env.<name>`) from the selected worktree and stores each value in the Keychain; `CLAUDE_CODE_OAUTH_TOKEN` and `GH_TOKEN` are skipped. |
 
 The `cloud/` runner crates and `scripts/cloud-base-setup.sh` belong to the workflow coordinator
