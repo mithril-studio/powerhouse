@@ -5,8 +5,9 @@
 //! module is reached by PTY cleanup or app shutdown.
 //!
 //! Lifecycle rules: every run owns one VM named for its source branch
-//! (`ph-<branch-slug>`, or `ph-<run8>` on a detached HEAD) created from the base snapshot; a completed, published,
-//! fully cached and remotely verified run releases its VM at once; any other
+//! (`ph-<branch-slug>`, or `ph-<run8>` on a detached HEAD) created from the
+//! base snapshot; a completed, published, fully cached and remotely verified
+//! run releases its VM at once; any other
 //! terminal state holds the VM for `hold_secs()`, then parks it as snapshot
 //! `<vm>-park` and destroys the VM. The intended state is persisted before
 //! each boxd call so a lost acknowledgement is reconciled by name — always
