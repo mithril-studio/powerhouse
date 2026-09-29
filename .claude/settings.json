@@ -8,7 +8,19 @@
       "Bash(scripts/status.sh)",
       "Bash(scripts/status.sh:*)",
       "Bash(./scripts/status.sh)",
-      "Bash(./scripts/status.sh:*)"
+      "Bash(./scripts/status.sh:*)",
+      "Bash(scripts/ship.sh check)",
+      "Bash(scripts/ship.sh check:*)",
+      "Bash(./scripts/ship.sh check)",
+      "Bash(./scripts/ship.sh check:*)",
+      "Bash(scripts/ship.sh watch)",
+      "Bash(scripts/ship.sh watch:*)",
+      "Bash(./scripts/ship.sh watch)",
+      "Bash(./scripts/ship.sh watch:*)",
+      "Bash(scripts/bump.sh)",
+      "Bash(scripts/bump.sh:*)",
+      "Bash(./scripts/bump.sh)",
+      "Bash(./scripts/bump.sh:*)"
     ]
   }
 }
