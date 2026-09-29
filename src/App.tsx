@@ -96,7 +96,7 @@ export default function App() {
       startArchivedBranchSweep();
       void initHandoff();
       void reconcileGithub();
-      // Cloud runs live in their VMs; this only observes and reconciles.
+      // Cloud turns run on their VMs; this streams them into their chats.
       void startCloudSync();
       void checkForUpdates();
     })();

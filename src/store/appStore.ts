@@ -17,7 +17,7 @@ export type BottomTab = "shell" | "agent";
  *   (only after real round-trip resume is verified for that runtime).
  */
 export type HandoffMode = "unsupported" | "workspace-only" | "resumable";
-import type { CloudRunRecord } from "../lib/cloud";
+import type { CloudWorkspace } from "../lib/cloud";
 
 export interface Chat {
   id: string;
@@ -36,11 +36,9 @@ export interface Chat {
   transport?: AgentTransport;
   /** Structured ACP history. PTY chats continue to use raw transcript files. */
   acpTranscript?: AcpTranscriptItem[];
-  /** Last cloud run whose continued session was applied to this chat. */
-  cloudSessionRunId?: string;
-  /** The session changed outside ACP (it came back from the cloud): the next
-   *  start replays it with `session/load` so the transcript shows every turn. */
-  replayOnResume?: boolean;
+  /** What happened in the cloud since the local session last saw this chat;
+   *  prefixed to the next local prompt, then cleared. */
+  cloudRecap?: string;
 }
 
 export interface AgentProfile {
@@ -85,37 +83,11 @@ export interface Connections {
   github: GithubConnection;
 }
 
-/** Defaults for the `Run in cloud` form. Additive; older stores lack it. */
-export interface CloudSettings {
-  /** boxd snapshot every task VM is created from (published by scripts/cloud-base-setup.sh). */
-  baseSnapshot: string;
-  /** Org-wide machine count at which Powerhouse refuses to create another VM (org limit 20). */
-  machineCeiling: number;
-  deadlineMinutes: number;
-  permissionMode: string;
-  allowedTools: string;
-  maxTurns: number | null;
-  maxBudgetUsd: number | null;
-  model: string;
-}
-
-export const DEFAULT_CLOUD_SETTINGS: CloudSettings = {
-  baseSnapshot: "powerhouse-base",
-  machineCeiling: 18,
-  deadlineMinutes: 45,
-  permissionMode: "acceptEdits",
-  allowedTools: "Read,Edit,Write,Glob,Grep,Bash",
-  maxTurns: 60,
-  maxBudgetUsd: 5,
-  model: "",
-};
-
 export interface Settings {
   agents: AgentProfile[];
   defaultAgentId: string;
   theme: Theme;
   connections: Connections;
-  cloud?: CloudSettings;
   /** Shared agent memory (Basic Memory over MCP). Additive; older stores lack it. */
   memory?: MemorySettings;
   /** Right sidebar width in px, set by dragging its left edge. */
@@ -137,7 +109,7 @@ export interface Branch {
 }
 
 /** Tabs of the toggleable right inspector sidebar. */
-export type RightTab = "files" | "changes" | "diff" | "merge" | "cloud";
+export type RightTab = "files" | "changes" | "diff" | "merge";
 
 /** A configurable check step. `type` is reserved for future "agent" steps. */
 export interface WorkflowStep {
@@ -189,7 +161,7 @@ export interface Repo {
   branches: Branch[];
   workflow: WorkflowStep[];
   pushOnMerge: boolean;
-  /** Env var names injected into this repo's cloud runs; values live in the Keychain. */
+  /** Env var names injected into this repo's cloud workspaces; values live in the Keychain. */
   cloudEnvNames?: string[];
   /** Tucked out of the project list until "Show hidden projects" is toggled on. */
   hidden?: boolean;
@@ -253,12 +225,8 @@ interface AppState extends PersistedTree {
   shellStatus: Record<string, ChatStatus>;
   /** branchId → setTimeout id of the in-flight handoff (presence = pending). */
   pendingHandoff: Record<string, number>;
-  /** Runtime mirror of the Rust-owned cloud-run store (never persisted here). */
-  cloudRuns: Record<string, CloudRunRecord>;
-  /** `${repoId}:${branch}` → stage of an in-flight one-click submit (never persisted). */
-  cloudQuickStages: Record<string, string>;
-  /** `${repoId}:${branch}` → why the last send to cloud stopped, until dismissed. */
-  cloudQuickErrors: Record<string, string>;
+  /** Runtime mirror of the Rust-owned cloud workspace store, by id (never persisted here). */
+  cloudWorkspaces: Record<string, CloudWorkspace>;
 
   settingsOpen: boolean;
   telemetryOpen: boolean;
@@ -287,15 +255,7 @@ interface AppState extends PersistedTree {
   /** Open `path` as a tab (or focus it if already open). */
   openFile: (repoId: string, branchId: string, path: string) => void;
   closeFile: (repoId: string, branchId: string, path: string) => void;
-  applyCloudSession: (
-    repoId: string,
-    branchId: string,
-    chatId: string,
-    runId: string,
-    sessionId: string,
-  ) => void;
-  /** Reconnect the chat (with a replay) the next time it is on screen. */
-  setChatReplay: (repoId: string, branchId: string, chatId: string, replay: boolean) => void;
+  setChatCloudRecap: (repoId: string, branchId: string, chatId: string, recap: string | null) => void;
   setChatAgentSession: (
     repoId: string,
     branchId: string,
@@ -342,13 +302,10 @@ interface AppState extends PersistedTree {
   setPendingHandoff: (branchId: string, timerId: number) => void;
   clearPendingHandoff: (branchId: string) => void;
 
-  setCloudRuns: (runs: CloudRunRecord[]) => void;
-  setCloudRun: (run: CloudRunRecord) => void;
-  removeCloudRun: (runId: string) => void;
-  setCloudSettings: (cloud: CloudSettings) => void;
+  setCloudWorkspaces: (items: CloudWorkspace[]) => void;
+  setCloudWorkspace: (workspace: CloudWorkspace) => void;
+  removeCloudWorkspace: (id: string) => void;
   setMemorySettings: (memory: MemorySettings) => void;
-  setCloudQuickStage: (repoId: string, branch: string, stage: string | null) => void;
-  setCloudQuickError: (repoId: string, branch: string, reason: string | null) => void;
 }
 
 const SEED_AGENTS: AgentProfile[] = [
@@ -435,6 +392,19 @@ function migrateGithub(raw: unknown): GithubConnection {
 }
 
 /** Migrates the old `agentCmd` string into agent profiles, or passes settings through. */
+/** Chats saved before cloud workspaces hold `cloud-result` cards for runs
+ *  that no longer exist; nothing renders them now. */
+function dropLegacyCloudItems(branch: Branch): Branch {
+  const legacy = (item: { type: string }) => item.type === "cloud-result";
+  if (!branch.chats.some((c) => c.acpTranscript?.some(legacy))) return branch;
+  return {
+    ...branch,
+    chats: branch.chats.map((c) =>
+      c.acpTranscript ? { ...c, acpTranscript: c.acpTranscript.filter((i) => !legacy(i)) } : c,
+    ),
+  };
+}
+
 export function migrateSettings(
   tree: (Partial<PersistedTree> & LegacyTree) | null,
 ): Settings {
@@ -452,7 +422,6 @@ export function migrateSettings(
       defaultAgentId: validDefault ? defaultAgentId : agents[0].id,
       theme,
       connections,
-      ...(tree.settings.cloud ? { cloud: { ...DEFAULT_CLOUD_SETTINGS, ...tree.settings.cloud } } : {}),
       ...(tree.settings.memory ? { memory: { ...DEFAULT_MEMORY_SETTINGS, ...tree.settings.memory } } : {}),
       ...(typeof tree.settings.rightSidebarWidth === "number"
         ? { rightSidebarWidth: tree.settings.rightSidebarWidth }
@@ -584,9 +553,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   settingsOpen: false,
   telemetryOpen: false,
   memoryOpen: false,
-  cloudRuns: {},
-  cloudQuickStages: {},
-  cloudQuickErrors: {},
+  cloudWorkspaces: {},
 
   hydrate: (tree) =>
     set({
@@ -597,6 +564,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...r,
         workflow: r.workflow ?? [],
         pushOnMerge: r.pushOnMerge ?? true,
+        branches: r.branches.map(dropLegacyCloudItems),
       })),
       selection: tree?.selection ?? { repoId: null, branchId: null },
       recentRepos: tree?.recentRepos ?? [],
@@ -788,19 +756,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       }),
     })),
 
-  applyCloudSession: (repoId, branchId, chatId, runId, sessionId) =>
+  setChatCloudRecap: (repoId, branchId, chatId, recap) =>
     set((s) => ({
-      repos: updateChat(s.repos, repoId, branchId, chatId, (c) => ({
-        ...c,
-        agentSessionId: sessionId,
-        cloudSessionRunId: runId,
-        replayOnResume: true,
-      })),
-    })),
-
-  setChatReplay: (repoId, branchId, chatId, replay) =>
-    set((s) => ({
-      repos: updateChat(s.repos, repoId, branchId, chatId, (c) => ({ ...c, replayOnResume: replay })),
+      repos: updateChat(s.repos, repoId, branchId, chatId, ({ cloudRecap: _old, ...c }) =>
+        recap ? { ...c, cloudRecap: recap } : c,
+      ),
     })),
 
   setChatAgentSession: (repoId, branchId, chatId, sessionId) =>
@@ -920,40 +880,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { pendingHandoff: next };
     }),
 
-  setCloudRuns: (runs) =>
-    set({ cloudRuns: Object.fromEntries(runs.map((r) => [r.run_id, r])) }),
-  setCloudRun: (run) =>
-    set((s) => ({ cloudRuns: { ...s.cloudRuns, [run.run_id]: run } })),
-  removeCloudRun: (runId) =>
+  setCloudWorkspaces: (items) =>
+    set({ cloudWorkspaces: Object.fromEntries(items.map((w) => [w.id, w])) }),
+  setCloudWorkspace: (workspace) =>
+    set((s) => ({ cloudWorkspaces: { ...s.cloudWorkspaces, [workspace.id]: workspace } })),
+  removeCloudWorkspace: (id) =>
     set((s) => {
-      if (!(runId in s.cloudRuns)) return s;
-      const next = { ...s.cloudRuns };
-      delete next[runId];
-      return { cloudRuns: next };
+      if (!(id in s.cloudWorkspaces)) return s;
+      const next = { ...s.cloudWorkspaces };
+      delete next[id];
+      return { cloudWorkspaces: next };
     }),
-  setCloudQuickStage: (repoId, branch, stage) =>
-    set((s) => {
-      const key = `${repoId}:${branch}`;
-      if (stage === null) {
-        if (!(key in s.cloudQuickStages)) return s;
-        const next = { ...s.cloudQuickStages };
-        delete next[key];
-        return { cloudQuickStages: next };
-      }
-      return { cloudQuickStages: { ...s.cloudQuickStages, [key]: stage } };
-    }),
-  setCloudQuickError: (repoId, branch, reason) =>
-    set((s) => {
-      const key = `${repoId}:${branch}`;
-      if (reason === null) {
-        if (!(key in s.cloudQuickErrors)) return s;
-        const next = { ...s.cloudQuickErrors };
-        delete next[key];
-        return { cloudQuickErrors: next };
-      }
-      return { cloudQuickErrors: { ...s.cloudQuickErrors, [key]: reason } };
-    }),
-  setCloudSettings: (cloud) => set((s) => ({ settings: { ...s.settings, cloud } })),
   setMemorySettings: (memory) => set((s) => ({ settings: { ...s.settings, memory } })),
 }));
 
@@ -961,16 +898,6 @@ export const memorySettingsOf = (s: Settings): MemorySettings => ({
   ...DEFAULT_MEMORY_SETTINGS,
   ...(s.memory ?? {}),
 });
-
-export const cloudSettingsOf = (s: Settings): CloudSettings => {
-  // `baseVm` belonged to the fork-era settings; a snapshot name replaces it.
-  const { baseVm: _legacy, ...stored } = (s.cloud ?? {}) as Partial<CloudSettings> & { baseVm?: string };
-  const merged = { ...DEFAULT_CLOUD_SETTINGS, ...stored };
-  // A persisted blank must not shadow the default: `{...def, baseSnapshot: ""}`
-  // spreads to `""`, which would fail submit with "base snapshot `` not found".
-  if (!merged.baseSnapshot?.trim()) merged.baseSnapshot = DEFAULT_CLOUD_SETTINGS.baseSnapshot;
-  return merged;
-};
 
 export const selectedRepo = (s: AppState) =>
   s.repos.find((r) => r.id === s.selection.repoId) ?? null;

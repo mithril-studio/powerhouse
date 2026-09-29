@@ -1,6 +1,6 @@
-//! Powerhouse's own credentials for cloud runs, kept in the macOS Keychain
-//! and handed to a run only for its lifetime. Nothing here is read from
-//! boxd, the base VM, or the user's other tools.
+//! Powerhouse's own credentials for cloud workspaces, kept in the macOS
+//! Keychain and written to the workspace VM's `~/.ph/env` (outside the repo,
+//! so the agent can never commit them).
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -80,7 +80,7 @@ pub fn project_env_values(store: &dyn SecretStore, repo_id: &str, names: &[Strin
     }
     if !missing.is_empty() {
         return Err(format!(
-            "no value is stored for the project env var(s) {}. Set them in the cloud form's environment section, or remove them from the repo settings.",
+            "no value is stored for the project env var(s) {}. Set them in the repo's workflow settings, or remove them there.",
             missing.join(", ")
         ));
     }
@@ -156,8 +156,9 @@ pub fn status_for(store: &dyn SecretStore, remote_url: Option<&str>) -> Result<S
     Ok(SecretStatus { claude, github, github_slot })
 }
 
-pub fn status(store: &dyn SecretStore) -> Result<SecretStatus, String> {
-    status_for(store, None)
+/// The GitHub token stored for a remote, most specific Keychain slot first.
+pub fn github_token_for(store: &dyn SecretStore, remote_url: &str) -> Option<String> {
+    resolve_github(store, remote_url).ok().flatten().map(|(_, v)| v)
 }
 
 fn resolve_github(store: &dyn SecretStore, remote_url: &str) -> Result<Option<(String, String)>, String> {
@@ -169,58 +170,44 @@ fn resolve_github(store: &dyn SecretStore, remote_url: &str) -> Result<Option<(S
     Ok(None)
 }
 
-/// The KEY=VALUE file a run receives. Only what this run needs, resolved for
-/// this run's remote. Project env vars travel as `ENV.<NAME>=<value>` lines
-/// (`.` cannot appear in a real variable name, so they can never be mistaken
-/// for the runner's own credential keys). Values with newlines are refused:
-/// the file format is line-based.
-pub fn render_run_credentials(
+/// The variables a workspace VM gets: the Claude token, a GitHub token for the
+/// remote (a Keychain slot, else `fallback_github`, Powerhouse's GitHub
+/// connection), and the repo's project env vars. Both tokens are required: an
+/// agent that cannot authenticate or push would only fail later, in the VM.
+pub fn workspace_env(
     store: &dyn SecretStore,
-    need_claude: bool,
-    git_remote: Option<&str>,
+    remote_url: &str,
     project_env: &[(String, String)],
-    memory: Option<(&str, &str)>,
-) -> Result<String, String> {
-    let mut lines = vec![];
-    if need_claude {
-        let v = store
-            .get(CLAUDE_OAUTH)?
-            .filter(|v| !v.trim().is_empty())
-            .ok_or("no Claude credential is stored in Powerhouse. Run `claude setup-token` and paste the token in the cloud form.")?;
-        lines.push(format!("CLAUDE_CODE_OAUTH_TOKEN={}", v.trim()));
-    }
-    if let Some(remote) = git_remote {
-        let (_, v) = resolve_github(store, remote)?.ok_or_else(|| {
-            let tried = github_token_candidates(remote).join(", ");
-            format!("no GitHub token is stored in Powerhouse for this remote (looked for Keychain entries {tried}). Add a fine-grained token for the repository owner in the cloud form.")
-        })?;
-        lines.push(format!("GIT_PUBLISH_TOKEN={v}"));
-    }
-    for (name, value) in project_env {
+    fallback_github: Option<String>,
+) -> Result<Vec<(String, String)>, String> {
+    let claude = store
+        .get(CLAUDE_OAUTH)?
+        .filter(|v| !v.trim().is_empty())
+        .ok_or("no Claude token is stored. Run `claude setup-token` and paste the token under Settings → Cloud.")?;
+    let github = match resolve_github(store, remote_url)? {
+        Some((_, v)) => v,
+        None => fallback_github.filter(|t| !t.trim().is_empty()).ok_or(
+            "no GitHub token for this remote. Connect GitHub or add a token under Settings → Cloud.",
+        )?,
+    };
+    let mut vars = vec![
+        ("CLAUDE_CODE_OAUTH_TOKEN".to_string(), claude.trim().to_string()),
+        ("GH_TOKEN".to_string(), github.trim().to_string()),
+    ];
+    vars.extend(project_env.iter().cloned());
+    Ok(vars)
+}
+
+/// `export NAME='value'` lines, single-quoted so any value survives `source`.
+pub fn render_env_file(vars: &[(String, String)]) -> Result<String, String> {
+    let mut out = String::new();
+    for (name, value) in vars {
         if !is_env_var_name(name) {
             return Err(format!("`{name}` is not a valid environment variable name"));
         }
-        if value.contains('\n') || value.contains('\r') {
-            return Err(format!("the value of {name} contains a newline; multi-line values cannot travel to the VM"));
-        }
-        lines.push(format!("ENV.{name}={value}"));
+        out.push_str(&format!("export {name}='{}'\n", value.replace('\'', "'\\''")));
     }
-    // The shared memory host. A run VM cannot reach the laptop's loopback
-    // server, so only a routable URL is worth sending; the caller filters
-    // those out. The token authenticates the VM to the same host the laptop
-    // uses. Both are line values, so newlines are refused like the rest.
-    if let Some((url, token)) = memory {
-        if !url.trim().is_empty() {
-            if url.contains('\n') || url.contains('\r') || token.contains('\n') || token.contains('\r') {
-                return Err("the memory URL or token contains a newline; it cannot travel to the VM".into());
-            }
-            lines.push(format!("MEMORY_URL={}", url.trim()));
-            if !token.is_empty() {
-                lines.push(format!("MEMORY_TOKEN={token}"));
-            }
-        }
-    }
-    Ok(format!("{}\n", lines.join("\n")))
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -239,9 +226,6 @@ mod tests {
         assert_eq!(resolve_github(&m, remote).unwrap().unwrap().1, "repo");
         // A different owner falls back to the wide token.
         assert_eq!(resolve_github(&m, "https://github.com/joost/other.git").unwrap().unwrap().1, "wide");
-        let rendered = render_run_credentials(&m, false, Some(remote), &[], None).unwrap();
-        assert_eq!(rendered, "GIT_PUBLISH_TOKEN=repo\n");
-        assert!(render_run_credentials(&m, false, None, &[], None).unwrap().trim().is_empty());
     }
 
     #[test]
@@ -260,36 +244,27 @@ mod tests {
         // A configured name without a value refuses instead of half-configuring the run.
         let err = project_env_values(&m, "repo-a", &["FOO_API_KEY".into(), "BAR".into()]).unwrap_err();
         assert!(err.contains("BAR"), "{err}");
-        let rendered = render_run_credentials(&m, false, None, &[("FOO_API_KEY".into(), "s3cret".into())], None).unwrap();
-        assert_eq!(rendered, "ENV.FOO_API_KEY=s3cret\n");
-        // Line-based format: newline values are refused, not truncated.
-        let err = render_run_credentials(&m, false, None, &[("X".into(), "a\nb".into())], None).unwrap_err();
-        assert!(err.contains("newline"), "{err}");
     }
 
     #[test]
-    fn memory_endpoint_and_token_travel_as_credential_lines() {
+    fn workspace_env_needs_both_tokens_and_prefers_the_keychain_slot() {
         let m = MemoryStore::default();
-        // A configured host and token both travel.
-        let rendered = render_run_credentials(
-            &m,
-            false,
-            None,
-            &[],
-            Some(("https://factory.mithril-studio.com/memory/mcp", "bearer-tok")),
-        )
-        .unwrap();
-        assert!(rendered.contains("MEMORY_URL=https://factory.mithril-studio.com/memory/mcp"), "{rendered}");
-        assert!(rendered.contains("MEMORY_TOKEN=bearer-tok"), "{rendered}");
-        // A host without a token still travels; the token line is omitted.
-        let no_token = render_run_credentials(&m, false, None, &[], Some(("https://h/mcp", ""))).unwrap();
-        assert!(no_token.contains("MEMORY_URL=https://h/mcp") && !no_token.contains("MEMORY_TOKEN="), "{no_token}");
-        // No memory configured: no lines.
-        assert!(render_run_credentials(&m, false, None, &[], None).unwrap().trim().is_empty());
-        assert!(render_run_credentials(&m, false, None, &[], Some(("   ", "tok"))).unwrap().trim().is_empty());
-        // Newlines are refused like every other line value.
-        let err = render_run_credentials(&m, false, None, &[], Some(("https://h/mcp", "a\nb"))).unwrap_err();
-        assert!(err.contains("newline"), "{err}");
+        let remote = "https://github.com/mithril-studio/powerhouse.git";
+        assert!(workspace_env(&m, remote, &[], Some("oauth".into())).unwrap_err().contains("Claude"));
+        m.set(CLAUDE_OAUTH, "claude-tok").unwrap();
+        assert!(workspace_env(&m, remote, &[], None).unwrap_err().contains("GitHub"));
+        let vars = workspace_env(&m, remote, &[("FOO".into(), "bar".into())], Some("oauth".into())).unwrap();
+        assert_eq!(vars[1], ("GH_TOKEN".into(), "oauth".into()));
+        assert_eq!(vars[2], ("FOO".into(), "bar".into()));
+        m.set("github_token:mithril-studio", "scoped").unwrap();
+        assert_eq!(workspace_env(&m, remote, &[], Some("oauth".into())).unwrap()[1].1, "scoped");
+    }
+
+    #[test]
+    fn env_file_quotes_values_for_the_shell() {
+        let file = render_env_file(&[("A".into(), "it's $HOME".into()), ("B".into(), "x".into())]).unwrap();
+        assert_eq!(file, "export A='it'\\''s $HOME'\nexport B='x'\n");
+        assert!(render_env_file(&[("1BAD".into(), "x".into())]).is_err());
     }
 
     #[test]

@@ -1,9 +1,9 @@
-//! Durable cloud agent runs on boxd.
+//! Cloud workspaces: a branch continued by Claude on a boxd VM. See
+//! docs/cloud-workspaces.md.
 pub mod commands;
 pub mod secrets;
-pub mod session;
-pub mod store;
 pub mod transport;
+pub mod workspace;
 
 /// Strip token-looking material from git's stderr before it reaches the UI.
 pub fn redact_stderr(s: &str) -> String {

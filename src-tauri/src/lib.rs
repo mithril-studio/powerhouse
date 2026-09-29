@@ -85,25 +85,16 @@ pub fn run() {
             github::github_account,
             github::github_list_repos,
             github::github_disconnect,
-            cloud::commands::cloud_list_runs,
-            cloud::commands::cloud_inspect_source,
-            cloud::commands::cloud_list_snapshots,
-            cloud::commands::cloud_inventory,
-            cloud::commands::cloud_release,
-            cloud::commands::cloud_restore,
-            cloud::commands::cloud_lifecycle_tick,
-            cloud::commands::cloud_submit,
-            cloud::commands::cloud_quick_submit,
-            cloud::commands::cloud_sync,
-            cloud::commands::cloud_cancel,
-            cloud::commands::cloud_diff,
-            cloud::commands::cloud_import,
-            cloud::commands::cloud_forget,
-            cloud::commands::cloud_keep_session_local,
+            cloud::commands::cloud_workspace_list,
+            cloud::commands::cloud_workspace_start,
+            cloud::commands::cloud_workspace_send,
+            cloud::commands::cloud_workspace_poll,
+            cloud::commands::cloud_workspace_stop,
+            cloud::commands::cloud_workspace_archive,
+            cloud::commands::cloud_workspace_pull,
             cloud::commands::cloud_secret_status,
             cloud::commands::cloud_set_secret,
             cloud::commands::cloud_project_env_status,
-            cloud::commands::cloud_latest_handoff,
             telemetry::commands::telemetry_list_runs,
             telemetry::commands::telemetry_run_detail,
             telemetry::commands::telemetry_run_events,
@@ -127,8 +118,8 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 app.state::<AcpManager>().kill_all_with_reason("app-shutdown");
                 app.state::<Telemetry>().end_all("app-shutdown");
-                // Local processes only. Cloud runs are owned by their VM runner
-                // and deliberately untouched here.
+                // Local processes only. Cloud turns run detached on their VM
+                // and are deliberately untouched here.
                 app.state::<PtyManager>().kill_all();
                 app.state::<QueueManager>().kill_running();
                 app.state::<MemoryState>().kill_server();

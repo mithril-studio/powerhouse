@@ -6,7 +6,7 @@ const input =
   "h-8 w-full rounded-lg border border-input bg-background px-2.5 text-xs outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50";
 
 /**
- * Per-repo env vars for cloud runs. Names live in the repo's config; values
+ * Per-repo env vars for cloud workspaces. Names live in the repo's config; values
  * go straight to the macOS Keychain (`project_env:<repo_id>:<NAME>`) and are
  * injected into that repo's runs only — never into snapshots or logs.
  */
@@ -106,7 +106,7 @@ export function RepoEnvEditor({ repo }: { repo: Repo }) {
           Add
         </button>
         <p className="min-w-0 flex-1 text-muted-foreground">
-          Injected into this repo's cloud runs and <span className="font-mono">.env</span> on the VM only.
+          Exported to this repo's cloud agent on its VM only.
         </p>
       </div>
       {error && <p className="text-destructive">{error}</p>}

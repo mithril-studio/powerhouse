@@ -40,14 +40,7 @@ export type AcpTranscriptItem =
       type: "plan";
       entries: PlanEntry[];
     }
-  | {
-      /** `cloud-result-<runId>` — the run id is the dedupe key across restarts. */
-      id: string;
-      type: "cloud-result";
-      runId: string;
-      /** True when appended at boot for a run that had already finished. */
-      late: boolean;
-    }
+  | CloudResultItem
   | AcpUsageItem;
 
 /** Context-window snapshot reported by the agent after a model call. */
@@ -62,19 +55,35 @@ export interface AcpUsageItem {
   cost?: Cost | null;
 }
 
+/** What a finished cloud turn posts back into its chat. Self-contained, so the
+ *  card still reads right after the workspace is archived. */
+export interface CloudResultItem {
+  /** `cloud-result-<workspaceId>-<turn>`: the dedupe key across polls and restarts. */
+  id: string;
+  type: "cloud-workspace-result";
+  workspaceId: string;
+  vmName: string;
+  branch: string;
+  turn: number;
+  ok: boolean;
+  status: string;
+  summary: string;
+  pushedCommit: string | null;
+  unpushedCommits: number;
+  dirtyFiles: number;
+  local: string;
+  costUsd: number | null;
+}
+
 const newId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 
-/** Append the cloud-result card for a run once. The run id keys the dedupe, so
- *  replayed record updates and restarts never double-post. */
+/** Append a cloud result card once; its id keys the dedupe. */
 export function appendCloudResult(
   transcript: AcpTranscriptItem[],
-  runId: string,
-  late: boolean,
+  card: CloudResultItem,
 ): AcpTranscriptItem[] {
-  if (transcript.some((item) => item.type === "cloud-result" && item.runId === runId)) {
-    return transcript;
-  }
-  return [...transcript, { id: `cloud-result-${runId}`, type: "cloud-result", runId, late }];
+  if (transcript.some((item) => item.id === card.id)) return transcript;
+  return [...transcript, card];
 }
 
 export function appendUserMessage(

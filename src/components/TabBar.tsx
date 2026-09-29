@@ -1,7 +1,7 @@
 import { resolveAgent, useAppStore, type Branch, type Repo } from "../store/appStore";
 import { deleteChat } from "../lib/actions";
 import { startHandoff } from "../lib/handoff";
-import { quickSubmitBranch } from "../lib/quickSubmit";
+import { isCloudBusy, sendChatToCloud, workspaceForBranch } from "../lib/cloud";
 import { ActivityDot } from "./ActivityDot";
 import { FileIcon } from "./RightSidebar";
 
@@ -27,9 +27,12 @@ export function TabBar({ repo, branch }: Props) {
       ? (s.chatStatus[branch.activeChatId] ?? "idle") === "running"
       : false,
   );
-  const cloudStage = useAppStore((s) =>
-    repo && branch ? s.cloudQuickStages[`${repo.id}:${branch.name}`] : undefined,
+  const cloud = useAppStore((s) =>
+    branch ? workspaceForBranch(s.cloudWorkspaces, branch.id) : null,
   );
+  const cloudBusy = cloud ? isCloudBusy(cloud) : false;
+  // One workspace per branch; a failed start may be retried.
+  const cloudLocked = cloud ? cloud.status !== "failed" || cloud.turn > 0 : false;
 
   return (
     <div
@@ -120,15 +123,19 @@ export function TabBar({ repo, branch }: Props) {
       {repo && branch && (
         <>
           <button
-            onClick={() => void quickSubmitBranch(repo, branch)}
-            disabled={!!cloudStage}
-            title="Send this chat and its branch to the cloud; it comes back here when the run finishes"
+            onClick={() => void sendChatToCloud(repo, branch)}
+            disabled={cloudLocked || !branch.activeChatId}
+            title={
+              cloud
+                ? `This branch is in the cloud on ${cloud.vmName}`
+                : "Continue this chat and its branch on a cloud machine"
+            }
             className="flex h-7 items-center gap-1.5 rounded-md bg-foreground px-2.5 text-xs font-medium text-background hover:bg-foreground/90 disabled:opacity-50"
           >
-            {cloudStage && (
+            {cloudBusy && (
               <span className="size-2 animate-pulse rounded-full bg-background/70" />
             )}
-            {cloudStage ? "Sending…" : "Cloud"}
+            {cloudBusy ? "In cloud…" : cloudLocked ? "In cloud" : "Cloud"}
           </button>
           <button
             onClick={() => void startHandoff(repo.id, branch.id)}

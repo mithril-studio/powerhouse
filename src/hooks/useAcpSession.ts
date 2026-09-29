@@ -26,10 +26,9 @@ import {
   appendSystemMessage,
   appendUserMessage,
   applyAcpUpdate,
-  type AcpTranscriptItem,
 } from "../lib/acpTranscript";
 import { notifyTurnFinished } from "../lib/attention";
-import { runHoldingChat } from "../lib/cloud";
+import { workspaceForChat } from "../lib/cloud";
 import { activityFromStopReason } from "../lib/chatActivity";
 import { consumeAutoSpawn } from "../lib/terminalRegistry";
 import { handoffWatchStart, telemetryAnnotateRun } from "../lib/ipc";
@@ -67,11 +66,9 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
   const activity = useAppStore((state) => state.chatActivity[chat.id]);
   const setChatAgentSession = useAppStore((state) => state.setChatAgentSession);
   const updateTranscript = useAppStore((state) => state.updateChatAcpTranscript);
-  const setChatReplay = useAppStore((state) => state.setChatReplay);
-  /** The cloud run that owns this conversation right now, if any. */
-  const cloudRunId = useAppStore(
-    (state) => runHoldingChat(state.cloudRuns, chat.id)?.run_id ?? null,
-  );
+  const setChatCloudRecap = useAppStore((state) => state.setChatCloudRecap);
+  /** The cloud workspace that owns this conversation right now, if any. */
+  const cloudWorkspace = useAppStore((state) => workspaceForChat(state.cloudWorkspaces, chat.id));
   const profile = resolveAgent(settings, chat.agentId);
   const memory = useMemo(() => memorySettingsOf(settings), [settings.memory]);
 
@@ -87,9 +84,6 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
   const [supportsImages, setSupportsImages] = useState(false);
   const closingRef = useRef(false);
   const replayingRef = useRef(false);
-  /** Cloud result cards survive a replay, which rebuilds the transcript. */
-  const replayCardsRef = useRef<AcpTranscriptItem[]>([]);
-  const autoReplayTriedRef = useRef(false);
   const activeRef = useRef(active);
   activeRef.current = active;
 
@@ -152,6 +146,16 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
         appendUserMessage(items, prompt, attachments.map(toRef)),
       );
       let outbound = prompt;
+      // Back from the cloud: the local session never saw those turns.
+      const recap = useAppStore
+        .getState()
+        .repos.find((r) => r.id === repoId)
+        ?.branches.find((b) => b.id === branch.id)
+        ?.chats.find((c) => c.id === chat.id)?.cloudRecap;
+      if (recap) {
+        outbound = `[While this chat ran on a cloud machine, the agent there worked on this branch and pushed its commits:\n${recap}\nPull or inspect the branch as needed.]\n\n${outbound}`;
+        setChatCloudRecap(repoId, branch.id, chat.id, null);
+      }
       if (memory.enabled && !briefedRef.current) {
         briefedRef.current = true;
         const repoName = useAppStore.getState().repos.find((r) => r.id === repoId)?.name ?? "";
@@ -182,7 +186,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
         );
       }
     },
-    [chat.id, mutateTranscript, finishTurn, checkpoint, memory, repoId],
+    [chat.id, branch.id, mutateTranscript, finishTurn, checkpoint, memory, repoId, setChatCloudRecap],
   );
 
   const start = useCallback(
@@ -216,7 +220,6 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
           ),
         );
       }
-      const replay = resume && Boolean(chat.replayOnResume);
 
       try {
         const result = await startAcp({
@@ -228,7 +231,6 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
           resumeSessionId: resume ? chat.agentSessionId : undefined,
           mcpServers: memoryMcpServers(memory),
           meta: memorySessionMeta(memory),
-          replay,
           callbacks: {
             onUpdate: (update) =>
               mutateTranscript((items) =>
@@ -251,19 +253,6 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
             onAvailableCommandsChange: setCommands,
             onSessionReplayChange: (replaying) => {
               replayingRef.current = replaying;
-              if (replaying) {
-                mutateTranscript((items) => {
-                  replayCardsRef.current = items.filter((i) => i.type === "cloud-result");
-                  return [];
-                });
-              } else if (replayCardsRef.current.length > 0) {
-                const cards = replayCardsRef.current;
-                replayCardsRef.current = [];
-                mutateTranscript((items) => [
-                  ...items.filter((i) => i.type !== "cloud-result"),
-                  ...cards,
-                ]);
-              }
             },
             onDetached: () => {
               closingRef.current = true;
@@ -305,7 +294,6 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
         });
 
         setChatAgentSession(repoId, branch.id, chat.id, result.sessionId);
-        if (replay) setChatReplay(repoId, branch.id, chat.id, false);
         // Cosmetic run labels; losing this call loses labels, never evidence.
         const modelOption = (result.configOptions ?? []).find(
           (option) => option.category === "model",
@@ -345,7 +333,6 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
       chat.id,
       chat.agentSessionId,
       chat.initialPrompt,
-      chat.replayOnResume,
       branch.id,
       branch.worktreePath,
       repoId,
@@ -354,23 +341,10 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
       setChatAgentSession,
       setChatStatus,
       setChatActivity,
-      setChatReplay,
       finishTurn,
       submitPrompt,
     ],
   );
-
-  // A conversation that came back from the cloud reconnects on its own, with
-  // a replay so the cloud turns show up in the transcript.
-  useEffect(() => {
-    if (!chat.replayOnResume) {
-      autoReplayTriedRef.current = false;
-      return;
-    }
-    if (!active || cloudRunId || connection === "starting" || autoReplayTriedRef.current) return;
-    autoReplayTriedRef.current = true;
-    void start(true);
-  }, [active, cloudRunId, chat.replayOnResume, connection, start]);
 
   // A finished turn counts as seen once its chat is on screen and focused.
   useEffect(() => {
@@ -466,7 +440,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
     supportsImages,
     controlState,
     thinkingLevel,
-    cloudRunId,
+    cloudWorkspace,
     start,
     submitPrompt,
     cancel,

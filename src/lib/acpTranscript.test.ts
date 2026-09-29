@@ -3,15 +3,27 @@ import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import { appendCloudResult, appendUserMessage, applyAcpUpdate, latestUsage, type AcpTranscriptItem } from "./acpTranscript";
 
 describe("appendCloudResult", () => {
-  it("posts a run's card once and never again (restart-safe by run id)", () => {
-    const once = appendCloudResult([], "run-1", true);
-    expect(once).toEqual([{ id: "cloud-result-run-1", type: "cloud-result", runId: "run-1", late: true }]);
-    // A replayed record update or a restart must not add a second card.
-    const twice = appendCloudResult(once, "run-1", false);
-    expect(twice).toBe(once);
-    // A different run gets its own card.
-    const other = appendCloudResult(once, "run-2", false);
-    expect(other).toHaveLength(2);
+  it("appends a turn's card once", () => {
+    const card = {
+      id: "cloud-result-w1-1",
+      type: "cloud-workspace-result" as const,
+      workspaceId: "w1",
+      vmName: "ph-x",
+      branch: "x",
+      turn: 1,
+      ok: true,
+      status: "done",
+      summary: "Fixed it",
+      pushedCommit: "abc",
+      unpushedCommits: 0,
+      dirtyFiles: 0,
+      local: "Pulled 1 commit(s) into your worktree.",
+      costUsd: null,
+    };
+    const once = appendCloudResult([], card);
+    expect(once).toEqual([card]);
+    expect(appendCloudResult(once, card)).toBe(once);
+    expect(appendCloudResult(once, { ...card, id: "cloud-result-w1-2", turn: 2 })).toHaveLength(2);
   });
 });
 
