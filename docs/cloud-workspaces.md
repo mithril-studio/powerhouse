@@ -42,6 +42,9 @@ The `cloud/` runner crates and `scripts/cloud-base-setup.sh` belong to the workf
 `cargo test cloud` covers the pure parts and the flow against a fake boxd.
 `PH_CLOUD_E2E=1 cargo test cloud_mechanics_on_a_real_vm -- --ignored` runs detach, polling, exit and
 stop on a real throwaway VM with a fake agent.
+`PH_CLOUD_REAL=1 cargo test cloud_real_claude_flow -- --ignored --nocapture` runs the whole flow with
+real Claude and your Keychain tokens: a throwaway `ph-e2e-*` branch, two turns, then it deletes the VM,
+the remote branch and the worktree. About 90 s and $0.40.
 
 ## Not in v1
 

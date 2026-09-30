@@ -1016,4 +1016,86 @@ echo "{\"type\":\"result\",\"is_error\":false,\"result\":\"did $p with $FAKE_TOK
             std::panic::resume_unwind(panic);
         }
     }
+
+    /// The whole product path with real Claude: Keychain tokens, a new branch
+    /// pushed to origin, a VM, a Claude turn that commits and pushes, the
+    /// result coming home, a follow-up turn, then cleanup (VM, remote branch,
+    /// worktree). `PH_CLOUD_REAL=1 cargo test cloud_real_claude_flow -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn cloud_real_claude_flow() {
+        if std::env::var("PH_CLOUD_REAL").is_err() {
+            return;
+        }
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf();
+        let id = uuid::Uuid::new_v4().to_string()[..6].to_string();
+        let branch = format!("ph-e2e-{id}");
+        let tmp = tempfile::tempdir().unwrap();
+        let worktree = tmp.path().join("wt");
+        git(&repo, &["worktree", "add", "-q", "-b", &branch, &worktree.to_string_lossy(), "origin/test"]).unwrap();
+        let store = Store::open(tmp.path().join("ws.json"));
+        let mgr = CloudManager::with(store, Arc::new(BoxdCli::default()), Arc::new(Keychain));
+        let notify = |w: &CloudWorkspace| eprintln!("[{:?}] {}", w.status, w.stage.clone().unwrap_or_default());
+
+        let wait = |id: &str| -> CloudWorkspace {
+            let deadline = std::time::Instant::now() + Duration::from_secs(900);
+            loop {
+                let out = poll(&mgr, &notify, id).unwrap();
+                for line in &out.lines {
+                    let short: String = line.chars().take(160).collect();
+                    eprintln!("  {short}");
+                }
+                if !matches!(out.workspace.status, Status::Running | Status::Creating) {
+                    return out.workspace;
+                }
+                assert!(std::time::Instant::now() < deadline, "turn never finished");
+                std::thread::sleep(Duration::from_secs(3));
+            }
+        };
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let req = StartRequest {
+                repo_id: "e2e".into(),
+                branch_id: branch.clone(),
+                worktree_path: worktree.to_string_lossy().into(),
+                chat_id: Some("chat".into()),
+                agent: "claude".into(),
+                model: Some("sonnet".into()),
+                handoff: "## User\nCreate a file CLOUD_E2E.md at the repo root containing exactly the line `hello from cloud`. Change nothing else.".into(),
+                env_names: vec![],
+                write_env_file: false,
+            };
+            let w = begin(&mgr, &notify, &req).unwrap();
+            provision(&mgr, &notify, &w.id, &req);
+            let w = mgr.get(&w.id).unwrap();
+            assert_eq!(w.status, Status::Running, "provisioning failed: {:?}", w.last_error);
+            let w = wait(&w.id);
+            let r = w.last_result.clone().unwrap();
+            eprintln!("turn 1: {:?} {r:?}", w.status);
+            assert_eq!(w.status, Status::Done, "{:?}", w.last_error);
+            assert_eq!((r.unpushed_commits, r.dirty_files), (0, 0), "{r:?}");
+            let file = std::fs::read_to_string(worktree.join("CLOUD_E2E.md")).expect("the cloud commit came home");
+            assert!(file.contains("hello from cloud"), "{file}");
+
+            // A follow-up resumes the same session on the same VM.
+            send(&mgr, &notify, &w.id, "Append a second line `and again` to CLOUD_E2E.md.", &[], false).unwrap();
+            let w = wait(&w.id);
+            eprintln!("turn 2: {:?} {:?}", w.status, w.last_result);
+            assert_eq!(w.status, Status::Done, "{:?}", w.last_error);
+            assert_eq!(w.turn, 2);
+            let file = std::fs::read_to_string(worktree.join("CLOUD_E2E.md")).unwrap();
+            assert!(file.contains("and again"), "{file}");
+            archive(&mgr, &w.id).unwrap();
+        }));
+        // Cleanup whatever happened: VM, remote branch, worktree, local branch.
+        let _ = mgr.boxd.machine_remove(&ws::vm_name(&branch));
+        let token = github_token(&mgr, "https://github.com/mithril-studio/powerhouse.git");
+        let env = token.map(|t| token_env(&t)).unwrap_or_default();
+        let _ = git_env(&repo, &["push", "origin", "--delete", &branch], &env);
+        let _ = git(&repo, &["worktree", "remove", "--force", &worktree.to_string_lossy()]);
+        let _ = git(&repo, &["branch", "-D", &branch]);
+        if let Err(panic) = result {
+            std::panic::resume_unwind(panic);
+        }
+    }
 }
