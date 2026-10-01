@@ -130,7 +130,7 @@ function HistoryRow({ repoId, entry }: { repoId: string; entry: QueueEntry }) {
 
 export function QueuePane({ repo, branch }: { repo: Repo; branch?: Branch | null }) {
   const entries = useAppStore((s) => s.queues[repo.id] ?? []);
-  const openWorkflowModal = useAppStore((s) => s.openWorkflowModal);
+  const openProjectSettings = useAppStore((s) => s.openProjectSettings);
 
   const active = entries
     .filter(isLive)
@@ -150,7 +150,7 @@ export function QueuePane({ repo, branch }: { repo: Repo; branch?: Branch | null
         <div className="mb-4 flex items-center gap-2">
           <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{repo.name}</span>
           <button
-            onClick={() => openWorkflowModal(repo.id)}
+            onClick={() => openProjectSettings(repo.id)}
             className="h-7 shrink-0 rounded-lg px-2.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             Edit workflow

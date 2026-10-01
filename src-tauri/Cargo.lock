@@ -2937,14 +2937,13 @@ checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
 name = "powerhouse"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "base64 0.22.1",
  "dirs 7.0.0",
  "keyring",
  "libc",
  "portable-pty",
- "powerhouse-cloud-protocol",
  "reqwest 0.12.28",
  "rusqlite",
  "serde",
@@ -2960,15 +2959,6 @@ dependencies = [
  "tauri-plugin-updater",
  "tempfile",
  "uuid",
-]
-
-[[package]]
-name = "powerhouse-cloud-protocol"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "sha2",
 ]
 
 [[package]]

@@ -3,14 +3,12 @@ import { getVersion } from "@tauri-apps/api/app";
 import { homeDir } from "@tauri-apps/api/path";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
-  cloudSettingsOf,
   memorySettingsOf,
   useAppStore,
   type AgentProfile,
-  type CloudSettings,
   type Theme,
 } from "../store/appStore";
-import { cloudSecretStatus, cloudSetSecret, type SecretStatus } from "../lib/cloud";
+import { cloudSecretStatus, cloudSetSecret, runInShell, type SecretStatus } from "../lib/cloud";
 import {
   DEFAULT_MEMORY_SETTINGS,
   memoryServerEnsure,
@@ -35,7 +33,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const GITHUB_APPS_URL = "https://github.com/settings/applications";
 
 /** A section block: left-hand label/description, right-hand controls. */
-function Section({
+export function Section({
   title,
   description,
   children,
@@ -508,12 +506,11 @@ function AgentsSection() {
 const cloudInput =
   "h-8 w-full rounded-lg border border-input bg-background px-2.5 text-xs outline-none focus-visible:ring-3 focus-visible:ring-ring/50";
 
-/** Credentials and defaults for one-click cloud runs (the only editor now
- * that submission itself is a single click). */
+/** Credentials for cloud workspaces. Everything else is inherited from the
+ * chat (agent, model) and the repo (env vars). */
 function CloudSection() {
-  const settings = useAppStore((s) => s.settings);
-  const setCloudSettings = useAppStore((s) => s.setCloudSettings);
-  const cloud = cloudSettingsOf(settings);
+  const branchId = useAppStore((s) => s.selection.branchId);
+  const closeSettings = useAppStore((s) => s.closeSettings);
   const [secrets, setSecrets] = useState<SecretStatus | null>(null);
   const [claudeInput, setClaudeInput] = useState("");
   const [githubInput, setGithubInput] = useState("");
@@ -537,7 +534,6 @@ function CloudSection() {
   };
 
   const githubSlot = githubScope.trim() ? `github_token:${githubScope.trim()}` : "github_token";
-  const patch = (p: Partial<CloudSettings>) => setCloudSettings({ ...cloud, ...p });
 
   return (
     <div className="space-y-3 text-xs">
@@ -562,7 +558,28 @@ function CloudSection() {
             >
               {claudeInput.trim() ? "Save" : "Clear"}
             </button>
+            <button
+              onClick={() => {
+                if (!branchId) return;
+                closeSettings();
+                runInShell(branchId, "claude setup-token");
+              }}
+              disabled={!branchId}
+              title={
+                branchId
+                  ? "Runs `claude setup-token` in this branch's shell. Paste the token it prints here."
+                  : "Select a branch first; the command runs in its shell."
+              }
+              className="h-8 shrink-0 rounded-lg border border-border px-2 text-muted-foreground hover:text-foreground disabled:opacity-50"
+            >
+              Get token
+            </button>
           </div>
+          {!secrets?.claude && (
+            <p className="text-muted-foreground">
+              No token yet? <span className="text-foreground">Get token</span> runs <code>claude setup-token</code> in the bottom shell; paste the token it prints above.
+            </p>
+          )}
           <input
             type="password"
             value={githubInput}
@@ -589,66 +606,11 @@ function CloudSection() {
             </button>
           </div>
           <p className="text-muted-foreground">
-            Kept in your macOS Keychain; sent to a task VM only for the duration of a run and shredded when it ends.
+            Kept in your macOS Keychain and written to each cloud machine's ~/.ph/env, outside the repo. Without a GitHub token here, your GitHub connection is used.
           </p>
         </div>
       </div>
 
-      <div className="rounded-xl border border-border bg-card p-3">
-        <p className="mb-2 font-semibold uppercase tracking-wider text-[11px] text-muted-foreground">Run defaults</p>
-        <div className="grid grid-cols-2 gap-2">
-          <label className="space-y-1">
-            <span className="text-muted-foreground">Base snapshot</span>
-            <input value={cloud.baseSnapshot} onChange={(e) => patch({ baseSnapshot: e.target.value })} spellCheck={false} className={`${cloudInput} font-mono`} />
-          </label>
-          <label className="space-y-1">
-            <span className="text-muted-foreground">Deadline (minutes)</span>
-            <input type="number" min={1} value={cloud.deadlineMinutes} onChange={(e) => patch({ deadlineMinutes: Number(e.target.value) || 1 })} className={cloudInput} />
-          </label>
-          <label className="space-y-1">
-            <span className="text-muted-foreground">Permission mode</span>
-            <select value={cloud.permissionMode} onChange={(e) => patch({ permissionMode: e.target.value })} className={cloudInput}>
-              <option value="acceptEdits">acceptEdits</option>
-              <option value="dontAsk">dontAsk</option>
-              <option value="plan">plan</option>
-            </select>
-          </label>
-          <label className="space-y-1">
-            <span className="text-muted-foreground">Model (blank = default)</span>
-            <input value={cloud.model} onChange={(e) => patch({ model: e.target.value })} spellCheck={false} className={`${cloudInput} font-mono`} />
-          </label>
-          <label className="space-y-1">
-            <span className="text-muted-foreground">Max turns</span>
-            <input
-              type="number"
-              min={1}
-              value={cloud.maxTurns ?? ""}
-              onChange={(e) => patch({ maxTurns: e.target.value === "" ? null : Number(e.target.value) })}
-              placeholder="unlimited"
-              className={cloudInput}
-            />
-          </label>
-          <label className="space-y-1">
-            <span className="text-muted-foreground">Max budget (USD)</span>
-            <input
-              type="number"
-              min={0}
-              step={0.5}
-              value={cloud.maxBudgetUsd ?? ""}
-              onChange={(e) => patch({ maxBudgetUsd: e.target.value === "" ? null : Number(e.target.value) })}
-              placeholder="unlimited"
-              className={cloudInput}
-            />
-          </label>
-          <label className="col-span-2 space-y-1">
-            <span className="text-muted-foreground">Allowed tools (comma-separated)</span>
-            <input value={cloud.allowedTools} onChange={(e) => patch({ allowedTools: e.target.value })} spellCheck={false} className={`${cloudInput} font-mono`} />
-          </label>
-        </div>
-        <p className="mt-2 text-muted-foreground">
-          Applied to every "Send to cloud" click. Per-repo env vars live in each repo's workflow settings.
-        </p>
-      </div>
       {error && <p className="text-destructive">{error}</p>}
     </div>
   );

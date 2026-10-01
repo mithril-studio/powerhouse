@@ -15,7 +15,8 @@ import { AcpTranscript } from "./acp/AcpTranscript";
 import { AcpPermissionCard } from "./acp/AcpPermissionCard";
 import { AcpComposer } from "./acp/AcpComposer";
 import { AcpConnectionPanel } from "./acp/AcpConnectionPanel";
-import { AcpCloudPanel } from "./acp/AcpCloudPanel";
+import { CloudBanner } from "./acp/CloudBanner";
+import { isCloudBusy, messageCloud } from "../lib/cloud";
 import { AcpCommandPalette } from "./acp/AcpCommandPalette";
 import { AcpFooter } from "./acp/AcpFooter";
 
@@ -34,8 +35,9 @@ export function AcpChatPane({ repoId, branch, chat, active }: Props) {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [draft, setDraft] = useState("");
 
-  const { profile } = session;
+  const { profile, cloudWorkspace: cloud } = session;
   const connected = session.connection === "ready";
+  const cloudBusy = cloud ? isCloudBusy(cloud) : false;
   const attachments = usePromptAttachments({
     active: active && connected,
     supportsImages: session.supportsImages,
@@ -91,8 +93,8 @@ export function AcpChatPane({ repoId, branch, chat, active }: Props) {
     >
       <AcpTranscript
         items={chat.acpTranscript ?? []}
-        busy={session.busy}
-        agentName={session.agentLabel}
+        busy={cloud ? cloud.status === "running" : session.busy}
+        agentName={cloud ? `${session.agentLabel} · cloud` : session.agentLabel}
         branchName={branch.name}
         commandCount={session.commands.length}
       />
@@ -104,8 +106,28 @@ export function AcpChatPane({ repoId, branch, chat, active }: Props) {
         />
       )}
 
-      {session.cloudRunId ? (
-        <AcpCloudPanel runId={session.cloudRunId} />
+      {cloud ? (
+        <>
+          <CloudBanner workspace={cloud} />
+          <AcpComposer
+            active={active}
+            busy={cloudBusy}
+            agentName={`${profile.name} in the cloud`}
+            draft={draft}
+            onDraftChange={setDraft}
+            onSubmit={(prompt) => {
+              setDraft("");
+              void messageCloud(cloud, prompt);
+            }}
+            onOpenCommands={() => {}}
+            attachments={[]}
+            supportsImages={false}
+            dragging={false}
+            onPasteFiles={() => {}}
+            onPickFiles={() => {}}
+            onRemoveAttachment={() => {}}
+          />
+        </>
       ) : !connected ? (
         <AcpConnectionPanel
           state={session.connection}
@@ -148,7 +170,7 @@ export function AcpChatPane({ repoId, branch, chat, active }: Props) {
           onRemoveAttachment={attachments.remove}
         />
       )}
-      {connected && !session.cloudRunId && (
+      {connected && !cloud && (
         <AcpFooter
           branchName={branch.name}
           configOptions={session.configOptions}

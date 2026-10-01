@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useAppStore } from "../store/appStore";
 import { createBranch } from "../lib/actions";
-import { gitListBranches } from "../lib/ipc";
+import { gitListBranches, gitSweepBranches } from "../lib/ipc";
 
 const ADJECTIVES = [
   "amber", "bold", "calm", "crisp", "deft", "eager", "fleet", "keen",
@@ -47,7 +47,10 @@ export function NewBranchModal() {
   useEffect(() => {
     if (!repoId || !repo) return;
     let cancelled = false;
-    void gitListBranches(repo.path)
+    // Sweep stale branches first so landed work never shows up as a base.
+    void gitSweepBranches(repo.path, repo.defaultBranch, false)
+      .catch(() => {})
+      .then(() => gitListBranches(repo.path))
       .then((list) => {
         if (!cancelled) setBranches(list);
       })
@@ -57,7 +60,7 @@ export function NewBranchModal() {
     return () => {
       cancelled = true;
     };
-  }, [repoId, repo?.path]);
+  }, [repoId, repo?.path, repo?.defaultBranch]);
 
   if (!repoId || !repo) return null;
 

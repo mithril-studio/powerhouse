@@ -1,22 +1,31 @@
 import { useEffect, useState } from "react";
 import { useAppStore, type Repo } from "../store/appStore";
-import { cloudProjectEnvStatus, cloudSetSecret } from "../lib/cloud";
+import { cloudImportEnvFile, cloudProjectEnvStatus, cloudSetSecret } from "../lib/cloud";
 
 const input =
   "h-8 w-full rounded-lg border border-input bg-background px-2.5 text-xs outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50";
 
 /**
- * Per-repo env vars for cloud runs. Names live in the repo's config; values
+ * Per-repo env vars for cloud workspaces. Names live in the repo's config; values
  * go straight to the macOS Keychain (`project_env:<repo_id>:<NAME>`) and are
  * injected into that repo's runs only — never into snapshots or logs.
  */
 export function RepoEnvEditor({ repo }: { repo: Repo }) {
   const setRepoEnvNames = useAppStore((s) => s.setRepoEnvNames);
+  // The selected branch's worktree holds the `.env`; else the repo checkout.
+  const importDir = useAppStore((s) =>
+    s.selection.repoId === repo.id
+      ? (repo.branches.find((b) => b.id === s.selection.branchId)?.worktreePath ?? repo.path)
+      : repo.path,
+  );
   const names = repo.cloudEnvNames ?? [];
   const [status, setStatus] = useState<Record<string, boolean>>({});
   const [nameInput, setNameInput] = useState("");
   const [valueInputs, setValueInputs] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
+  const [envFile, setEnvFile] = useState(".env");
+  const [importNote, setImportNote] = useState<string | null>(null);
+  const [refresh, setRefresh] = useState(0);
 
   useEffect(() => {
     if (names.length === 0) return;
@@ -24,7 +33,24 @@ export function RepoEnvEditor({ repo }: { repo: Repo }) {
       .then((rows) => setStatus(Object.fromEntries(rows.map((r) => [r.name, r.set]))))
       .catch((e) => setError(String(e)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [repo.id, names.join(",")]);
+  }, [repo.id, names.join(","), refresh]);
+
+  const importFile = async () => {
+    setError(null);
+    setImportNote(null);
+    try {
+      const out = await cloudImportEnvFile(repo.id, importDir, envFile.trim() || ".env");
+      const added = out.imported.filter((n) => !names.includes(n));
+      if (added.length > 0) setRepoEnvNames(repo.id, [...names, ...added]);
+      setRefresh((n) => n + 1);
+      const parts = [`Imported ${out.imported.length}`];
+      if (out.skipped.length > 0) parts.push(`skipped ${out.skipped.length} (${out.skipped.join(", ")})`);
+      if (out.invalid > 0) parts.push(`${out.invalid} invalid line(s) ignored`);
+      setImportNote(parts.join(" · "));
+    } catch (e) {
+      setError(String(e));
+    }
+  };
 
   const saveValue = async (name: string) => {
     const value = (valueInputs[name] ?? "").trim();
@@ -106,7 +132,28 @@ export function RepoEnvEditor({ repo }: { repo: Repo }) {
           Add
         </button>
         <p className="min-w-0 flex-1 text-muted-foreground">
-          Injected into this repo's cloud runs and <span className="font-mono">.env</span> on the VM only.
+          Exported to this repo's cloud agent on its VM only.
+        </p>
+      </div>
+      <div className="flex items-center gap-1.5 pt-1">
+        <input
+          value={envFile}
+          onChange={(e) => setEnvFile(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && void importFile()}
+          placeholder=".env"
+          spellCheck={false}
+          aria-label="Env file to import"
+          title={`Read from ${importDir}`}
+          className={`${input} w-40 shrink-0 grow-0 font-mono`}
+        />
+        <button
+          onClick={() => void importFile()}
+          className="h-8 shrink-0 rounded-lg border border-border px-2 text-xs text-muted-foreground hover:text-foreground"
+        >
+          Import from {envFile.trim() || ".env"}
+        </button>
+        <p className="min-w-0 flex-1 truncate text-muted-foreground" title={importNote ?? undefined}>
+          {importNote ?? "Stores every value in your Keychain; importing again updates them."}
         </p>
       </div>
       {error && <p className="text-destructive">{error}</p>}

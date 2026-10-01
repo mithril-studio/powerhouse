@@ -18,7 +18,6 @@ const autoSpawn = new Set<string>();
 
 export const markAutoSpawn = (chatId: string) => autoSpawn.add(chatId);
 export const consumeAutoSpawn = (chatId: string) => autoSpawn.delete(chatId);
-export const hasTerminal = (chatId: string) => registry.has(chatId);
 
 const TERMINAL_THEME = {
   background: "#0d0e11",

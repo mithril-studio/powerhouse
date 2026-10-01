@@ -110,6 +110,13 @@ export const gitArchiveBranch = (repoPath: string, branch: string, defaultBranch
 export const gitPruneArchivedBranches = (repoPath: string) =>
   invoke<number>("git_prune_archived_branches", { repoPath });
 
+/**
+ * Archive branches without a worktree that landed on origin/<target>, lost
+ * their upstream, or whose app worktree is gone. Returns the archived names.
+ */
+export const gitSweepBranches = (repoPath: string, target: string, fetch: boolean) =>
+  invoke<string[]>("git_sweep_branches", { repoPath, target, fetch });
+
 export const gitChangedFiles = (worktreePath: string, base: string) =>
   invoke<ChangedFile[]>("git_changed_files", { worktreePath, base });
 

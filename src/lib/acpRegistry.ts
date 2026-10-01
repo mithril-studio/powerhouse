@@ -53,8 +53,6 @@ interface Entry {
 const registry = new Map<string, Entry>();
 const encoder = new TextEncoder();
 
-export const hasAcpSession = (chatId: string) => registry.has(chatId);
-
 export async function disposeAcp(chatId: string): Promise<void> {
   const entry = registry.get(chatId);
   if (!entry) {

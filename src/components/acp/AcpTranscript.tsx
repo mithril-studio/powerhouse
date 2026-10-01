@@ -9,7 +9,7 @@ import {
   type ToolGroup,
   type ToolTranscriptItem,
 } from "../../lib/toolDisplay";
-import { CloudResultCard } from "../CloudResultCard";
+import { CloudResultCard } from "./CloudResultCard";
 import { dataUrl, formatBytes, type AttachmentRef } from "../../lib/attachments";
 import { AcpMarkdown } from "./AcpMarkdown";
 import { ContextUsageMeter } from "./ContextUsageMeter";
@@ -209,7 +209,7 @@ function Attachments({ items }: { items?: AttachmentRef[] }) {
 // every markdown block above it.
 const TranscriptItem = memo(function TranscriptItem({ item }: { item: AcpTranscriptItem }) {
   if (item.type === "tool") return <ToolRow item={item} />;
-  if (item.type === "cloud-result") return <CloudResultCard runId={item.runId} late={item.late} />;
+  if (item.type === "cloud-workspace-result") return <CloudResultCard item={item} />;
   if (item.type === "usage") return <UsageItem item={item} />;
   if (item.type === "plan") {
     return (

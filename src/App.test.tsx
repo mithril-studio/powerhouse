@@ -24,7 +24,7 @@ vi.mock("./components/TabBar", () => ({ TabBar: () => null }));
 vi.mock("./components/ChatPane", () => ({ ChatPane: ({ active }: { active: boolean }) => <div data-chat-active={active}>Mounted chat</div> }));
 vi.mock("./components/BottomPanel", () => ({ BottomPanel: () => <div>Mounted terminal panel</div> }));
 vi.mock("./components/NewBranchModal", () => ({ NewBranchModal: () => null }));
-vi.mock("./components/WorkflowModal", () => ({ WorkflowModal: () => null }));
+vi.mock("./components/ProjectSettingsPage", () => ({ ProjectSettingsPage: () => null }));
 vi.mock("./components/RightSidebar", () => ({ RightSidebar: () => <div>Project inspector</div> }));
 vi.mock("./components/NewChatPicker", () => ({ NewChatPicker: () => null }));
 vi.mock("./components/SettingsPage", () => ({ SettingsPage: () => null }));

@@ -7,6 +7,7 @@ export function RepoItem({ repo }: { repo: Repo }) {
   const select = useAppStore((s) => s.select);
   const openBranchModal = useAppStore((s) => s.openBranchModal);
   const setRepoHidden = useAppStore((s) => s.setRepoHidden);
+  const openProjectSettings = useAppStore((s) => s.openProjectSettings);
   const selected = useAppStore(
     (s) => s.selection.repoId === repo.id && s.selection.branchId === null,
   );
@@ -61,6 +62,13 @@ export function RepoItem({ repo }: { repo: Repo }) {
             className="fixed z-50 min-w-40 overflow-hidden rounded-lg border border-border bg-background py-1 shadow-xl"
             style={{ left: menu.x, top: menu.y }}
           >
+            <ContextRow
+              label="Project settings"
+              onClick={() => {
+                setMenu(null);
+                openProjectSettings(repo.id);
+              }}
+            />
             <ContextRow
               label={repo.hidden ? "Unhide" : "Hide"}
               onClick={() => {

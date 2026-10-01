@@ -1,6 +1,6 @@
 //! boxd access for the desktop. Everything goes through the external `boxd`
 //! CLI with `--json`, argument vectors, and explicit timeouts. The trait lets
-//! tests drive the whole submission and lifecycle flow without a cloud.
+//! tests drive the workspace flow without a cloud.
 //!
 //! Naming contract: every machine or snapshot Powerhouse creates is named
 //! `ph-…`. Destructive operations refuse any other name, so a bug in the
@@ -19,44 +19,6 @@ pub struct MachineInfo {
     #[serde(default)]
     pub id: Option<String>,
     pub status: String,
-    #[serde(default)]
-    pub isolated: Option<String>,
-    #[serde(default)]
-    pub auto_suspend: Option<String>,
-    #[serde(default)]
-    pub auto_hibernate: Option<String>,
-    #[serde(default)]
-    pub source: Option<String>,
-}
-
-/// One row of `boxd snapshots list --json`. Versions are strings such as
-/// `v1`; `snapshots save` reports them as integers, normalised here.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SnapshotInfo {
-    pub name: String,
-    #[serde(default, deserialize_with = "version_string")]
-    pub version: Option<String>,
-    #[serde(default)]
-    pub status: String,
-    #[serde(default)]
-    pub size: Option<String>,
-    #[serde(default)]
-    pub id: Option<String>,
-}
-
-fn version_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
-    let v: Option<serde_json::Value> = serde::Deserialize::deserialize(d)?;
-    Ok(v.and_then(|v| match v {
-        serde_json::Value::String(s) => Some(if s.starts_with('v') { s } else { format!("v{s}") }),
-        serde_json::Value::Number(n) => Some(format!("v{n}")),
-        _ => None,
-    }))
-}
-
-impl SnapshotInfo {
-    pub fn is_ready(&self) -> bool {
-        self.status == "ready"
-    }
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -108,24 +70,14 @@ pub fn ensure_owned(name: &str) -> TResult<()> {
 }
 
 pub trait Boxd: Send + Sync {
-    fn auth(&self) -> TResult<serde_json::Value>;
-    fn machine_list(&self) -> TResult<Vec<MachineInfo>>;
     fn machine_get(&self, vm: &str) -> TResult<MachineInfo>;
     fn machine_start(&self, vm: &str) -> TResult<()>;
-    /// `boxd machine new <name> --from-snapshot <snapshot> [--isolated] --auto-suspend-timeout s --auto-hibernate-timeout h`.
-    fn machine_new_from_snapshot(&self, name: &str, snapshot: &str, isolated: bool, suspend_secs: u64, hibernate_secs: u64) -> TResult<MachineInfo>;
+    /// `boxd machine new <name>`: a fresh machine from the org's default image.
+    fn machine_new(&self, name: &str) -> TResult<MachineInfo>;
     /// Destroys a machine. `vm` must be Powerhouse-owned (`ph-…`).
     fn machine_remove(&self, vm: &str) -> TResult<()>;
-    fn config_set(&self, vm: &str, key: &str, value: &str) -> TResult<()>;
     fn cp_to(&self, local: &Path, vm: &str, remote_path: &str) -> TResult<()>;
-    /// Download `vm:remote_path` to `local` (a file path).
-    fn cp_from(&self, vm: &str, remote_path: &str, local: &Path) -> TResult<()>;
     fn exec(&self, vm: &str, argv: &[String], timeout: Duration) -> TResult<ExecOutput>;
-    fn snapshots_list(&self) -> TResult<Vec<SnapshotInfo>>;
-    /// Saves memory + disk of a *running* machine under `name` (re-saving bumps the version).
-    fn snapshot_save(&self, vm: &str, name: &str) -> TResult<SnapshotInfo>;
-    /// Deletes a snapshot and its replicas. `name` must be Powerhouse-owned (`ph-…`).
-    fn snapshot_remove(&self, name: &str) -> TResult<()>;
 }
 
 pub struct BoxdCli {
@@ -254,7 +206,6 @@ impl BoxdCli {
             "name": v.get("name").cloned().unwrap_or(serde_json::Value::String(name.into())),
             "id": v.get("id").cloned(),
             "status": v.get("status").cloned().unwrap_or(serde_json::Value::String("starting".into())),
-            "source": v.get("source").cloned(),
         }))
         .map_err(|e| TransportError::Other(format!("machine new: {e}")))?;
         if info.name.is_empty() {
@@ -265,15 +216,6 @@ impl BoxdCli {
 }
 
 impl Boxd for BoxdCli {
-    fn auth(&self) -> TResult<serde_json::Value> {
-        self.json(&["auth", "--json"], Duration::from_secs(30))
-    }
-
-    fn machine_list(&self) -> TResult<Vec<MachineInfo>> {
-        let v = self.json(&["machine", "list", "--json"], Duration::from_secs(60))?;
-        serde_json::from_value(v).map_err(|e| TransportError::Other(format!("machine list: {e}")))
-    }
-
     fn machine_get(&self, vm: &str) -> TResult<MachineInfo> {
         let v = self.json(&["machine", "get", vm, "--json"], Duration::from_secs(60))?;
         serde_json::from_value(v).map_err(|e| TransportError::Other(format!("machine get: {e}")))
@@ -284,26 +226,9 @@ impl Boxd for BoxdCli {
             .map(|_| ())
     }
 
-    fn machine_new_from_snapshot(&self, name: &str, snapshot: &str, isolated: bool, suspend_secs: u64, hibernate_secs: u64) -> TResult<MachineInfo> {
+    fn machine_new(&self, name: &str) -> TResult<MachineInfo> {
         ensure_owned(name)?;
-        let s = suspend_secs.to_string();
-        let h = hibernate_secs.to_string();
-        let mut args = vec![
-            "machine",
-            "new",
-            name,
-            "--from-snapshot",
-            snapshot,
-            "--auto-suspend-timeout",
-            &s,
-            "--auto-hibernate-timeout",
-            &h,
-        ];
-        if isolated {
-            args.push("--isolated");
-        }
-        args.push("--json");
-        let v = self.json(&args, Duration::from_secs(300))?;
+        let v = self.json(&["machine", "new", name, "--json"], Duration::from_secs(300))?;
         Self::machine_from_create(v, name)
     }
 
@@ -313,25 +238,10 @@ impl Boxd for BoxdCli {
             .map(|_| ())
     }
 
-    fn config_set(&self, vm: &str, key: &str, value: &str) -> TResult<()> {
-        self.json(&["machine", "config", "set", vm, key, value, "--json"], Duration::from_secs(60))
-            .map(|_| ())
-    }
-
     fn cp_to(&self, local: &Path, vm: &str, remote_path: &str) -> TResult<()> {
         let local_s = local.to_string_lossy().to_string();
         let dest = format!("{vm}:{remote_path}");
         let (_, stderr, code) = self.run(&["machine", "cp", &local_s, &dest, "--json"], Duration::from_secs(300))?;
-        if code != 0 {
-            return Err(TransportError::Other(format!("cp failed: {}", stderr.trim())));
-        }
-        Ok(())
-    }
-
-    fn cp_from(&self, vm: &str, remote_path: &str, local: &Path) -> TResult<()> {
-        let src = format!("{vm}:{remote_path}");
-        let local_s = local.to_string_lossy().to_string();
-        let (_, stderr, code) = self.run(&["machine", "cp", &src, &local_s, "--json"], Duration::from_secs(300))?;
         if code != 0 {
             return Err(TransportError::Other(format!("cp failed: {}", stderr.trim())));
         }
@@ -346,44 +256,6 @@ impl Boxd for BoxdCli {
         }
         let v = self.json(&args, timeout + Duration::from_secs(30))?;
         serde_json::from_value(v).map_err(|e| TransportError::Other(format!("exec: {e}")))
-    }
-
-    fn snapshots_list(&self) -> TResult<Vec<SnapshotInfo>> {
-        let v = self.json(&["snapshots", "list", "--json"], Duration::from_secs(60))?;
-        serde_json::from_value(v).map_err(|e| TransportError::Other(format!("snapshots list: {e}")))
-    }
-
-    fn snapshot_save(&self, vm: &str, name: &str) -> TResult<SnapshotInfo> {
-        // Saving copies memory and disk; the CLI blocks until the platform
-        // has the snapshot (observed 14 s for an 8.7 GB base).
-        let v = self.json(&["snapshots", "save", vm, name, "--json"], Duration::from_secs(600))?;
-        let info = SnapshotInfo {
-            name: v.get("name").and_then(|n| n.as_str()).unwrap_or(name).to_string(),
-            version: v.get("version").and_then(|n| match n {
-                serde_json::Value::Number(n) => Some(format!("v{n}")),
-                serde_json::Value::String(s) => Some(if s.starts_with('v') { s.clone() } else { format!("v{s}") }),
-                _ => None,
-            }),
-            status: v.get("status").and_then(|s| s.as_str()).unwrap_or("unknown").to_string(),
-            size: v.get("size_bytes").and_then(|b| b.as_u64()).map(human_size),
-            id: v.get("snapshot_id").and_then(|s| s.as_str()).map(|s| s.to_string()),
-        };
-        Ok(info)
-    }
-
-    fn snapshot_remove(&self, name: &str) -> TResult<()> {
-        ensure_owned(name)?;
-        self.json(&["snapshots", "remove", name, "--confirm", "--json"], Duration::from_secs(180))
-            .map(|_| ())
-    }
-}
-
-pub fn human_size(bytes: u64) -> String {
-    let g = bytes as f64 / 1_073_741_824.0;
-    if g >= 1.0 {
-        format!("{g:.1}G")
-    } else {
-        format!("{:.0}M", bytes as f64 / 1_048_576.0)
     }
 }
 
@@ -402,7 +274,7 @@ mod tests {
     #[test]
     fn only_powerhouse_names_pass_the_destructive_guard() {
         assert!(ensure_owned("ph-1a2b3c4d").is_ok());
-        assert!(ensure_owned("ph-1a2b3c4d-park").is_ok());
+        assert!(ensure_owned("ph-fix-cloud").is_ok());
         assert!(ensure_owned("ph-").is_err());
         assert!(ensure_owned("powerhouse-main").is_err());
         assert!(ensure_owned("legal-ai-app").is_err());
@@ -415,8 +287,7 @@ mod tests {
         // A binary that cannot exist: the guard must fire first.
         let cli = BoxdCli { binary: "/nonexistent/boxd".into(), token: None };
         assert_eq!(cli.machine_remove("legal-ai-app"), Err(TransportError::NotOwned("legal-ai-app".into())));
-        assert_eq!(cli.snapshot_remove("golden-copy"), Err(TransportError::NotOwned("golden-copy".into())));
-        assert_eq!(cli.machine_new_from_snapshot("mine", "powerhouse-base", true, 0, 0).unwrap_err(), TransportError::NotOwned("mine".into()));
+        assert_eq!(cli.machine_new("mine").unwrap_err(), TransportError::NotOwned("mine".into()));
         // Owned names reach the (missing) CLI.
         assert_eq!(cli.machine_remove("ph-deadbeef"), Err(TransportError::CliMissing));
     }
@@ -437,18 +308,5 @@ mod tests {
         );
         assert_eq!(first_existing(&[missing]), None);
         assert_eq!(first_existing(&[]), None);
-    }
-
-    #[test]
-    fn snapshot_rows_normalise_versions() {
-        let rows: Vec<SnapshotInfo> = serde_json::from_str(
-            r#"[{"name":"a","version":"v3","status":"ready","size":"8.8G","used":"80"},{"name":"b","version":2,"status":"saving"}]"#,
-        )
-        .unwrap();
-        assert_eq!(rows[0].version.as_deref(), Some("v3"));
-        assert!(rows[0].is_ready());
-        assert_eq!(rows[1].version.as_deref(), Some("v2"));
-        assert!(!rows[1].is_ready());
-        assert_eq!(human_size(9_316_577_280), "8.7G");
     }
 }

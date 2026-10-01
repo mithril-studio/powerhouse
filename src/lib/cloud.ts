@@ -1,385 +1,162 @@
-// Cloud runs: typed IPC wrappers + observation loop. Polling here is
-// observation only; nothing in this file drives a run forward, and closing
-// the app never cancels anything. The lifecycle tick (release / park / lost
-// acknowledgement reconciliation) runs in the backend once a minute while the
-// app is open.
+// Cloud workspaces: typed IPC, the poll loop that streams cloud turns into
+// their chat, and the chat-level actions (send, message, stop, bring back).
+// The VM does the work; this file only observes it and relays prompts.
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useAppStore } from "../store/appStore";
-import { appendCloudResult } from "./acpTranscript";
+import {
+  resolveAgent,
+  resolveChatTransport,
+  useAppStore,
+  type Branch,
+  type Repo,
+} from "../store/appStore";
+import { acpModel, detachAcp } from "./acpRegistry";
+import {
+  appendCloudResult,
+  appendSystemMessage,
+  appendUserMessage,
+  applyAcpUpdate,
+  type AcpTranscriptItem,
+  type CloudResultItem,
+} from "./acpTranscript";
+import { handoffText, streamLineUpdates } from "./cloudStream";
+import { ptyWrite } from "./ipc";
+import { notifyTurnFinished } from "./attention";
 
-// --- protocol mirror (serialized from Rust, snake_case) ------------------------
+// --- mirror of Rust `workspace.rs` (camelCase) ----------------------------------
 
-export type RunState =
-  | "accepted"
-  | "preparing"
-  | "running"
-  | "validating"
-  | "publishing"
-  | "completed"
-  | "blocked"
-  | "failed"
-  | "cancelled"
-  | "interrupted";
+export type CloudStatus = "creating" | "ready" | "running" | "done" | "failed" | "stopped";
 
-export type Phase =
-  | "submitting"
-  | "provisioning"
-  | "submission_unknown"
-  | "accepted"
-  | "submit_failed";
-
-/** What boxd resources a run holds; independent of the run state. */
-export type MachineState =
-  | "provisioning"
-  | "active"
-  | "holding"
-  | "parked"
-  | "restoring"
-  | "released"
-  | "unmanaged";
-
-export interface RunEvent {
-  seq: number;
-  ts_ms: number;
-  kind: string;
-  payload: unknown;
+export interface TurnResult {
+  turn: number;
+  ok: boolean;
+  summary: string;
+  head: string | null;
+  unpushedCommits: number;
+  dirtyFiles: number;
+  local: string;
+  costUsd: number | null;
 }
 
-export interface RunSnapshot {
-  run_id: string;
-  state: RunState;
+export interface CloudWorkspace {
+  id: string;
+  repoId: string;
+  branchId: string;
+  branchName: string;
+  worktreePath: string;
+  remoteUrl: string;
+  vmName: string;
+  status: CloudStatus;
   stage: string | null;
-  last_event_seq: number;
-  accepted_at_ms: number;
-  updated_at_ms: number;
-  started_at_ms: number | null;
-  finished_at_ms: number | null;
-  error: { stage: string; message: string } | null;
-  cancel_requested: boolean;
-  result_available: boolean;
-  unit_active: boolean | null;
+  agent: string;
+  model: string | null;
+  chatId: string | null;
+  createdAtMs: number;
+  updatedAtMs: number;
+  lastError: string | null;
+  turn: number;
+  logOffset: number;
+  sessionId: string | null;
+  lastResult: TurnResult | null;
+  writeEnvFile: boolean;
 }
 
-export interface CheckResult {
-  name: string;
-  command: string;
-  status: "passed" | "failed" | "skipped" | "not_run";
-  exit_code: number | null;
-  duration_ms: number | null;
-  output_tail: string;
-  output_truncated: boolean;
-}
-
-export interface ResultManifest {
-  run_id: string;
-  source_sha: string;
-  result_sha: string | null;
-  output_branch: string;
-  published: boolean;
-  publish_error: string | null;
-  summary: string | null;
-  concerns: string[];
-  checks_configured: boolean;
-  checks: CheckResult[];
-  tree_changed_after_checks: boolean;
-  changed_files: string[];
-  diff_bytes: number;
-  diff_truncated: boolean;
-  provider_session_id: string | null;
-  usage: unknown;
-  agent_exit_code: number | null;
-  partial_work_preserved: boolean;
-}
-
-/** How a finished run's result came home. Mirrors Rust `ReturnOutcome`. */
-export type ReturnOutcome =
-  | { kind: "fast_forwarded"; sha: string }
-  | { kind: "diverged"; reason: string }
-  | { kind: "reported_only" };
-
-export interface SnapshotRef {
-  name: string;
-  version: string | null;
-}
-
-export interface SnapshotHandle extends SnapshotRef {
-  size: string | null;
-}
-
-export interface CloudRunRecord {
-  run_id: string;
-  repo_id: string;
-  repo_path: string;
-  repo_name: string;
-  source_branch: string | null;
-  manifest: {
-    task: { text: string; acceptance_criteria: string[] };
-    source: { commit_sha: string; source_branch: string | null; remote_url: string };
-    output_branch: string;
-    workspace?: { base_snapshot?: SnapshotRef | null; base_vm_name?: string };
-    checks: { name: string; command: string }[];
-    context?: { brief_markdown: string };
-    deadline_seconds: number;
-    agent: { provider: "claude" | "fake"; model: string | null; permission_mode: string };
-  };
-  manifest_digest: string;
-  created_at_ms: number;
-  phase: Phase;
-  phase_detail: string | null;
-  task_vm: { name: string; id: string | null } | null;
-  receipt: { state: RunState; accepted_at_ms: number; duplicate: boolean } | null;
-  snapshot: RunSnapshot | null;
-  result: ResultManifest | null;
-  events: RunEvent[];
-  event_cursor: number;
-  last_sync_ms: number | null;
-  last_sync_error: string | null;
-  imported_worktree: string | null;
-  machine: MachineState;
-  machine_changed_ms: number;
-  park_snapshot: SnapshotHandle | null;
-  vm_released: boolean;
-  diff_cached: { bytes: number; truncated: boolean } | null;
-  remote_verified: boolean;
-  machine_error: string | null;
-  /** Chat the send came from; the result card returns here. */
-  origin_chat_id: string | null;
-  /** How the finished result came home; null until a terminal run is returned. */
-  returned: ReturnOutcome | null;
-  /** Retryable return failure (fetch/push), retried by the tick. */
-  return_error: string | null;
-  /** The chat's own Claude session, when it travelled with the run. */
-  session?: SessionHandoff | null;
-}
-
-export type SessionReturn =
-  | { kind: "restored"; session_id: string; files: number }
-  | { kind: "unchanged"; reason: string };
-
-export interface SessionHandoff {
-  session_id: string;
-  /** The worktree the session belongs to on this Mac. */
-  cwd: string;
-  /** Null while the cloud owns the conversation (the chat is locked). */
-  returned: SessionReturn | null;
-}
-
-export interface SourceInfo {
-  sha: string;
-  branch: string | null;
-  remote_url: string | null;
-  dirty: boolean;
-  on_remote: boolean;
-  problems: string[];
-}
-
-/** One row of `boxd snapshots list`. */
-export interface SnapshotInfo {
-  name: string;
-  version: string | null;
-  status: string;
-  size: string | null;
-  id: string | null;
-}
-
-export interface MachineInfo {
-  name: string;
-  id: string | null;
-  status: string;
-  isolated: string | null;
-  auto_suspend: string | null;
-  auto_hibernate: string | null;
-  source: string | null;
-}
-
-export interface Inventory {
-  machines: MachineInfo[];
-  snapshots: SnapshotInfo[];
-  total_machines: number;
-  ceiling: number;
-  org_slots: number;
+interface PollResult {
+  workspace: CloudWorkspace;
+  lines: string[];
+  turn: number;
 }
 
 export interface SecretStatus {
   claude: boolean;
   github: boolean;
-  /** Keychain entry that serves the queried remote, e.g. `github_token:mithril-studio`. */
   github_slot: string | null;
 }
 
-export interface HandoffDoc {
-  path: string;
-  content: string;
+export interface EnvVarStatus {
+  name: string;
+  set: boolean;
 }
 
-export interface SubmitRequest {
-  repoId: string;
-  repoPath: string;
-  repoName: string;
-  sourcePath: string;
-  task: string;
-  acceptanceCriteria: string[];
-  /** Base snapshot name; the task VM is created from its current version. */
-  baseSnapshot: string;
-  /** Version shown in the form; submission refuses if it changed since. */
-  baseSnapshotVersion: string | null;
-  machineCeiling: number | null;
-  checks: { name: string; command: string }[];
-  deadlineSeconds: number;
-  permissionMode: string;
-  allowedTools: string[];
-  maxTurns: number | null;
-  maxBudgetUsd: number | null;
-  model: string | null;
-  provider: "claude" | "fake";
-  fakeScript?: string | null;
-  /** Plan/context markdown handed to the agent as `.powerhouse/cloud-task.md`. */
-  brief: string;
-  /** Per-project env var names; values come from the Keychain per repo. */
-  envNames: string[];
-  /** Routable shared-memory endpoint and token for the run VM; null when memory
-   *  is off or only on the laptop's loopback. */
-  memoryUrl?: string | null;
-  memoryToken?: string | null;
+export interface Readiness {
+  ready: boolean;
+  /** One sentence per problem, saying where to fix it. */
+  missing: string[];
 }
 
-/** One-click submission: the brief is auto-picked, the task text is fixed. */
-export interface QuickSubmitRequest {
+export interface EnvImport {
+  imported: string[];
+  /** `NAME: reason`, never a value. */
+  skipped: string[];
+  invalid: number;
+}
+
+interface StartRequest {
   repoId: string;
-  repoPath: string;
-  repoName: string;
-  sourcePath: string;
-  baseSnapshot: string;
-  machineCeiling: number | null;
-  checks: { name: string; command: string }[];
-  deadlineSeconds: number;
-  permissionMode: string;
-  allowedTools: string[];
-  maxTurns: number | null;
-  maxBudgetUsd: number | null;
-  model: string | null;
-  provider: "claude" | "fake";
-  fakeScript?: string | null;
-  envNames: string[];
-  /** Routable shared-memory endpoint and token for the run VM; null when memory
-   *  is off or only on the laptop's loopback. */
-  memoryUrl?: string | null;
-  memoryToken?: string | null;
-  /** Chat the send came from (`branch.activeChatId`); the result returns here. */
+  branchId: string;
+  worktreePath: string;
   chatId: string | null;
-  /** That chat's Claude session; its transcript travels with the run. */
-  agentSessionId?: string | null;
+  agent: string;
+  model: string | null;
+  handoff: string;
+  envNames: string[];
+  writeEnvFile: boolean;
 }
 
-export type QuickSubmitOutcome =
-  | { kind: "accepted"; record: CloudRunRecord }
-  /** Open the advanced form with this reason; never a dead-end. */
-  | { kind: "needs_attention"; stage: string; reason: string };
+export const cloudWorkspaceList = () => invoke<CloudWorkspace[]>("cloud_workspace_list");
+const cloudWorkspaceStart = (request: StartRequest) =>
+  invoke<CloudWorkspace>("cloud_workspace_start", { request });
+const cloudWorkspaceSend = (id: string, text: string, envNames: string[], writeEnvFile: boolean) =>
+  invoke<CloudWorkspace>("cloud_workspace_send", { id, text, envNames, writeEnvFile });
+const cloudWorkspacePoll = (id: string) => invoke<PollResult>("cloud_workspace_poll", { id });
+const cloudWorkspaceStop = (id: string) => invoke<void>("cloud_workspace_stop", { id });
+const cloudWorkspaceArchive = (id: string) => invoke<void>("cloud_workspace_archive", { id });
+const cloudWorkspacePull = (id: string) => invoke<string>("cloud_workspace_pull", { id });
 
-/** Stage announcements while a one-click submit is in flight. */
-export interface QuickSubmitStage {
-  repoId: string;
-  branch: string;
-  stage: string;
-}
-
-// --- ipc -----------------------------------------------------------------------
-
-export const cloudListRuns = () => invoke<CloudRunRecord[]>("cloud_list_runs");
-export const cloudInspectSource = (sourcePath: string) =>
-  invoke<SourceInfo>("cloud_inspect_source", { sourcePath });
-export const cloudListSnapshots = () => invoke<SnapshotInfo[]>("cloud_list_snapshots");
-export const cloudInventory = (baseSnapshot?: string | null, ceiling?: number | null) =>
-  invoke<Inventory>("cloud_inventory", { baseSnapshot: baseSnapshot ?? null, ceiling: ceiling ?? null });
-export const cloudSubmit = (request: SubmitRequest) =>
-  invoke<CloudRunRecord>("cloud_submit", { request });
-export const cloudQuickSubmit = (request: QuickSubmitRequest) =>
-  invoke<QuickSubmitOutcome>("cloud_quick_submit", { request });
-export const cloudSync = (runId: string, forceEvents = false) =>
-  invoke<CloudRunRecord>("cloud_sync", { runId, forceEvents });
-export const cloudCancel = (runId: string) => invoke<CloudRunRecord>("cloud_cancel", { runId });
-/** Discard workspace: remove the run's VM and park snapshot. */
-export const cloudRelease = (runId: string) => invoke<CloudRunRecord>("cloud_release", { runId });
-/** Bring a parked run back on a fresh VM (held again for an hour). */
-export const cloudRestore = (runId: string) => invoke<CloudRunRecord>("cloud_restore", { runId });
-export const cloudLifecycleTick = () => invoke<string[]>("cloud_lifecycle_tick");
-export const cloudDiff = (runId: string) =>
-  invoke<{ patch: string; truncated: boolean; bytes: number }>("cloud_diff", { runId });
-export const cloudImport = (runId: string) =>
-  invoke<{ worktree_path: string; branch: string; result_sha: string }>("cloud_import", { runId });
-export const cloudForget = (runId: string, force = false) =>
-  invoke<void>("cloud_forget", { runId, force });
-/** Unlock a chat whose session went to the cloud, keeping the local copy. */
-export const cloudKeepSessionLocal = (runId: string) =>
-  invoke<CloudRunRecord>("cloud_keep_session_local", { runId });
-
-/** The run that currently owns `chatId`'s conversation, if any. */
-export function runHoldingChat(
-  runs: Record<string, CloudRunRecord>,
-  chatId: string,
-): CloudRunRecord | null {
-  for (const rec of Object.values(runs)) {
-    if (
-      rec.origin_chat_id === chatId &&
-      rec.session &&
-      !rec.session.returned &&
-      rec.phase !== "submit_failed"
-    ) {
-      return rec;
-    }
-  }
-  return null;
-}
 export const cloudSecretStatus = (remoteUrl?: string | null) =>
   invoke<SecretStatus>("cloud_secret_status", { remoteUrl: remoteUrl ?? null });
-/** `name`: `claude_oauth_token`, `github_token`, or `github_token:<owner>[/<repo>]`. */
 export const cloudSetSecret = (name: string, value: string, remoteUrl?: string | null) =>
   invoke<SecretStatus>("cloud_set_secret", { name, value, remoteUrl: remoteUrl ?? null });
-/** Owner of an https GitHub-style remote, for scoped token slots. */
-export const remoteOwner = (remoteUrl: string | null | undefined): string | null => {
-  const m = /^https:\/\/[^/]+\/([^/]+)\/([^/]+?)(?:\.git)?$/.exec(remoteUrl ?? "");
-  return m ? m[1] : null;
-};
-export const cloudLatestHandoff = (sourcePath: string) =>
-  invoke<HandoffDoc | null>("cloud_latest_handoff", { sourcePath });
-/** Which of a repo's configured env names have a stored value (values never cross). */
 export const cloudProjectEnvStatus = (repoId: string, names: string[]) =>
-  invoke<{ name: string; set: boolean }[]>("cloud_project_env_status", { repoId, names });
+  invoke<EnvVarStatus[]>("cloud_project_env_status", { repoId, names });
+export const cloudReadiness = (repoId: string, worktreePath: string, envNames: string[]) =>
+  invoke<Readiness>("cloud_readiness", { repoId, worktreePath, envNames });
+export const cloudImportEnvFile = (repoId: string, worktreePath: string, file: string) =>
+  invoke<EnvImport>("cloud_import_env_file", { repoId, worktreePath, file });
 
-// --- observation loop ------------------------------------------------------------
+// --- selectors -------------------------------------------------------------------
 
-const ACTIVE_POLL_MS = 5000;
-const RECONNECT_BACKOFF_MS = 30000;
-const LIFECYCLE_TICK_MS = 60000;
+export const isCloudBusy = (w: CloudWorkspace) => w.status === "creating" || w.status === "running";
 
-export const isRunActive = (r: CloudRunRecord): boolean => {
-  if (r.phase === "submit_failed") return false;
-  if (r.phase !== "accepted") return true;
-  const state = r.snapshot?.state ?? r.receipt?.state;
-  return state === undefined || !isTerminal(state);
-};
+export const workspaceForChat = (all: Record<string, CloudWorkspace>, chatId: string) =>
+  Object.values(all).find((w) => w.chatId === chatId) ?? null;
 
-export const isTerminal = (s: RunState) =>
-  s === "completed" || s === "blocked" || s === "failed" || s === "cancelled" || s === "interrupted";
+export const workspaceForBranch = (all: Record<string, CloudWorkspace>, branchId: string) =>
+  Object.values(all).find((w) => w.branchId === branchId) ?? null;
 
-/** True while boxd still holds a VM or snapshot for the run. */
-export const holdsResources = (r: CloudRunRecord): boolean => {
-  if (r.machine === "unmanaged") return false;
-  if (r.machine === "parked") return true;
-  return !r.vm_released || !!r.park_snapshot;
-};
+/** The card a settled turn posts into its chat. */
+export function resultCard(w: CloudWorkspace, r: TurnResult): CloudResultItem {
+  return {
+    id: `cloud-result-${w.id}-${r.turn}`,
+    type: "cloud-workspace-result",
+    workspaceId: w.id,
+    vmName: w.vmName,
+    branch: w.branchName,
+    turn: r.turn,
+    ok: r.ok,
+    status: w.status,
+    summary: r.summary,
+    pushedCommit: r.head,
+    unpushedCommits: r.unpushedCommits,
+    dirtyFiles: r.dirtyFiles,
+    local: r.local,
+    costUsd: r.costUsd,
+  };
+}
 
-let started = false;
-const inFlight = new Set<string>();
-const nextAllowed = new Map<string, number>();
-/** Run ids whose result card has been posted to a chat this session. The
- *  persisted transcript is the durable dedupe (see `appendCloudResult`); this
- *  just avoids re-touching the store on every replayed record update. */
-const returnedToChat = new Set<string>();
+// --- chat plumbing ---------------------------------------------------------------
 
-/** The repo+branch holding a chat id, or null if it is gone. */
-function findChatLocation(chatId: string): { repoId: string; branchId: string } | null {
+function locateChat(chatId: string): { repoId: string; branchId: string } | null {
   for (const repo of useAppStore.getState().repos) {
     for (const branch of repo.branches) {
       if (branch.chats.some((c) => c.id === chatId)) return { repoId: repo.id, branchId: branch.id };
@@ -388,132 +165,203 @@ function findChatLocation(chatId: string): { repoId: string; branchId: string } 
   return null;
 }
 
-/**
- * Post a finished run's result card to the chat that sent it. Falls back to the
- * branch's first chat; with no chat at all the Cloud-tab card (which exists
- * today) is the only surface. Idempotent per run id, and `appendCloudResult`
- * dedupes against the persisted transcript so restarts never double-post.
- */
-export function returnResultToChat(rec: CloudRunRecord, late: boolean) {
-  if (!rec.returned || returnedToChat.has(rec.run_id)) return;
+function mutateChat(chatId: string, update: (items: AcpTranscriptItem[]) => AcpTranscriptItem[]) {
+  const where = locateChat(chatId);
+  if (where) useAppStore.getState().updateChatAcpTranscript(where.repoId, where.branchId, chatId, update);
+}
+
+const note = (chatId: string, text: string, tone: "normal" | "error" = "normal") =>
+  mutateChat(chatId, (items) => appendSystemMessage(items, text, tone));
+
+/** Posts the settled turn's card once, and remembers its summary for the local
+ *  session that picks the chat up later. */
+function settle(w: CloudWorkspace) {
+  const r = w.lastResult;
+  if (!w.chatId || !r || isCloudBusy(w)) return;
+  const card = resultCard(w, r);
+  const chat = locateChat(w.chatId);
+  if (!chat) return;
   const s = useAppStore.getState();
-  let location = rec.origin_chat_id ? findChatLocation(rec.origin_chat_id) : null;
-  let chatId = location ? rec.origin_chat_id : null;
-  if (!location) {
-    const branch = s.repos
-      .find((r) => r.id === rec.repo_id)
-      ?.branches.find((b) => b.name === rec.source_branch);
-    const first = branch?.chats[0];
-    if (branch && first) {
-      location = { repoId: rec.repo_id, branchId: branch.id };
-      chatId = first.id;
-    }
+  const items = s.repos
+    .find((repo) => repo.id === chat.repoId)
+    ?.branches.find((b) => b.id === chat.branchId)
+    ?.chats.find((c) => c.id === w.chatId);
+  if (items?.acpTranscript?.some((i) => i.id === card.id)) return;
+  s.updateChatAcpTranscript(chat.repoId, chat.branchId, w.chatId, (t) => appendCloudResult(t, card));
+  const recap = [items?.cloudRecap, `Cloud turn ${r.turn} on ${w.vmName}: ${r.summary}`].filter(Boolean).join("\n");
+  s.setChatCloudRecap(chat.repoId, chat.branchId, w.chatId, recap);
+  void notifyTurnFinished(r.ok ? "done" : "error", `${w.branchName} · cloud`);
+}
+
+function applyPoll({ workspace, lines, turn }: PollResult) {
+  useAppStore.getState().setCloudWorkspace(workspace);
+  if (!workspace.chatId) return;
+  if (lines.length > 0) {
+    mutateChat(workspace.chatId, (items) =>
+      lines.reduce(
+        (acc, line, index) =>
+          streamLineUpdates(line, `${workspace.id}-${turn}-${workspace.logOffset}-${index}`).reduce(
+            (inner, update) => applyAcpUpdate(inner, update),
+            acc,
+          ),
+        items,
+      ),
+    );
   }
-  if (!location || !chatId) return; // no chat: Cloud-tab card only
-  returnedToChat.add(rec.run_id);
-  s.updateChatAcpTranscript(location.repoId, location.branchId, chatId, (t) =>
-    appendCloudResult(t, rec.run_id, late),
-  );
+  settle(workspace);
 }
 
-/**
- * A continued chat came home: point the chat at the returned session and have
- * it replay the whole conversation (local and cloud turns) on its next start.
- * Applied once per run; `cloudSessionRunId` is the persisted dedupe.
- */
-export function applyReturnedSession(rec: CloudRunRecord) {
-  const back = rec.session?.returned;
-  if (back?.kind !== "restored" || !rec.origin_chat_id) return;
-  const location = findChatLocation(rec.origin_chat_id);
-  if (!location) return;
-  const s = useAppStore.getState();
-  const chat = s.repos
-    .find((r) => r.id === location.repoId)
-    ?.branches.find((b) => b.id === location.branchId)
-    ?.chats.find((c) => c.id === rec.origin_chat_id);
-  if (!chat || chat.cloudSessionRunId === rec.run_id) return;
-  s.applyCloudSession(location.repoId, location.branchId, chat.id, rec.run_id, back.session_id);
-}
+// --- sync loop -------------------------------------------------------------------
 
-/** Everything a record update can bring back to a chat. */
-function returnToChat(rec: CloudRunRecord, late: boolean) {
-  applyReturnedSession(rec);
-  returnResultToChat(rec, late);
-}
+const POLL_MS = 2500;
+let syncing = false;
 
-async function syncOne(runId: string) {
-  if (inFlight.has(runId)) return;
-  inFlight.add(runId);
-  try {
-    const rec = await cloudSync(runId);
-    useAppStore.getState().setCloudRun(rec);
-    returnToChat(rec, false);
-    nextAllowed.set(runId, Date.now() + (rec.last_sync_error ? RECONNECT_BACKOFF_MS : ACTIVE_POLL_MS));
-  } catch {
-    nextAllowed.set(runId, Date.now() + RECONNECT_BACKOFF_MS);
-  } finally {
-    inFlight.delete(runId);
-  }
-}
-
-/** Explicit refresh (button). Also used for completed runs, which are never polled. */
-export async function refreshCloudRun(runId: string) {
-  inFlight.delete(runId);
-  nextAllowed.delete(runId);
-  await syncOne(runId);
-}
-
-let tickInFlight = false;
-/** Run the backend lifecycle pass now (park due holds, finish pending releases). */
-export async function runLifecycleTick() {
-  if (tickInFlight) return;
-  tickInFlight = true;
-  try {
-    await cloudLifecycleTick();
-  } catch (err) {
-    console.warn("cloud lifecycle tick failed:", err);
-  } finally {
-    tickInFlight = false;
-  }
-}
-
-/**
- * Boot: render cached history immediately, then reconcile every run that may
- * still be active. Terminal runs are refreshed only on explicit user action;
- * their machines are handled by the lifecycle tick.
- */
+/** Mirrors the backend store and streams running turns into their chats. */
 export async function startCloudSync() {
-  if (started) return;
-  started = true;
-  try {
-    const runs = await cloudListRuns();
-    useAppStore.getState().setCloudRuns(runs);
-    // A run already returned at boot finished while the app was closed: its
-    // card arrives late.
-    for (const rec of runs) returnToChat(rec, true);
-  } catch (err) {
-    console.warn("cloud runs unavailable:", err);
-  }
-  await listen<CloudRunRecord>("cloud-run-update", (e) => {
-    useAppStore.getState().setCloudRun(e.payload);
-    returnToChat(e.payload, false);
-  });
-  await listen<QuickSubmitStage>("cloud-quick-submit", (e) => {
-    useAppStore.getState().setCloudQuickStage(e.payload.repoId, e.payload.branch, e.payload.stage);
-  });
-  const tick = () => {
-    const now = Date.now();
-    for (const rec of Object.values(useAppStore.getState().cloudRuns)) {
-      if (!isRunActive(rec)) continue;
-      // Records mid-submission belong to the submitting call; only reconcile
-      // them once the app has restarted (no in-flight submit will update them).
-      if (rec.phase !== "accepted" && rec.phase !== "submission_unknown" && rec.phase !== "provisioning") continue;
-      if ((nextAllowed.get(rec.run_id) ?? 0) > now) continue;
-      void syncOne(rec.run_id);
-    }
+  if (syncing) return;
+  syncing = true;
+  // Cards are posted by the poll that settles a turn, after its last lines.
+  await listen<CloudWorkspace>("cloud-workspace-update", (e) =>
+    useAppStore.getState().setCloudWorkspace(e.payload),
+  );
+  await listen<string>("cloud-workspace-removed", (e) =>
+    useAppStore.getState().removeCloudWorkspace(e.payload),
+  );
+  const all = await cloudWorkspaceList();
+  useAppStore.getState().setCloudWorkspaces(all);
+  all.forEach(settle);
+  const tick = async () => {
+    const running = Object.values(useAppStore.getState().cloudWorkspaces).filter(
+      (w) => w.status === "running",
+    );
+    await Promise.all(
+      running.map((w) =>
+        cloudWorkspacePoll(w.id)
+          .then(applyPoll)
+          .catch((e) => console.warn(`[cloud] poll ${w.vmName}: ${String(e)}`)),
+      ),
+    );
+    window.setTimeout(() => void tick(), POLL_MS);
   };
-  tick();
-  window.setInterval(tick, 1000);
-  void runLifecycleTick();
-  window.setInterval(() => void runLifecycleTick(), LIFECYCLE_TICK_MS);
+  void tick();
+}
+
+// --- actions ---------------------------------------------------------------------
+
+/**
+ * The Cloud button: the active chat and its branch continue on a VM with the
+ * same agent and model. The local agent is closed first so two agents never
+ * edit one branch. A chat with no conversation yet provisions only; its next
+ * message starts the cloud agent.
+ */
+export async function sendChatToCloud(repo: Repo, branch: Branch) {
+  const s = useAppStore.getState();
+  const chat = branch.chats.find((c) => c.id === branch.activeChatId);
+  if (!chat) return;
+  const profile = resolveAgent(s.settings, chat.agentId);
+  if (profile.id !== "claude" || resolveChatTransport(s.settings, chat) !== "acp") {
+    note(chat.id, "This agent cannot run in the cloud yet. Supported: Claude.", "error");
+    return;
+  }
+  const chosen = acpModel(chat.id);
+  const model = chosen && chosen !== "default" ? chosen : profile.defaultModel?.trim() || null;
+  const handoff = handoffText(chat.acpTranscript ?? []);
+  await detachAcp(chat.id);
+  try {
+    const w = await cloudWorkspaceStart({
+      repoId: repo.id,
+      branchId: branch.id,
+      worktreePath: branch.worktreePath,
+      chatId: chat.id,
+      agent: profile.id,
+      model,
+      handoff,
+      envNames: repo.cloudEnvNames ?? [],
+      writeEnvFile: repo.cloudWriteEnvFile ?? false,
+    });
+    useAppStore.getState().setCloudWorkspace(w);
+    note(
+      chat.id,
+      handoff
+        ? `Sent to the cloud on ${w.vmName}. The agent continues this conversation there and pushes to ${w.branchName}.`
+        : `Starting ${w.vmName}. Your next message goes to the cloud agent.`,
+    );
+  } catch (cause) {
+    note(chat.id, `Could not send to the cloud: ${String(cause)}`, "error");
+  }
+}
+
+/** A follow-up prompt for the cloud agent; it resumes its own session. */
+export async function messageCloud(w: CloudWorkspace, text: string) {
+  if (!w.chatId) return;
+  mutateChat(w.chatId, (items) => appendUserMessage(items, text));
+  const repo = useAppStore.getState().repos.find((r) => r.id === w.repoId);
+  try {
+    useAppStore
+      .getState()
+      .setCloudWorkspace(
+        await cloudWorkspaceSend(w.id, text, repo?.cloudEnvNames ?? [], repo?.cloudWriteEnvFile ?? false),
+      );
+  } catch (cause) {
+    note(w.chatId, `Cloud: ${String(cause)}`, "error");
+  }
+}
+
+export async function stopCloud(w: CloudWorkspace) {
+  try {
+    await cloudWorkspaceStop(w.id);
+  } catch (cause) {
+    if (w.chatId) note(w.chatId, `Could not stop the cloud agent: ${String(cause)}`, "error");
+  }
+}
+
+export async function pullCloud(w: CloudWorkspace) {
+  try {
+    const outcome = await cloudWorkspacePull(w.id);
+    if (w.chatId) note(w.chatId, outcome);
+  } catch (cause) {
+    if (w.chatId) note(w.chatId, `Pull failed: ${String(cause)}`, "error");
+  }
+}
+
+/**
+ * Ends the cloud workspace: pulls what was pushed, destroys the VM, and hands
+ * the chat back to the local agent (which gets a recap with its next prompt).
+ * Work the agent left unpushed on the VM is lost, so that asks first.
+ */
+export async function bringCloudBack(w: CloudWorkspace) {
+  const r = w.lastResult;
+  if (isCloudBusy(w)) {
+    if (!window.confirm(`The cloud agent is still working on ${w.vmName}. Stop it and delete the machine?`)) return;
+    await cloudWorkspaceStop(w.id).catch(() => {});
+  } else if (r && (r.unpushedCommits > 0 || r.dirtyFiles > 0)) {
+    const lost = `${r.unpushedCommits} unpushed commit(s) and ${r.dirtyFiles} uncommitted file(s)`;
+    if (!window.confirm(`${w.vmName} still has ${lost}. Deleting the machine loses them. Continue?`)) return;
+  }
+  try {
+    const outcome = await cloudWorkspacePull(w.id).catch((e) => `Pull failed: ${String(e)}`);
+    await cloudWorkspaceArchive(w.id);
+    useAppStore.getState().removeCloudWorkspace(w.id);
+    if (w.chatId) note(w.chatId, `Back local. ${outcome} ${w.vmName} was deleted.`);
+  } catch (cause) {
+    if (w.chatId) note(w.chatId, `Could not delete ${w.vmName}: ${String(cause)}`, "error");
+  }
+}
+
+/** Deletes the VM and forgets the workspace, no questions asked. */
+export async function deleteCloudWorkspace(id: string) {
+  await cloudWorkspaceArchive(id);
+  useAppStore.getState().removeCloudWorkspace(id);
+}
+
+/** Opens the branch's shell in the bottom panel and runs `command` in it. */
+export function runInShell(branchId: string, command: string) {
+  useAppStore.getState().openBottomPanel("shell");
+  // The panel spawns its shell on first show; give it a moment.
+  window.setTimeout(() => void ptyWrite(`shell-${branchId}`, `${command}\r`).catch(() => {}), 600);
+}
+
+/** Opens a shell on the VM in the bottom panel. */
+export function openCloudShell(w: CloudWorkspace) {
+  runInShell(w.branchId, `boxd connect ${w.vmName}`);
 }

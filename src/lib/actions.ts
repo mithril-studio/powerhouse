@@ -14,6 +14,7 @@ import {
   gitArchiveBranch,
   gitPruneArchivedBranches,
   gitRemoveWorktree,
+  gitSweepBranches,
   gitValidateRepo,
   queueCancel,
   queueDismiss,
@@ -23,7 +24,7 @@ import {
 } from "./ipc";
 import { disposeTerminal, markAutoSpawn } from "./terminalRegistry";
 import { disposeAcp } from "./acpRegistry";
-import { cloudImport, cloudSync } from "./cloud";
+import { deleteCloudWorkspace, workspaceForBranch } from "./cloud";
 
 export async function pickAndAddRepo() {
   const dir = await open({ directory: true, multiple: false, title: "Open project" });
@@ -150,10 +151,31 @@ export async function createBranch(repoId: string, name: string, base?: string) 
   createChat(repoId, branch.id);
 }
 
-export function deleteChat(repoId: string, branchId: string, chatId: string) {
+function disposeChat(chatId: string) {
   disposeTerminal(chatId);
   void disposeAcp(chatId);
   void ptyDeleteTranscript(chatId).catch(() => {});
+}
+
+function disposeBranch(branch: Branch) {
+  const s = useAppStore.getState();
+  void handoffWatchStop(branch.id).catch(() => {});
+  const pendingTimer = s.pendingHandoff[branch.id];
+  if (pendingTimer !== undefined) {
+    window.clearTimeout(pendingTimer);
+    s.clearPendingHandoff(branch.id);
+  }
+
+  for (const chat of branch.chats) disposeChat(chat.id);
+  // Bottom-panel surfaces (ids mirror BottomPanel's shellId/agentCliId).
+  for (const id of [`shell-${branch.id}`, `agentcli-${branch.id}`]) {
+    disposeTerminal(id);
+    void ptyDeleteTranscript(id).catch(() => {});
+  }
+}
+
+export function deleteChat(repoId: string, branchId: string, chatId: string) {
+  disposeChat(chatId);
   useAppStore.getState().removeChat(repoId, branchId, chatId);
 }
 
@@ -162,33 +184,18 @@ export async function deleteBranch(repoId: string, branchId: string) {
   const repo = s.repos.find((r) => r.id === repoId);
   const branch = repo?.branches.find((b) => b.id === branchId);
   if (!repo || !branch) return;
+  const cloud = workspaceForBranch(s.cloudWorkspaces, branchId);
 
   const confirmed = await requestPowerConfirmation({
     title: "Hey, are you sure?",
-    message: `Delete branch “${branch.name}”?\n\nIts worktree and any uncommitted changes will be removed. The git branch is archived for 3 days, then deleted.`,
+    message: `Delete branch “${branch.name}”?\n\nIts worktree and any uncommitted changes will be removed. The git branch is archived for 3 days, then deleted.${cloud ? ` Its cloud machine ${cloud.vmName} is deleted too.` : ""}`,
     confirmLabel: "Delete",
     shortcutLabel: "⌘W",
   });
   if (!confirmed) return;
 
-  // Stop the handoff watcher and cancel any in-flight handoff for this branch.
-  void handoffWatchStop(branchId).catch(() => {});
-  const pendingTimer = s.pendingHandoff[branchId];
-  if (pendingTimer !== undefined) {
-    window.clearTimeout(pendingTimer);
-    s.clearPendingHandoff(branchId);
-  }
-
-  for (const chat of branch.chats) {
-    disposeTerminal(chat.id);
-    void disposeAcp(chat.id);
-    void ptyDeleteTranscript(chat.id).catch(() => {});
-  }
-  // Bottom-panel surfaces (ids mirror BottomPanel's shellId/agentCliId).
-  disposeTerminal(`shell-${branchId}`);
-  void ptyDeleteTranscript(`shell-${branchId}`).catch(() => {});
-  disposeTerminal(`agentcli-${branchId}`);
-  void ptyDeleteTranscript(`agentcli-${branchId}`).catch(() => {});
+  disposeBranch(branch);
+  if (cloud) void deleteCloudWorkspace(cloud.id).catch(() => {});
   try {
     await gitRemoveWorktree(repo.path, branch.worktreePath);
   } catch (err) {
@@ -205,11 +212,17 @@ export async function deleteBranch(repoId: string, branchId: string) {
 
 const ARCHIVE_SWEEP_MS = 60 * 60 * 1000;
 
-/** Delete archived branches past their 3 days, now and hourly after. */
+/**
+ * Archive stale branches (landed on the target, upstream gone, worktree gone)
+ * and delete archives past their 3 days, now and hourly after.
+ */
 export function startArchivedBranchSweep() {
   const sweep = () => {
     for (const repo of useAppStore.getState().repos) {
-      void gitPruneArchivedBranches(repo.path).catch(() => {});
+      void gitSweepBranches(repo.path, repo.defaultBranch, true)
+        .catch(() => {})
+        .then(() => gitPruneArchivedBranches(repo.path))
+        .catch(() => {});
     }
   };
   sweep();
@@ -239,24 +252,7 @@ export async function deleteRepo(repoId: string) {
   if (!confirmed) return;
 
   for (const branch of repo.branches) {
-    // Stop the handoff watcher and cancel any in-flight handoff for this branch.
-    void handoffWatchStop(branch.id).catch(() => {});
-    const pendingTimer = s.pendingHandoff[branch.id];
-    if (pendingTimer !== undefined) {
-      window.clearTimeout(pendingTimer);
-      s.clearPendingHandoff(branch.id);
-    }
-
-    for (const chat of branch.chats) {
-      disposeTerminal(chat.id);
-      void disposeAcp(chat.id);
-      void ptyDeleteTranscript(chat.id).catch(() => {});
-    }
-    // Bottom-panel surfaces (ids mirror BottomPanel's shellId/agentCliId).
-    disposeTerminal(`shell-${branch.id}`);
-    void ptyDeleteTranscript(`shell-${branch.id}`).catch(() => {});
-    disposeTerminal(`agentcli-${branch.id}`);
-    void ptyDeleteTranscript(`agentcli-${branch.id}`).catch(() => {});
+    disposeBranch(branch);
     try {
       await gitRemoveWorktree(repo.path, branch.worktreePath);
     } catch (err) {
@@ -319,29 +315,4 @@ export async function retryQueueEntry(repoId: string, entry: QueueEntry) {
 export async function dismissEntry(repoId: string, entryId: string) {
   await queueDismiss(repoId, entryId).catch(() => {});
   useAppStore.getState().dismissQueueEntry(repoId, entryId);
-}
-
-/**
- * Fetch a cloud run's published revision into a brand-new worktree and add it
- * as a branch row. Existing worktrees are never touched; a mismatch between
- * the remote branch and the recorded result is surfaced, not imported.
- */
-export async function importCloudResult(runId: string) {
-  const s = useAppStore.getState();
-  const rec = s.cloudRuns[runId];
-  if (!rec) throw new Error("unknown cloud run");
-  const repo = s.repos.find((r) => r.id === rec.repo_id);
-  if (!repo) throw new Error("the run's repository is no longer in Powerhouse");
-  const imported = await cloudImport(runId);
-  const branch: Branch = {
-    id: crypto.randomUUID(),
-    name: imported.branch,
-    worktreePath: imported.worktree_path,
-    chats: [],
-    activeChatId: null,
-  };
-  s.addBranch(repo.id, branch);
-  s.openRightTab("changes");
-  // Refresh the record so the card shows the imported worktree.
-  useAppStore.getState().setCloudRun(await cloudSync(runId).catch(() => ({ ...rec, imported_worktree: imported.worktree_path })));
 }
