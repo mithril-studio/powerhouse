@@ -25,6 +25,16 @@ describe("workflow navigation", () => {
 });
 
 describe("local workflow drafts", () => {
+  it("removes only the chosen draft and supports restoring it without changing merge checks", () => {
+    const first = newWorkflowDraft("repo");
+    const second = newWorkflowDraft("repo");
+    useAppStore.getState().saveWorkflowDraft(first);
+    useAppStore.getState().saveWorkflowDraft(second);
+    useAppStore.getState().deleteWorkflowDraft(first.id);
+    expect(useAppStore.getState().workflowDrafts).toEqual([second]);
+    useAppStore.getState().saveWorkflowDraft(first);
+    expect(useAppStore.getState().workflowDrafts).toEqual([second, first]);
+  });
   it("starts old installations with no workflow drafts", () => {
     expect(useAppStore.getState().workflowDrafts).toEqual([]);
   });

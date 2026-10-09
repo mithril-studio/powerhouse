@@ -213,6 +213,7 @@ interface AppState extends PersistedTree {
   workspaceView: "home" | "workflows";
   setWorkspaceView: (view: "home" | "workflows") => void;
   saveWorkflowDraft: (draft: WorkflowDraft) => void;
+  deleteWorkflowDraft: (id: string) => void;
   hydrated: boolean;
   chatStatus: Record<string, ChatStatus>;
   /** chatId → agent turn state; absent means idle or already seen. */
@@ -542,6 +543,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       ? s.workflowDrafts.map((d) => d.id === draft.id ? draft : d)
       : [...s.workflowDrafts, draft],
   })),
+  deleteWorkflowDraft: (id) => set((s) => ({ workflowDrafts: s.workflowDrafts.filter((draft) => draft.id !== id) })),
   hydrated: false,
   chatStatus: {},
   chatActivity: {},
