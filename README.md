@@ -52,6 +52,26 @@ or a workflow needs direct CLI access, press **⌘⇧P** and choose **Open termi
   (`git worktree remove --force`, confirm dialog); quitting the app kills all
   sessions. `pty_kill_all` also runs on boot for dev-reload hygiene.
 
+## Chat presentation
+
+The shared chat uses a warm, Conductor-inspired workspace with sans-serif prose,
+Markdown headings/lists/tables, copyable code blocks, and a multiline composer.
+You can draft while an agent works, stop it explicitly, and jump back to the latest
+output. Drafts remain in memory while switching chats; they are not saved on disk.
+
+Agents can show results by sending ACP `image` content blocks, either in assistant
+messages or tool results. PNG, JPEG, GIF, and WebP previews appear inline and open
+in a keyboard-accessible enlarged view. Embedded images are limited to roughly
+6 MiB decoded each. Assistant images persist with the existing transcript; images
+that were previously discarded cannot be recovered without an agent replay.
+
+For safety, raw HTML, SVG, arbitrary local file paths, and automatic remote image
+loads are not supported. A Markdown image reference alone is not an attachment:
+ask the agent to return the picture through its ACP adapter. User image uploads
+are not part of this change.
+
+See `docs/chat-ux-verification.md` for verification and remaining limitations.
+
 ## Layout
 
 - `src-tauri/src/pty.rs` — PTY sessions: spawn/write/resize/kill, reader
