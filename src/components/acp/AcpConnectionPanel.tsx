@@ -32,7 +32,7 @@ export function AcpConnectionPanel({
           : "Agent is not running";
 
   return (
-    <div className="border-t border-border bg-background px-3 py-3 font-mono">
+    <div className="chat-column border-t border-border bg-background px-6 py-4">
       <div className="flex items-center justify-between gap-4">
         <div>
           <p className="text-xs text-foreground">

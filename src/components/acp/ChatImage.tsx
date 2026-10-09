@@ -1,7 +1,7 @@
-import { useRef, useState } from "react";
+import { memo, useRef, useState } from "react";
 import { chatImageSource } from "../../lib/chatImage";
 
-export function ChatImage({ mimeType, data }: { mimeType: string; data: string }) {
+export const ChatImage = memo(function ChatImage({ mimeType, data }: { mimeType: string; data: string }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [failed, setFailed] = useState(false);
   const src = chatImageSource(mimeType, data);
@@ -12,7 +12,7 @@ export function ChatImage({ mimeType, data }: { mimeType: string; data: string }
         <img src={src} alt="Image returned by agent" loading="lazy" onError={() => setFailed(true)} />
         <span>Click to enlarge</span>
       </button>
-      <dialog ref={dialog} aria-label="Agent image preview" className="image-preview" onClick={(event) => {
+      <dialog ref={dialog} aria-label="Agent image preview" className="image-preview" onKeyDown={(event) => event.stopPropagation()} onClick={(event) => {
         if (event.target === event.currentTarget) dialog.current?.close();
       }}>
         <button type="button" autoFocus onClick={() => dialog.current?.close()} className="pi-btn px-3 py-2">Close preview · Esc</button>
@@ -20,4 +20,4 @@ export function ChatImage({ mimeType, data }: { mimeType: string; data: string }
       </dialog>
     </figure>
   );
-}
+});

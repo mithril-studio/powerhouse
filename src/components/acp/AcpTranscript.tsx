@@ -203,6 +203,9 @@ export function AcpTranscript({
       role="log"
       aria-live="polite"
       aria-label="Chat transcript"
+      onLoad={() => {
+        if (followRef.current) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+      }}
       onScroll={(event) => {
         const element = event.currentTarget;
         followRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;

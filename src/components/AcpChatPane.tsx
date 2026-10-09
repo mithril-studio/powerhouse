@@ -77,7 +77,7 @@ export function AcpChatPane({ repoId, branch, chat, active }: Props) {
 
   return (
     <section
-      className={`acp-pi absolute inset-0 flex flex-col bg-background font-mono ${active ? "" : "hidden"}`}
+      className={`agent-chat absolute inset-0 flex flex-col bg-background ${active ? "" : "hidden"}`}
     >
       <AcpTranscript
         items={chat.acpTranscript ?? []}
@@ -125,6 +125,7 @@ export function AcpChatPane({ repoId, branch, chat, active }: Props) {
             void session.submitPrompt(prompt);
           }}
           onOpenCommands={() => setPaletteOpen(true)}
+          onCancel={session.cancel}
           thinkingLevel={session.thinkingLevel}
         />
       )}

@@ -44,7 +44,7 @@ export function AcpFooter({
     .filter(Boolean);
 
   return (
-    <footer className="flex h-6 shrink-0 items-center gap-3 px-3 font-mono text-[10px] text-muted-foreground">
+    <footer className="chat-column flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 px-6 py-3 text-[11px] text-muted-foreground">
       <span className="truncate">{branchName}</span>
       <span className={busy ? "text-accent-brand" : "text-success"}>
         {busy ? "● working" : "● ready"}
