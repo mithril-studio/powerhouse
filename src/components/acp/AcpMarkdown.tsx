@@ -1,41 +1,45 @@
-import { memo } from "react";
-import ReactMarkdown from "react-markdown";
+import { memo, useRef, useState, type ReactNode } from "react";
+import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
-const plugins = [remarkGfm];
+function CodeBlock({ children }: { children?: ReactNode }) {
+  const code = useRef<HTMLPreElement>(null);
+  const [status, setStatus] = useState("Copy code");
+  return <div className="chat-code">
+    <button type="button" onClick={async () => {
+      try {
+        await navigator.clipboard.writeText(code.current?.textContent ?? "");
+        setStatus("Copied");
+      } catch { setStatus("Could not copy"); }
+    }}>{status}</button>
+    <pre ref={code}>{children}</pre>
+  </div>;
+}
 
-/** Agent prose rendered as GitHub-flavoured markdown (tables, task lists,
- *  strikethrough, fenced code). Styling lives under `.acp-md` in index.css so
- *  it stays in the Pi terminal palette. Links open in the system browser —
- *  navigating the webview itself would replace the app. */
-export const AcpMarkdown = memo(function AcpMarkdown({
-  text,
-  className = "",
-}: {
-  text: string;
-  className?: string;
-}) {
-  return (
-    <div className={`acp-md select-text break-words ${className}`}>
-      <ReactMarkdown
-        remarkPlugins={plugins}
-        components={{
-          a: ({ href, children }) => (
-            <a
-              href={href}
-              onClick={(event) => {
-                event.preventDefault();
-                if (href) void openUrl(href).catch(() => {});
-              }}
-            >
-              {children}
-            </a>
-          ),
-        }}
-      >
-        {text}
-      </ReactMarkdown>
-    </div>
-  );
+function ExternalLink({ href, children }: { href?: string; children?: ReactNode }) {
+  const [error, setError] = useState(false);
+  if (!href || !/^https?:\/\//i.test(href)) return <span>{children}</span>;
+  return <>
+    <a href={href} rel="noreferrer" onClick={(event) => {
+      event.preventDefault();
+      setError(false);
+      void openUrl(href).catch(() => setError(true));
+    }}>{children}</a>
+    {error && <span role="status"> Could not open link.</span>}
+  </>;
+}
+
+const components: Components = {
+  pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+  a: ({ href, children }) => <ExternalLink href={href}>{children}</ExternalLink>,
+  img: ({ alt }) => <span className="text-muted-foreground">[Image: {alt || "external image"} — ask the agent to attach it]</span>,
+  table: ({ children }) => <div className="chat-table"><table>{children}</table></div>,
+};
+
+/** No raw HTML, automatic remote images, or non-web URL schemes from agents. */
+export const AcpMarkdown = memo(function AcpMarkdown({ text, className = "" }: { text: string; className?: string }) {
+  return <div className={`chat-markdown select-text ${className}`}>
+    <Markdown remarkPlugins={[remarkGfm]} skipHtml components={components}>{text}</Markdown>
+  </div>;
 });
