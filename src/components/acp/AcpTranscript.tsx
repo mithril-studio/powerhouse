@@ -1,7 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ToolCallContent } from "@agentclientprotocol/sdk";
 import type { AcpTranscriptItem } from "../../lib/acpTranscript";
 import { ChatImage } from "./ChatImage";
+import { ChatMarkdown } from "./ChatMarkdown";
 
 const statusGlyph: Record<string, string> = {
   pending: "·",
@@ -78,8 +79,10 @@ function ToolItem({ item }: { item: Extract<AcpTranscriptItem, { type: "tool" }>
     return <div className="flex items-center gap-2 py-0.5">{header}</div>;
   }
   return (
+    <div className="chat-tool">
     <details className="group py-0.5">
-      <summary className="flex cursor-default list-none items-center gap-2 outline-none focus-visible:bg-muted">
+      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-md py-1 outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        <span className="tool-chevron text-muted-foreground" aria-hidden>›</span>
         {header}
       </summary>
       <div className="ml-1 mt-1 space-y-2 border-l border-border py-1 pl-4">
@@ -88,7 +91,7 @@ function ToolItem({ item }: { item: Extract<AcpTranscriptItem, { type: "tool" }>
             {location.path}{location.line ? `:${location.line}` : ""}
           </p>
         ))}
-        {item.content?.map((content, index) => (
+        {item.content?.filter((content) => !(content.type === "content" && content.content.type === "image")).map((content, index) => (
           <ToolContent key={index} item={content} />
         ))}
         {item.rawInput !== undefined && (
@@ -103,6 +106,10 @@ function ToolItem({ item }: { item: Extract<AcpTranscriptItem, { type: "tool" }>
         )}
       </div>
     </details>
+    {item.content?.filter((content) => content.type === "content" && content.content.type === "image").map((content, index) => (
+      <ToolContent key={index} item={content} />
+    ))}
+    </div>
   );
 }
 
@@ -136,14 +143,13 @@ function TranscriptItem({ item }: { item: AcpTranscriptItem }) {
         <summary className="cursor-default outline-none focus-visible:bg-muted">
           ◇ thinking
         </summary>
-        <p className="mt-2 whitespace-pre-wrap border-l border-border pl-3">{item.text}</p>
+        <div className="mt-3 border-l border-border pl-4"><ChatMarkdown text={item.text} /></div>
       </details>
     );
   }
   if (item.role === "user") {
     return (
-      <article className="flex gap-2 bg-muted/60 px-2 py-2">
-        <span className="shrink-0 text-accent-brand" aria-hidden>&gt;</span>
+      <article aria-label="Your message" className="chat-user">
         <p className="select-text whitespace-pre-wrap break-words">{item.text}</p>
       </article>
     );
@@ -163,8 +169,8 @@ function TranscriptItem({ item }: { item: AcpTranscriptItem }) {
     );
   }
   return (
-    <article>
-      <p className="select-text whitespace-pre-wrap break-words leading-5">{item.text}</p>
+    <article aria-label="Agent response">
+      <ChatMarkdown text={item.text} />
     </article>
   );
 }
@@ -184,12 +190,14 @@ export function AcpTranscript({
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
+  const [showLatest, setShowLatest] = useState(false);
 
   useEffect(() => {
     if (followRef.current) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [items, busy]);
 
   return (
+    <div className="relative min-h-0 flex-1">
     <div
       ref={scrollRef}
       role="log"
@@ -198,10 +206,11 @@ export function AcpTranscript({
       onScroll={(event) => {
         const element = event.currentTarget;
         followRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
+        setShowLatest(!followRef.current);
       }}
-      className="min-h-0 flex-1 overflow-y-auto px-3 py-2"
+      className="h-full overflow-y-auto px-6 py-8"
     >
-      <div className="flex w-full flex-col gap-3 text-[13px]">
+      <div className="chat-column flex flex-col gap-5">
         {items.length === 0 && (
           <div className="py-8" role="status">
             <p className="text-sm text-accent-brand">Powerhouse / {agentName}</p>
@@ -220,10 +229,16 @@ export function AcpTranscript({
         {busy && (
           <p className="flex items-center gap-2 text-xs text-accent-brand" role="status">
             <span className="animate-pulse">●</span>
-            working…
+            {agentName} is working…
           </p>
         )}
       </div>
+    </div>
+    {showLatest && <button type="button" className="jump-latest pi-btn" onClick={() => {
+      followRef.current = true;
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+      setShowLatest(false);
+    }}>↓ Jump to latest</button>}
     </div>
   );
 }
