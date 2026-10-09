@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { ToolCallContent } from "@agentclientprotocol/sdk";
 import type { AcpTranscriptItem } from "../../lib/acpTranscript";
+import { ChatImage } from "./ChatImage";
 
 const statusGlyph: Record<string, string> = {
   pending: "·",
@@ -21,6 +22,7 @@ function readableValue(value: unknown): string {
 
 function ToolContent({ item }: { item: ToolCallContent }) {
   if (item.type === "content") {
+    if (item.content.type === "image") return <ChatImage mimeType={item.content.mimeType} data={item.content.data} />;
     return item.content.type === "text" ? (
       <pre className="whitespace-pre-wrap break-words text-xs text-muted-foreground">
         {item.content.text}
@@ -105,6 +107,7 @@ function ToolItem({ item }: { item: Extract<AcpTranscriptItem, { type: "tool" }>
 }
 
 function TranscriptItem({ item }: { item: AcpTranscriptItem }) {
+  if (item.type === "image") return <ChatImage mimeType={item.mimeType} data={item.data} />;
   if (item.type === "tool") return <ToolItem item={item} />;
   if (item.type === "plan") {
     return (

@@ -1,4 +1,6 @@
+import { chatImageSource } from "./chatImage";
 import type {
+  ContentBlock,
   PlanEntry,
   SessionUpdate,
   ToolCallContent,
@@ -10,6 +12,13 @@ import type {
 export type AcpMessageRole = "user" | "assistant" | "thought" | "system";
 
 export type AcpTranscriptItem =
+  | {
+      id: string;
+      type: "image";
+      role: "user" | "assistant" | "thought";
+      mimeType: string;
+      data: string;
+    }
   | {
       id: string;
       type: "message";
@@ -63,13 +72,10 @@ function appendTextChunk(
   messageId?: string | null,
 ): AcpTranscriptItem[] {
   if (!text) return transcript;
-  const index = messageId
-    ? transcript.findIndex(
-        (item) => item.type === "message" && item.messageId === messageId,
-      )
-    : transcript.length - 1;
+  // Only coalesce adjacent chunks: images and tool events retain their order.
+  const index = transcript.length - 1;
   const current = transcript[index];
-  if (current?.type === "message" && current.role === role) {
+  if (current?.type === "message" && current.role === role && current.messageId === (messageId ?? undefined)) {
     return transcript.map((item, itemIndex) =>
       itemIndex === index ? { ...current, text: current.text + text } : item,
     );
@@ -77,13 +83,27 @@ function appendTextChunk(
   return [
     ...transcript,
     {
-      id: messageId ?? newId(role),
+      id: newId(role),
       type: "message",
       role,
       text,
       ...(messageId ? { messageId } : {}),
     },
   ];
+}
+
+function appendContent(
+  transcript: AcpTranscriptItem[],
+  role: "user" | "assistant" | "thought",
+  content: ContentBlock,
+  messageId?: string | null,
+): AcpTranscriptItem[] {
+  if (content.type === "text") return appendTextChunk(transcript, role, content.text, messageId);
+  if (content.type !== "image") return transcript;
+  if (!chatImageSource(content.mimeType, content.data)) {
+    return appendSystemMessage(transcript, "Image unavailable: unsupported format, invalid data, or image exceeds 6 MiB.");
+  }
+  return [...transcript, { id: newId("image"), type: "image", role, mimeType: content.mimeType, data: content.data }];
 }
 
 export function applyAcpUpdate(
@@ -93,19 +113,15 @@ export function applyAcpUpdate(
 ): AcpTranscriptItem[] {
   switch (update.sessionUpdate) {
     case "agent_message_chunk":
-      return update.content.type === "text"
-        ? appendTextChunk(transcript, "assistant", update.content.text, update.messageId)
-        : transcript;
+      return appendContent(transcript, "assistant", update.content, update.messageId);
     case "agent_thought_chunk":
-      return update.content.type === "text"
-        ? appendTextChunk(transcript, "thought", update.content.text, update.messageId)
-        : transcript;
+      return appendContent(transcript, "thought", update.content, update.messageId);
     case "user_message_chunk":
       // Powerhouse records submitted prompts immediately. Ignoring echoed user
       // chunks avoids duplicates. During session/load, the agent is the source
       // of truth and replays the complete transcript, including user messages.
-      return options.acceptUserMessageChunks && update.content.type === "text"
-        ? appendTextChunk(transcript, "user", update.content.text, update.messageId)
+      return options.acceptUserMessageChunks
+        ? appendContent(transcript, "user", update.content, update.messageId)
         : transcript;
     case "tool_call":
       return [

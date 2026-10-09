@@ -3,6 +3,33 @@ import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import { applyAcpUpdate, type AcpTranscriptItem } from "./acpTranscript";
 
 describe("applyAcpUpdate", () => {
+  it("preserves assistant images between streamed text segments, including after persistence", () => {
+    let transcript: AcpTranscriptItem[] = [];
+    for (const content of [
+      { type: "text" as const, text: "Before" },
+      { type: "image" as const, mimeType: "image/png", data: "aGVsbG8=" },
+      { type: "text" as const, text: "After" },
+    ]) {
+      transcript = applyAcpUpdate(transcript, { sessionUpdate: "agent_message_chunk", messageId: "m1", content });
+    }
+    expect(JSON.parse(JSON.stringify(transcript))).toEqual([
+      expect.objectContaining({ type: "message", text: "Before" }),
+      expect.objectContaining({ type: "image", mimeType: "image/png", data: "aGVsbG8=" }),
+      expect.objectContaining({ type: "message", text: "After" }),
+    ]);
+    expect(new Set(transcript.map((item) => item.id)).size).toBe(3);
+  });
+
+  it("restores user images only during session replay", () => {
+    const update: SessionUpdate = { sessionUpdate: "user_message_chunk", content: { type: "image", mimeType: "image/png", data: "aGVsbG8=" } };
+    expect(applyAcpUpdate([], update)).toEqual([]);
+    expect(applyAcpUpdate([], update, { acceptUserMessageChunks: true })[0]).toMatchObject({ type: "image", role: "user" });
+  });
+
+  it("explains unsupported images instead of silently dropping them", () => {
+    const update: SessionUpdate = { sessionUpdate: "agent_message_chunk", content: { type: "image", mimeType: "image/svg+xml", data: "aGVsbG8=" } };
+    expect(applyAcpUpdate([], update)[0]).toMatchObject({ type: "message", role: "system", text: expect.stringContaining("Image unavailable") });
+  });
   it("combines streamed assistant chunks into one message", () => {
     const first: SessionUpdate = {
       sessionUpdate: "agent_message_chunk",
