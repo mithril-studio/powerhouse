@@ -1,6 +1,7 @@
 //! Cloud workspaces: a branch continued by Claude on a boxd VM. See
 //! docs/cloud-workspaces.md.
 pub mod commands;
+pub mod machines;
 pub mod secrets;
 pub mod transport;
 pub mod workspace;

@@ -13,12 +13,18 @@ use std::time::Duration;
 /// Prefix of every boxd resource Powerhouse owns and may destroy.
 pub const OWNED_PREFIX: &str = "ph-";
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct MachineInfo {
     pub name: String,
     #[serde(default)]
     pub id: Option<String>,
     pub status: String,
+    /// `<name>.boxd.sh`. `list` returns it; create responses may not.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// e.g. `2x8G`.
+    #[serde(default)]
+    pub size: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -70,8 +76,12 @@ pub fn ensure_owned(name: &str) -> TResult<()> {
 }
 
 pub trait Boxd: Send + Sync {
+    /// Every machine the signed-in account can see, Powerhouse-owned or not.
+    fn machine_list(&self) -> TResult<Vec<MachineInfo>>;
     fn machine_get(&self, vm: &str) -> TResult<MachineInfo>;
     fn machine_start(&self, vm: &str) -> TResult<()>;
+    /// Disk persists; running processes are lost.
+    fn machine_stop(&self, vm: &str) -> TResult<()>;
     /// `boxd machine new <name>`: a fresh machine from the org's default image.
     fn machine_new(&self, name: &str) -> TResult<MachineInfo>;
     /// Destroys a machine. `vm` must be Powerhouse-owned (`ph-…`).
@@ -134,6 +144,15 @@ pub fn extract_json(stdout: &str) -> Option<serde_json::Value> {
     let candidate = &stdout[start..];
     let mut de = serde_json::Deserializer::from_str(candidate).into_iter::<serde_json::Value>();
     de.next().and_then(|r| r.ok())
+}
+
+/// `machine list --json` is an array; tolerate an object wrapping it.
+fn parse_machine_list(v: serde_json::Value) -> TResult<Vec<MachineInfo>> {
+    let items = match v {
+        serde_json::Value::Object(mut o) => o.remove("machines").unwrap_or(serde_json::Value::Array(vec![])),
+        other => other,
+    };
+    serde_json::from_value(items).map_err(|e| TransportError::Other(format!("machine list: {e}")))
 }
 
 impl BoxdCli {
@@ -216,6 +235,11 @@ impl BoxdCli {
 }
 
 impl Boxd for BoxdCli {
+    fn machine_list(&self) -> TResult<Vec<MachineInfo>> {
+        let v = self.json(&["machine", "list", "--json"], Duration::from_secs(60))?;
+        parse_machine_list(v)
+    }
+
     fn machine_get(&self, vm: &str) -> TResult<MachineInfo> {
         let v = self.json(&["machine", "get", vm, "--json"], Duration::from_secs(60))?;
         serde_json::from_value(v).map_err(|e| TransportError::Other(format!("machine get: {e}")))
@@ -223,6 +247,11 @@ impl Boxd for BoxdCli {
 
     fn machine_start(&self, vm: &str) -> TResult<()> {
         self.json(&["machine", "start", vm, "--json"], Duration::from_secs(180))
+            .map(|_| ())
+    }
+
+    fn machine_stop(&self, vm: &str) -> TResult<()> {
+        self.json(&["machine", "stop", vm, "--json"], Duration::from_secs(180))
             .map(|_| ())
     }
 
@@ -269,6 +298,19 @@ mod tests {
         let v = extract_json(s).unwrap();
         assert_eq!(v["status"], "running");
         assert!(extract_json("nothing here").is_none());
+    }
+
+    #[test]
+    fn parses_machine_list_with_extra_fields() {
+        let s = "  A new version is available\n[{\"name\":\"workflows\",\"status\":\"running\",\"size\":\"2x8G\",\"url\":\"workflows.boxd.sh\",\"source\":\"standalone\",\"sharing\":\"private\",\"vcpu\":2,\"memory_bytes\":8589934592},{\"name\":\"ph-x\",\"status\":\"hibernated\"}]";
+        let list = parse_machine_list(extract_json(s).unwrap()).unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].url.as_deref(), Some("workflows.boxd.sh"));
+        assert_eq!(list[0].size.as_deref(), Some("2x8G"));
+        assert_eq!(list[1].status, "hibernated");
+        assert!(list[1].url.is_none());
+        let wrapped = serde_json::json!({ "machines": [{ "name": "a", "status": "stopped" }] });
+        assert_eq!(parse_machine_list(wrapped).unwrap()[0].name, "a");
     }
 
     #[test]

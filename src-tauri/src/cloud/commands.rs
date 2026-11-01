@@ -738,10 +738,16 @@ mod tests {
     }
 
     impl Boxd for FakeBoxd {
+        fn machine_list(&self) -> TResult<Vec<MachineInfo>> {
+            Ok(vec![])
+        }
         fn machine_get(&self, vm: &str) -> TResult<MachineInfo> {
-            Ok(MachineInfo { name: vm.into(), id: None, status: "running".into() })
+            Ok(MachineInfo { name: vm.into(), status: "running".into(), ..Default::default() })
         }
         fn machine_start(&self, _: &str) -> TResult<()> {
+            Ok(())
+        }
+        fn machine_stop(&self, _: &str) -> TResult<()> {
             Ok(())
         }
         fn machine_new(&self, vm: &str) -> TResult<MachineInfo> {
