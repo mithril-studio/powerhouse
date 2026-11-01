@@ -6,7 +6,8 @@ import type { AcpTranscriptItem } from "../lib/acpTranscript";
 export type AgentTransport = "acp" | "pty";
 
 /** Which surface the persistent bottom panel is showing. */
-export type BottomTab = "shell" | "agent";
+/** `vm:<name>` is a `boxd connect` terminal opened from the Machines tab. */
+export type BottomTab = "shell" | "agent" | `vm:${string}`;
 
 /**
  * How completely a native-CLI handoff shares state with the ACP session:
@@ -92,7 +93,11 @@ export interface Settings {
   memory?: MemorySettings;
   /** Right sidebar width in px, set by dragging its left edge. */
   rightSidebarWidth?: number;
+  /** Editor the Machines tab opens a VM in over Remote-SSH. Absent = VS Code. */
+  machineEditor?: MachineEditor;
 }
+
+export type MachineEditor = "vscode" | "cursor";
 
 export interface Branch {
   id: string;
@@ -109,7 +114,7 @@ export interface Branch {
 }
 
 /** Tabs of the toggleable right inspector sidebar. */
-export type RightTab = "files" | "changes" | "diff" | "merge";
+export type RightTab = "files" | "changes" | "diff" | "merge" | "machines";
 
 /** A configurable check step. `type` is reserved for future "agent" steps. */
 export interface WorkflowStep {
@@ -224,6 +229,8 @@ interface AppState extends PersistedTree {
   chatPickerOpen: boolean;
   bottomPanelOpen: boolean;
   bottomTab: BottomTab;
+  /** VMs with a `boxd connect` terminal in the bottom panel, in tab order (not persisted). */
+  machineTerminals: string[];
   shellStatus: Record<string, ChatStatus>;
   /** branchId → setTimeout id of the in-flight handoff (presence = pending). */
   pendingHandoff: Record<string, number>;
@@ -303,6 +310,9 @@ interface AppState extends PersistedTree {
   toggleBottomPanel: () => void;
   setBottomTab: (tab: BottomTab) => void;
   openBottomPanel: (tab: BottomTab) => void;
+  openMachineTerminal: (vm: string) => void;
+  closeMachineTerminal: (vm: string) => void;
+  setMachineEditor: (editor: MachineEditor) => void;
   setShellStatus: (branchId: string, status: ChatStatus) => void;
   setPendingHandoff: (branchId: string, timerId: number) => void;
   clearPendingHandoff: (branchId: string) => void;
@@ -431,6 +441,9 @@ export function migrateSettings(
       ...(typeof tree.settings.rightSidebarWidth === "number"
         ? { rightSidebarWidth: tree.settings.rightSidebarWidth }
         : {}),
+      ...(tree.settings.machineEditor === "cursor" || tree.settings.machineEditor === "vscode"
+        ? { machineEditor: tree.settings.machineEditor }
+        : {}),
     };
   }
   const agents = SEED_AGENTS.map((a) => ({ ...a }));
@@ -553,6 +566,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   chatPickerOpen: false,
   bottomPanelOpen: false,
   bottomTab: "shell",
+  machineTerminals: [],
   shellStatus: {},
   pendingHandoff: {},
   settingsOpen: false,
@@ -878,6 +892,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleBottomPanel: () => set((s) => ({ bottomPanelOpen: !s.bottomPanelOpen })),
   setBottomTab: (tab) => set({ bottomTab: tab }),
   openBottomPanel: (tab) => set({ bottomPanelOpen: true, bottomTab: tab }),
+  openMachineTerminal: (vm) =>
+    set((s) => ({
+      machineTerminals: s.machineTerminals.includes(vm) ? s.machineTerminals : [...s.machineTerminals, vm],
+      bottomPanelOpen: true,
+      bottomTab: `vm:${vm}`,
+    })),
+  closeMachineTerminal: (vm) =>
+    set((s) => ({
+      machineTerminals: s.machineTerminals.filter((m) => m !== vm),
+      bottomTab: s.bottomTab === `vm:${vm}` ? "shell" : s.bottomTab,
+    })),
+  setMachineEditor: (editor) => set((s) => ({ settings: { ...s.settings, machineEditor: editor } })),
   setShellStatus: (branchId, status) =>
     set((s) => ({ shellStatus: { ...s.shellStatus, [branchId]: status } })),
 

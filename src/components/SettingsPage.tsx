@@ -6,6 +6,7 @@ import {
   memorySettingsOf,
   useAppStore,
   type AgentProfile,
+  type MachineEditor,
   type Theme,
 } from "../store/appStore";
 import { cloudSecretStatus, cloudSetSecret, runInShell, type SecretStatus } from "../lib/cloud";
@@ -511,6 +512,8 @@ const cloudInput =
 function CloudSection() {
   const branchId = useAppStore((s) => s.selection.branchId);
   const closeSettings = useAppStore((s) => s.closeSettings);
+  const machineEditor = useAppStore((s) => s.settings.machineEditor ?? "vscode");
+  const setMachineEditor = useAppStore((s) => s.setMachineEditor);
   const [secrets, setSecrets] = useState<SecretStatus | null>(null);
   const [claudeInput, setClaudeInput] = useState("");
   const [githubInput, setGithubInput] = useState("");
@@ -609,6 +612,24 @@ function CloudSection() {
             Kept in your macOS Keychain and written to each cloud machine's ~/.ph/env, outside the repo. Without a GitHub token here, your GitHub connection is used.
           </p>
         </div>
+      </div>
+
+      <div className="rounded-xl border border-border bg-card p-3">
+        <p className="mb-2 font-semibold uppercase tracking-wider text-[11px] text-muted-foreground">Machines</p>
+        <label className="flex items-center gap-2">
+          <span className="text-muted-foreground">Open machines in</span>
+          <select
+            value={machineEditor}
+            onChange={(e) => setMachineEditor(e.target.value as MachineEditor)}
+            className="h-7 rounded-lg border border-border bg-background px-1.5"
+          >
+            <option value="vscode">VS Code</option>
+            <option value="cursor">Cursor</option>
+          </select>
+        </label>
+        <p className="mt-2 text-muted-foreground">
+          Opens the machine over Remote-SSH using the <code>&lt;name&gt;.boxd</code> host that boxd writes to ~/.ssh/config. Needs the editor's Remote-SSH extension.
+        </p>
       </div>
 
       {error && <p className="text-destructive">{error}</p>}

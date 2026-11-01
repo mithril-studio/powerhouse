@@ -13,12 +13,14 @@ import {
 } from "../lib/ipc";
 import { DiffView } from "./DiffView";
 import { QueuePane } from "./QueuePane";
+import { MachinesPane } from "./MachinesPane";
 
 const TABS: { id: RightTab; label: string }[] = [
   { id: "files", label: "Files" },
   { id: "changes", label: "Changes" },
   { id: "diff", label: "Diff" },
   { id: "merge", label: "Merge" },
+  { id: "machines", label: "Machines" },
 ];
 
 function statusColor(status: string) {
@@ -415,7 +417,9 @@ export function RightSidebar({
       </div>
 
       <div className="min-h-0 flex-1">
-        {rightTab === "merge" ? (
+        {rightTab === "machines" ? (
+          <MachinesPane branch={branch} />
+        ) : rightTab === "merge" ? (
           repo ? (
             <QueuePane repo={repo} branch={branch} />
           ) : (

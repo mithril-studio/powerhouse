@@ -374,3 +374,28 @@ describe("chat updates", () => {
     expect(useAppStore.getState().repos).toEqual(before);
   });
 });
+
+describe("machine terminals", () => {
+  beforeEach(() => useAppStore.getState().hydrate(null));
+
+  it("opens one tab per VM and falls back to the shell when the active one closes", () => {
+    const s = () => useAppStore.getState();
+    s().openMachineTerminal("ph-a");
+    s().openMachineTerminal("ph-b");
+    s().openMachineTerminal("ph-a");
+    expect(s().machineTerminals).toEqual(["ph-a", "ph-b"]);
+    expect(s().bottomTab).toBe("vm:ph-a");
+    expect(s().bottomPanelOpen).toBe(true);
+    s().closeMachineTerminal("ph-b");
+    expect(s().bottomTab).toBe("vm:ph-a");
+    s().closeMachineTerminal("ph-a");
+    expect(s().machineTerminals).toEqual([]);
+    expect(s().bottomTab).toBe("shell");
+  });
+
+  it("keeps the editor choice through a save and reload", () => {
+    useAppStore.getState().setMachineEditor("cursor");
+    const saved = useAppStore.getState().settings;
+    expect(migrateSettings({ settings: saved } as Parameters<typeof migrateSettings>[0]).machineEditor).toBe("cursor");
+  });
+});

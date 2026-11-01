@@ -23,6 +23,22 @@ Follow-up messages go to the cloud agent (`claude -p --resume <session>`). **Bri
 deletes the VM, and hands the chat back to the local agent, which gets a recap of the cloud turns with
 its next prompt. Deleting the branch deletes its VM too.
 
+## Machines tab
+
+Right sidebar → **Machines** lists every boxd machine on the account (`boxd machine list`, every 15 s
+while open), running first. Per machine:
+
+- **Connect** opens a bottom-panel tab running `boxd connect <vm>`: boxd brings its own SSH, so
+  Powerhouse never handles keys. The cloud chat's **Open VM** opens the same tab.
+- **VS Code / Cursor** (Settings → Cloud) opens `~/repo` (or `~`) over Remote-SSH through the
+  `<vm>.boxd` host that boxd's background service writes to `~/.ssh/config`, via a `vscode://` /
+  `cursor://` link, so no editor CLI is needed on PATH.
+- **Copy ssh**, **Start/Stop**, and **Delete**, which only exists on `ph-…` machines and asks for the
+  name to be typed.
+
+**New** creates `ph-<name>`, defaulting to the branch's cloud VM name. Backend: `cloud/machines.rs`;
+frontend: `src/lib/machines.ts`, `src/components/MachinesPane.tsx`.
+
 ## Where things live
 
 | What | Where |
