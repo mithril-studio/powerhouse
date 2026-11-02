@@ -331,6 +331,51 @@ mod tests {
         assert_eq!(editor_url(Editor::Cursor, "a", "/home/boxd"), "cursor://vscode-remote/ssh-remote+a.boxd/home/boxd");
     }
 
+    /// Real boxd: the Machines tab's calls on a throwaway `ph-e2e-…` machine.
+    /// `PH_CLOUD_E2E=1 cargo test machines_on_a_real_vm -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn machines_on_a_real_vm() {
+        if std::env::var("PH_CLOUD_E2E").is_err() {
+            return;
+        }
+        use crate::cloud::transport::BoxdCli;
+        let boxd = BoxdCli::default();
+        let vm = format!("ph-e2e-{}", &uuid::Uuid::new_v4().to_string()[..6]);
+        let wait_for = |what: &str, secs: u64, ok: &dyn Fn() -> bool| {
+            let t = std::time::Instant::now();
+            while !ok() {
+                assert!(t.elapsed().as_secs() < secs, "timed out waiting for {what}");
+                std::thread::sleep(Duration::from_secs(3));
+            }
+            eprintln!("{what}: {}s", t.elapsed().as_secs());
+        };
+        let result = std::panic::catch_unwind(|| {
+            let before = list(&boxd).unwrap();
+            assert!(!before.is_empty(), "the account has machines");
+            let row = create(&boxd, &vm).unwrap();
+            assert!(row.owned);
+            assert!(create(&boxd, &vm).unwrap_err().contains("already exists"));
+            let status = || list(&boxd).unwrap().into_iter().find(|m| m.name == vm).map(|m| m.status);
+            wait_for("running", 300, &|| status().as_deref() == Some("running"));
+            wait_for("ssh entry", 180, &|| ssh_config_has_host(&read_ssh_config(), &vm));
+            let url = editor_link(&boxd, &read_ssh_config(), &vm, Editor::Vscode).unwrap();
+            eprintln!("editor link: {url}");
+            assert!(url.starts_with(&format!("vscode://vscode-remote/ssh-remote+{vm}.boxd/")));
+            stop(&boxd, &vm).unwrap();
+            wait_for("stopped", 180, &|| status().as_deref() != Some("running"));
+            eprintln!("after stop: {:?}", status());
+            start(&boxd, &vm).unwrap();
+            wait_for("running again", 300, &|| status().as_deref() == Some("running"));
+        });
+        let removed = remove(&boxd, &vm, &vm);
+        if let Err(e) = result {
+            std::panic::resume_unwind(e);
+        }
+        removed.unwrap();
+        assert!(list(&boxd).unwrap().iter().all(|m| m.name != vm), "{vm} is gone");
+    }
+
     #[test]
     fn editor_link_explains_a_missing_ssh_entry_without_touching_the_vm() {
         let fake = Fake::with(&[]);

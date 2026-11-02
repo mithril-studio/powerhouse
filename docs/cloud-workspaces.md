@@ -61,6 +61,8 @@ stop on a real throwaway VM with a fake agent.
 `PH_CLOUD_REAL=1 cargo test cloud_real_claude_flow -- --ignored --nocapture` runs the whole flow with
 real Claude and your Keychain tokens: a throwaway `ph-e2e-*` branch, two turns, then it deletes the VM,
 the remote branch and the worktree. About 90 s and $0.40.
+`PH_CLOUD_E2E=1 cargo test machines_on_a_real_vm -- --ignored --nocapture` runs the Machines tab's
+calls (list, create, ssh entry, editor link, stop, start, delete) on a throwaway `ph-e2e-*` VM in about 10 s.
 
 ## Not in v1
 
