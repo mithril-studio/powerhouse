@@ -1,20 +1,14 @@
 //! The Machines tab: every boxd machine on the account, with create, start,
-//! stop, delete and "open in editor". Shells are not handled here: the
+//! stop and delete. Shells are not handled here: the
 //! frontend runs `boxd connect <vm>` in a terminal, which brings its own SSH.
 //!
 //! Delete stays behind `ensure_owned`, so only `ph-…` machines can go.
-
-use std::path::Path;
-use std::process::Command;
-use std::time::Duration;
 
 use tauri::State;
 
 use super::commands::CloudManager;
 use super::transport::{ensure_owned, Boxd, MachineInfo, OWNED_PREFIX};
 use super::workspace as ws;
-
-const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -90,60 +84,6 @@ pub fn remove(boxd: &dyn Boxd, vm: &str, confirm: &str) -> Result<(), String> {
     boxd.machine_remove(vm).map_err(|e| e.to_string())
 }
 
-/// Whether boxd's client daemon has written `Host <vm>.boxd` into the SSH config.
-pub fn ssh_config_has_host(config: &str, vm: &str) -> bool {
-    let alias = format!("{vm}.boxd");
-    config.lines().any(|line| {
-        let mut words = line.split_whitespace();
-        words.next().is_some_and(|w| w.eq_ignore_ascii_case("host")) && words.any(|w| w == alias)
-    })
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Editor {
-    Vscode,
-    Cursor,
-}
-
-/// The editor's Remote-SSH deep link. Opening a link avoids needing `code` or
-/// `cursor` on the stripped PATH a Finder-launched app gets.
-pub fn editor_url(editor: Editor, vm: &str, path: &str) -> String {
-    let scheme = match editor {
-        Editor::Vscode => "vscode",
-        Editor::Cursor => "cursor",
-    };
-    format!("{scheme}://vscode-remote/ssh-remote+{vm}.boxd{path}")
-}
-
-/// `~/repo` when it exists (cloud workspaces clone there), otherwise `~`.
-fn remote_folder(boxd: &dyn Boxd, vm: &str) -> Result<String, String> {
-    let script = r#"if [ -d "$HOME/repo" ]; then echo "$HOME/repo"; else echo "$HOME"; fi"#;
-    let out = boxd
-        .exec(vm, &["bash".into(), "-lc".into(), script.into()], PROBE_TIMEOUT)
-        .map_err(|e| e.to_string())?;
-    let path = out.output.lines().map(str::trim).rfind(|l| l.starts_with('/')).unwrap_or_default();
-    if out.exit_code != 0 || path.is_empty() || path.contains(char::is_whitespace) {
-        return Err(format!("could not find the home folder on {vm}"));
-    }
-    Ok(path.to_string())
-}
-
-pub fn editor_link(boxd: &dyn Boxd, ssh_config: &str, vm: &str, editor: Editor) -> Result<String, String> {
-    check_name(vm)?;
-    if !ssh_config_has_host(ssh_config, vm) {
-        return Err(format!(
-            "~/.ssh/config has no `{vm}.boxd` entry yet. boxd's background service writes it shortly after a machine is created; try again in a minute."
-        ));
-    }
-    Ok(editor_url(editor, vm, &remote_folder(boxd, vm)?))
-}
-
-fn read_ssh_config() -> String {
-    let home = std::env::var_os("HOME").unwrap_or_default();
-    std::fs::read_to_string(Path::new(&home).join(".ssh/config")).unwrap_or_default()
-}
-
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
     tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())?
 }
@@ -184,31 +124,17 @@ pub async fn machine_remove(state: State<'_, CloudManager>, vm: String, confirm:
     blocking(move || remove(boxd.as_ref(), &vm, &confirm)).await
 }
 
-#[tauri::command]
-pub async fn machine_open_in_editor(state: State<'_, CloudManager>, vm: String, editor: Editor) -> Result<(), String> {
-    let boxd = state.boxd.clone();
-    blocking(move || {
-        let url = editor_link(boxd.as_ref(), &read_ssh_config(), &vm, editor)?;
-        let status = Command::new("/usr/bin/open").arg(&url).status().map_err(|e| e.to_string())?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!("could not open {url}: is the editor installed?"))
-        }
-    })
-    .await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cloud::transport::{ExecOutput, TResult, TransportError};
+    use std::path::Path;
     use std::sync::Mutex;
+    use std::time::Duration;
 
     #[derive(Default)]
     struct Fake {
         machines: Vec<MachineInfo>,
-        exec_output: String,
         calls: Mutex<Vec<String>>,
     }
 
@@ -258,7 +184,7 @@ mod tests {
         }
         fn exec(&self, vm: &str, _: &[String], _: Duration) -> TResult<ExecOutput> {
             self.log(format!("exec {vm}"));
-            Ok(ExecOutput { output: self.exec_output.clone(), exit_code: 0 })
+            Ok(ExecOutput { output: String::new(), exit_code: 0 })
         }
     }
 
@@ -311,26 +237,6 @@ mod tests {
         assert_eq!(fake.calls(), ["remove ph-a"]);
     }
 
-    const SSH_CONFIG: &str = "Include ~/.ssh/other\n# BEGIN boxd\nHost *.boxd *.boxd.sh boxd.sh\n    SetEnv X=1\n\nHost workflows.boxd workflows.boxd.sh\n    HostName workflows.boxd.sh\n# END boxd\n";
-
-    #[test]
-    fn finds_hosts_written_by_boxd() {
-        assert!(ssh_config_has_host(SSH_CONFIG, "workflows"));
-        assert!(!ssh_config_has_host(SSH_CONFIG, "work"));
-        assert!(!ssh_config_has_host(SSH_CONFIG, "ph-new"));
-        assert!(!ssh_config_has_host("# Host ph-a.boxd\n", "ph-a"));
-    }
-
-    #[test]
-    fn editor_link_opens_the_repo_over_the_boxd_host_alias() {
-        let fake = Fake { exec_output: "(notice)\n/home/boxd/repo\n".into(), ..Fake::with(&[]) };
-        assert_eq!(
-            editor_link(&fake, SSH_CONFIG, "workflows", Editor::Vscode).unwrap(),
-            "vscode://vscode-remote/ssh-remote+workflows.boxd/home/boxd/repo"
-        );
-        assert_eq!(editor_url(Editor::Cursor, "a", "/home/boxd"), "cursor://vscode-remote/ssh-remote+a.boxd/home/boxd");
-    }
-
     /// Real boxd: the Machines tab's calls on a throwaway `ph-e2e-…` machine.
     /// `PH_CLOUD_E2E=1 cargo test machines_on_a_real_vm -- --ignored --nocapture`
     #[test]
@@ -358,10 +264,6 @@ mod tests {
             assert!(create(&boxd, &vm).unwrap_err().contains("already exists"));
             let status = || list(&boxd).unwrap().into_iter().find(|m| m.name == vm).map(|m| m.status);
             wait_for("running", 300, &|| status().as_deref() == Some("running"));
-            wait_for("ssh entry", 180, &|| ssh_config_has_host(&read_ssh_config(), &vm));
-            let url = editor_link(&boxd, &read_ssh_config(), &vm, Editor::Vscode).unwrap();
-            eprintln!("editor link: {url}");
-            assert!(url.starts_with(&format!("vscode://vscode-remote/ssh-remote+{vm}.boxd/")));
             stop(&boxd, &vm).unwrap();
             wait_for("stopped", 180, &|| status().as_deref() != Some("running"));
             eprintln!("after stop: {:?}", status());
@@ -376,10 +278,4 @@ mod tests {
         assert!(list(&boxd).unwrap().iter().all(|m| m.name != vm), "{vm} is gone");
     }
 
-    #[test]
-    fn editor_link_explains_a_missing_ssh_entry_without_touching_the_vm() {
-        let fake = Fake::with(&[]);
-        assert!(editor_link(&fake, SSH_CONFIG, "ph-new", Editor::Vscode).unwrap_err().contains("no `ph-new.boxd` entry"));
-        assert!(fake.calls().is_empty());
-    }
 }

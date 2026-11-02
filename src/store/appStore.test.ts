@@ -392,10 +392,4 @@ describe("machine terminals", () => {
     expect(s().machineTerminals).toEqual([]);
     expect(s().bottomTab).toBe("shell");
   });
-
-  it("keeps the editor choice through a save and reload", () => {
-    useAppStore.getState().setMachineEditor("cursor");
-    const saved = useAppStore.getState().settings;
-    expect(migrateSettings({ settings: saved } as Parameters<typeof migrateSettings>[0]).machineEditor).toBe("cursor");
-  });
 });

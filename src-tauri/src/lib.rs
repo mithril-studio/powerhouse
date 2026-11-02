@@ -103,7 +103,6 @@ pub fn run() {
             cloud::machines::machine_start,
             cloud::machines::machine_stop,
             cloud::machines::machine_remove,
-            cloud::machines::machine_open_in_editor,
             telemetry::commands::telemetry_list_runs,
             telemetry::commands::telemetry_run_detail,
             telemetry::commands::telemetry_run_events,

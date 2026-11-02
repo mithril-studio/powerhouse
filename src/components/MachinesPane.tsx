@@ -2,11 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { useAppStore, type Branch } from "../store/appStore";
 import { runInShell } from "../lib/cloud";
 import {
-  EDITOR_LABEL,
   canStart,
   isRunning,
   machineCreate,
-  machineOpenInEditor,
   machineRemove,
   machineStart,
   machineStop,
@@ -165,7 +163,6 @@ export function MachineItem({
   run: (label: string, fn: () => Promise<void>) => void;
 }) {
   const openMachineTerminal = useAppStore((s) => s.openMachineTerminal);
-  const editor = useAppStore((s) => s.settings.machineEditor ?? "vscode");
   const [confirming, setConfirming] = useState(false);
   const [typed, setTyped] = useState("");
   const running = isRunning(m.status);
@@ -185,14 +182,6 @@ export function MachineItem({
       <div className="mt-1 flex flex-wrap gap-1">
         <button onClick={() => openMachineTerminal(m.name)} disabled={!!busy} title={`boxd connect ${m.name}`} className={action}>
           Connect
-        </button>
-        <button
-          onClick={() => run("Opening", () => machineOpenInEditor(m.name, editor))}
-          disabled={!!busy || !running}
-          title={running ? `Open over Remote-SSH (${m.name}.boxd)` : "Start the machine first"}
-          className={action}
-        >
-          {EDITOR_LABEL[editor]}
         </button>
         <button
           onClick={() => void navigator.clipboard.writeText(`ssh ${m.name}.boxd`)}

@@ -18,10 +18,9 @@ it("offers Delete only on Powerhouse-owned machines", () => {
   expect(theirs).toContain("Stop");
 });
 
-it("offers Start for a hibernated machine and disables the editor until it runs", () => {
+it("offers Start for a hibernated machine", () => {
   const html = render({ name: "e-learning", status: "hibernated", url: null, size: null, owned: false });
   expect(html).toContain(">Start<");
   expect(html).not.toContain(">Stop<");
-  expect(html).toMatch(/disabled="" title="Start the machine first"/);
 });
 

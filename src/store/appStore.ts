@@ -93,11 +93,7 @@ export interface Settings {
   memory?: MemorySettings;
   /** Right sidebar width in px, set by dragging its left edge. */
   rightSidebarWidth?: number;
-  /** Editor the Machines tab opens a VM in over Remote-SSH. Absent = VS Code. */
-  machineEditor?: MachineEditor;
 }
-
-export type MachineEditor = "vscode" | "cursor";
 
 export interface Branch {
   id: string;
@@ -312,7 +308,6 @@ interface AppState extends PersistedTree {
   openBottomPanel: (tab: BottomTab) => void;
   openMachineTerminal: (vm: string) => void;
   closeMachineTerminal: (vm: string) => void;
-  setMachineEditor: (editor: MachineEditor) => void;
   setShellStatus: (branchId: string, status: ChatStatus) => void;
   setPendingHandoff: (branchId: string, timerId: number) => void;
   clearPendingHandoff: (branchId: string) => void;
@@ -440,9 +435,6 @@ export function migrateSettings(
       ...(tree.settings.memory ? { memory: { ...DEFAULT_MEMORY_SETTINGS, ...tree.settings.memory } } : {}),
       ...(typeof tree.settings.rightSidebarWidth === "number"
         ? { rightSidebarWidth: tree.settings.rightSidebarWidth }
-        : {}),
-      ...(tree.settings.machineEditor === "cursor" || tree.settings.machineEditor === "vscode"
-        ? { machineEditor: tree.settings.machineEditor }
         : {}),
     };
   }
@@ -903,7 +895,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       machineTerminals: s.machineTerminals.filter((m) => m !== vm),
       bottomTab: s.bottomTab === `vm:${vm}` ? "shell" : s.bottomTab,
     })),
-  setMachineEditor: (editor) => set((s) => ({ settings: { ...s.settings, machineEditor: editor } })),
   setShellStatus: (branchId, status) =>
     set((s) => ({ shellStatus: { ...s.shellStatus, [branchId]: status } })),
 

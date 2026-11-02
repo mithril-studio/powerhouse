@@ -2,7 +2,6 @@
 // small rules the pane renders by. Shells are `boxd connect` in a bottom-panel
 // terminal; boxd brings its own SSH, so nothing here touches keys.
 import { invoke } from "@tauri-apps/api/core";
-import type { MachineEditor } from "../store/appStore";
 
 export interface MachineRow {
   name: string;
@@ -19,10 +18,6 @@ export const machineCreate = (name: string) => invoke<MachineRow>("machine_creat
 export const machineStart = (vm: string) => invoke<void>("machine_start", { vm });
 export const machineStop = (vm: string) => invoke<void>("machine_stop", { vm });
 export const machineRemove = (vm: string, confirm: string) => invoke<void>("machine_remove", { vm, confirm });
-export const machineOpenInEditor = (vm: string, editor: MachineEditor) =>
-  invoke<void>("machine_open_in_editor", { vm, editor });
-
-export const EDITOR_LABEL: Record<MachineEditor, string> = { vscode: "VS Code", cursor: "Cursor" };
 
 /** The command a VM terminal runs; names are validated by the backend list. */
 export const connectCommand = (vm: string) => `boxd connect ${vm}`;
