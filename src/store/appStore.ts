@@ -891,10 +891,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       bottomTab: `vm:${vm}`,
     })),
   closeMachineTerminal: (vm) =>
-    set((s) => ({
-      machineTerminals: s.machineTerminals.filter((m) => m !== vm),
-      bottomTab: s.bottomTab === `vm:${vm}` ? "shell" : s.bottomTab,
-    })),
+    set((s) => {
+      // The closed terminal is disposed before its exit event arrives, so drop
+      // its status here: left at "running", the next Connect would not spawn.
+      const { [`vm:${vm}`]: _closed, ...shellStatus } = s.shellStatus;
+      return {
+        machineTerminals: s.machineTerminals.filter((m) => m !== vm),
+        bottomTab: s.bottomTab === `vm:${vm}` ? "shell" : s.bottomTab,
+        shellStatus,
+      };
+    }),
   setShellStatus: (branchId, status) =>
     set((s) => ({ shellStatus: { ...s.shellStatus, [branchId]: status } })),
 

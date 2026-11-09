@@ -392,4 +392,16 @@ describe("machine terminals", () => {
     expect(s().machineTerminals).toEqual([]);
     expect(s().bottomTab).toBe("shell");
   });
+
+  it("forgets a closed terminal's running state, so reconnecting starts a new one", () => {
+    const s = () => useAppStore.getState();
+    s().openMachineTerminal("ph-a");
+    s().setShellStatus("vm:ph-a", "running");
+    s().setShellStatus("shell:b1", "running");
+    s().closeMachineTerminal("ph-a");
+    // Closing disposes the terminal before its exit event can arrive; a status
+    // left at "running" would make the next Connect show an empty tab.
+    expect(s().shellStatus["vm:ph-a"]).toBeUndefined();
+    expect(s().shellStatus["shell:b1"]).toBe("running");
+  });
 });
