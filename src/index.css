@@ -1,4 +1,4 @@
-/* Warm neutral workspace; monospace is reserved for code and technical data. */
+/* T3 Code default light/dark palette, adapted to Powerhouse semantic tokens. */
 @import "tailwindcss";
 @import "@xterm/xterm/css/xterm.css";
 
@@ -17,49 +17,77 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-mono);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-hover: var(--sidebar-row-hover);
+  --color-sidebar-selected: var(--sidebar-row-selected);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-accent: var(--accent);
+  --color-code-background: var(--code-background);
+  --font-sans: var(--app-font-sans);
+  --font-mono: var(--app-font-mono);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-xl: calc(var(--radius) + 4px);
 }
 
 :root {
   color-scheme: dark;
   --radius: 0.5rem;
-  --background: #161412;
-  --foreground: #e7e4df;
-  --card: #211f1c;
-  --muted: #302d29;
-  --muted-foreground: #aaa49c;
-  --primary: #ded3c3;
-  --primary-foreground: #211f1c;
-  --accent-brand: #cfbca2;
-  --destructive: #ed9690;
-  --success: #a9bd92;
-  --border: #39352f;
-  --input: #49433c;
-  --ring: #cfbca2;
-  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
-  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --background: #000000;
+  --foreground: #f5f5f5;
+  --card: #111111;
+  --muted: #111111;
+  --muted-foreground: #a3a3a3;
+  --primary: #346bf1;
+  --primary-foreground: #ffffff;
+  --accent-brand: #51a2ff;
+  --accent: #141414;
+  --destructive: #ff6467;
+  --success: #34d399;
+  --border: #191919;
+  --input: #2e2e2e;
+  --ring: #346bf1;
+  --sidebar: #000000;
+  --sidebar-row-hover: #131313;
+  --sidebar-row-selected: #1a1b1b;
+  --sidebar-border: #141414;
+  --message-surface: #1e1e1e;
+  --code-background: #111111;
+  --terminal-background: #000000;
+  --terminal-foreground: #f5f5f5;
+  --terminal-cursor: #b4cbff;
+  --terminal-selection-background: #343a47;
+  --app-font-sans: -apple-system, BlinkMacSystemFont, "Inter Variable", "Segoe UI", system-ui, sans-serif;
+  --app-font-mono: ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
 }
 
 :root.light {
   color-scheme: light;
-  --background: #faf9f6;
-  --foreground: #292621;
-  --card: #f1efe9;
-  --muted: #e7e3db;
-  --muted-foreground: #6c655c;
-  --primary: #433b31;
-  --primary-foreground: #faf9f6;
-  --accent-brand: #765630;
-  --destructive: #ac3833;
-  --success: #4e6c36;
-  --border: #d9d3c9;
-  --input: #c8bfb1;
-  --ring: #765630;
+  --background: #fcfcfc;
+  --foreground: #27272a;
+  --card: #ffffff;
+  --muted: #fafafa;
+  --muted-foreground: #71717b;
+  --primary: #1b4ed8;
+  --primary-foreground: #ffffff;
+  --accent-brand: #1b4ed8;
+  --accent: #f4f4f5;
+  --destructive: #c10007;
+  --success: #047857;
+  --border: #e4e4e7;
+  --input: #d4d4d8;
+  --ring: #1b4ed8;
+  --sidebar: #fafafa;
+  --sidebar-row-hover: #f4f4f5;
+  --sidebar-row-selected: #ffffff;
+  --sidebar-border: #e4e4e7;
+  --message-surface: #ebebed;
+  --code-background: #ffffff;
+  --terminal-background: #fcfcfc;
+  --terminal-foreground: #27272a;
+  --terminal-cursor: #26384e;
+  --terminal-selection-background: #d0d6dd;
 }
 
 @layer base {
@@ -74,7 +102,10 @@
     cursor: default;
     overscroll-behavior: none;
   }
+  * { scrollbar-width: thin; scrollbar-color: var(--input) transparent; }
   button { cursor: pointer; }
+  input, textarea, select { accent-color: var(--primary); }
+  ::selection { background: color-mix(in srgb, var(--primary) 25%, transparent); }
   button:disabled { cursor: default; }
   button:focus-visible, summary:focus-visible, a:focus-visible {
     outline: 2px solid var(--ring);
@@ -96,11 +127,13 @@
     align-items: center;
     justify-content: center;
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-md);
+    padding: 0.375rem 0.625rem;
+    font-weight: 500;
     color: var(--foreground);
     transition: background-color 0.1s ease;
   }
-  .pi-btn:hover { background: var(--muted); }
+  .pi-btn:hover { background: var(--accent); }
   .pi-btn:disabled { opacity: 0.45; }
   .pi-btn:disabled:hover { background: transparent; }
   .pi-btn-primary { background: var(--primary); border-color: var(--primary); color: var(--primary-foreground); }
@@ -113,7 +146,7 @@
   align-self: flex-end;
   max-width: 85%;
   border-radius: var(--radius);
-  background: var(--muted);
+  background: var(--message-surface);
   padding: 0.75rem 1rem;
   margin-bottom: 0.5rem;
 }
@@ -140,7 +173,7 @@
 .chat-markdown a { color: var(--accent-brand); text-decoration: underline; text-underline-offset: 3px; }
 .chat-markdown blockquote { border-left: 2px solid var(--input); padding-left: 1rem; color: var(--muted-foreground); }
 .chat-markdown hr { margin-block: 1.5rem; }
-.chat-markdown code { font-family: var(--font-mono); font-size: 0.85em; background: var(--card); border-radius: 4px; padding: 0.15rem 0.3rem; }
+.chat-markdown code { font-family: var(--app-font-mono); font-size: 0.85em; background: var(--card); border-radius: 4px; padding: 0.15rem 0.3rem; }
 .chat-code { border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); margin-block: 1rem; overflow: hidden; }
 .chat-code > button { display: block; margin-left: auto; padding: 0.4rem 0.75rem; color: var(--muted-foreground); font-size: 12px; }
 .chat-code > pre { overflow-x: auto; padding: 0 1rem 1rem; line-height: 1.65; }
@@ -149,8 +182,8 @@
 .chat-table table { border-collapse: collapse; width: 100%; font-size: 13px; }
 .chat-table th, .chat-table td { border: 1px solid var(--border); padding: 0.5rem 0.75rem; text-align: left; }
 .chat-table th { background: var(--card); }
-.composer-surface { background: var(--card); border: 1px solid var(--input); border-radius: 12px; padding: 1rem; }
-.composer-surface:focus-within { border-color: var(--accent-brand); }
+.composer-surface { background: var(--card); border: 1px solid var(--input); border-radius: 16px; padding: 1rem; box-shadow: 0 2px 12px rgb(0 0 0 / 4%); transition: border-color 0.15s ease; }
+.composer-surface:focus-within { border-color: color-mix(in srgb, var(--foreground) 30%, var(--border)); }
 .composer-agent { font-size: 12px; border-radius: 4px; padding: 0.25rem; }
 .composer-agent:hover { background: var(--muted); }
 .jump-latest { position: absolute; bottom: 0.75rem; left: 50%; transform: translateX(-50%); background: var(--card); padding: 0.4rem 0.8rem; font-size: 12px; white-space: nowrap; }

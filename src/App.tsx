@@ -6,6 +6,8 @@ import { selectedBranch, selectedRepo, useAppStore } from "./store/appStore";
 import { hydrateFromDisk, startPersistence } from "./store/persist";
 import { startQueueSync } from "./lib/queueSync";
 import { acpKillAll, githubAccount, ptyKillAll } from "./lib/ipc";
+import { syncTerminalThemes } from "./lib/terminalRegistry";
+import { pickAndAddRepo } from "./lib/actions";
 import { initHandoff } from "./lib/handoff";
 import { startCloudSync } from "./lib/cloud";
 import { useShortcuts } from "./hooks/useShortcuts";
@@ -70,6 +72,7 @@ export default function App() {
   // Apply the color theme to <html> (light overrides live under `:root.light`).
   useEffect(() => {
     document.documentElement.classList.toggle("light", theme === "light");
+    syncTerminalThemes();
   }, [theme]);
 
   useEffect(() => {
@@ -95,7 +98,7 @@ export default function App() {
   return (
     <div className="flex h-screen overflow-hidden">
       <div className="flex shrink-0" inert={settingsOpen}><Sidebar /></div>
-      {/* Keep chats and terminals mounted while another workspace is visible. */}
+      {/* Keep chats and terminals mounted while Settings owns focus. */}
       <main aria-label="Project workspace" inert={settingsOpen} className="flex min-w-0 flex-1 flex-col">
         <TabBar repo={repo} branch={branch} />
         <div className="relative flex-1 overflow-hidden">
@@ -119,16 +122,23 @@ export default function App() {
               ),
             )}
           {hydrated && (!branch || branch.chats.length === 0) && (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <p className="text-muted-foreground">
-                {repos.length === 0
-                  ? "Add a project to get started"
-                  : !repo
-                    ? "Select a project"
-                    : !branch
-                      ? "Create a branch — ⌘D"
-                      : "Open a chat — ⌘T"}
-              </p>
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-5 px-8 text-center">
+              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" className="size-10 text-muted-foreground/40">
+                <path strokeLinejoin="round" d="m13 2-9 12h7l-1 8 10-13h-8l1-7Z" />
+              </svg>
+              <div>
+                <h1 className="text-lg font-medium tracking-tight">{repos.length === 0 ? "Your next idea starts here" : !branch ? "Ready when you are" : "Start a conversation"}</h1>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  {repos.length === 0 ? "Add a project to start building with your agents." : !repo ? "Choose a project from the sidebar." : !branch ? "Create a branch to give your work a space of its own." : "Open a chat and tell your agent what you want to build."}
+                </p>
+              </div>
+              {repos.length === 0 ? (
+                <button onClick={() => void pickAndAddRepo()} className="pi-btn pi-btn-primary gap-2 text-xs"><span aria-hidden="true">+</span> Add project</button>
+              ) : repo && (
+                <button onClick={() => branch ? useAppStore.getState().openChatPicker() : useAppStore.getState().openBranchModal(repo.id)} className="pi-btn gap-3 text-xs">
+                  {branch ? "New chat" : "New branch"}<kbd className="text-muted-foreground">{branch ? "⌘T" : "⌘D"}</kbd>
+                </button>
+              )}
             </div>
           )}
         </div>

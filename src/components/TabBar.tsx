@@ -25,11 +25,11 @@ export function TabBar({ repo, branch }: Props) {
   return (
     <div
       data-tauri-drag-region
-      className="flex h-11 shrink-0 items-center gap-1 border-b border-border bg-card px-2"
+      className="flex h-11 shrink-0 items-center gap-1 border-b border-border bg-background px-3"
     >
       {repo && branch && (
         <>
-          <span className="mr-2 max-w-48 truncate pl-1 font-mono text-xs text-muted-foreground">
+          <span className="mr-2 max-w-48 truncate pl-1 text-xs text-muted-foreground">
             {repo.name}/{branch.name}
           </span>
           {branch.chats.map((chat) => {
@@ -39,10 +39,10 @@ export function TabBar({ repo, branch }: Props) {
               <div
                 key={chat.id}
                 onClick={() => setActiveChat(repo.id, branch.id, chat.id)}
-                className={`group flex h-11 items-center gap-2 border-b-2 pl-3 pr-1 ${
+                className={`group flex h-8 items-center gap-2 rounded-md pl-3 pr-1 text-xs ${
                   active
-                    ? "border-accent-brand text-foreground"
-                    : "border-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                    ? "bg-muted text-foreground"
+                    : "text-muted-foreground hover:bg-accent hover:text-foreground"
                 }`}
               >
                 <span className="max-w-32 truncate">{chat.title}</span>

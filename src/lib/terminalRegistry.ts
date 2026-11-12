@@ -20,12 +20,7 @@ export const markAutoSpawn = (chatId: string) => autoSpawn.add(chatId);
 export const consumeAutoSpawn = (chatId: string) => autoSpawn.delete(chatId);
 export const hasTerminal = (chatId: string) => registry.has(chatId);
 
-const TERMINAL_THEME = {
-  background: "#0d0e11",
-  foreground: "#d6d9e0",
-  cursor: "#d6d9e0",
-  cursorAccent: "#0d0e11",
-  selectionBackground: "#2e3550",
+const TERMINAL_ANSI_COLORS = {
   black: "#22252c",
   red: "#f47067",
   green: "#57ab5a",
@@ -44,6 +39,32 @@ const TERMINAL_THEME = {
   brightWhite: "#f0f3f6",
 };
 
+/** Resolve the same semantic colors as the app instead of a separate terminal skin. */
+function terminalTheme() {
+  const style = getComputedStyle(document.documentElement);
+  const color = (name: string) => style.getPropertyValue(name).trim();
+  return {
+    ...TERMINAL_ANSI_COLORS,
+    ...(style.colorScheme === "light" ? {
+      black: "#24292f", red: "#cf222e", green: "#116329", yellow: "#9a6700",
+      blue: "#0969da", magenta: "#8250df", cyan: "#1b7c83", white: "#6e7781",
+      brightBlack: "#57606a", brightRed: "#a40e26", brightGreen: "#1a7f37", brightYellow: "#7d4e00",
+      brightBlue: "#0550ae", brightMagenta: "#6639ba", brightCyan: "#055d69", brightWhite: "#24292f",
+    } : {}),
+    background: color("--terminal-background"),
+    foreground: color("--terminal-foreground"),
+    cursor: color("--terminal-cursor"),
+    cursorAccent: color("--terminal-background"),
+    selectionBackground: color("--terminal-selection-background"),
+  };
+}
+
+export function syncTerminalThemes() {
+  if (registry.size === 0) return;
+  const theme = terminalTheme();
+  for (const { term } of registry.values()) term.options.theme = theme;
+}
+
 /** Builds and registers an xterm instance with no PTY wiring. Its `dispose`
  *  only tears down the terminal; `spawnTerminal` replaces it once it wires
  *  live subscriptions. */
@@ -54,7 +75,7 @@ function createTerminal(chatId: string, container: HTMLElement): Entry {
     cursorBlink: true,
     macOptionIsMeta: true,
     scrollback: 10_000,
-    theme: TERMINAL_THEME,
+    theme: terminalTheme(),
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
@@ -67,7 +88,7 @@ function createTerminal(chatId: string, container: HTMLElement): Entry {
       !e.ctrlKey &&
       !e.altKey &&
       !e.shiftKey &&
-      ["d", "t", "w"].includes(e.key.toLowerCase())
+      ["d", "t", "w", ","].includes(e.key.toLowerCase())
     ) {
       return false;
     }

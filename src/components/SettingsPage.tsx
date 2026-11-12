@@ -106,18 +106,28 @@ function AppearanceSection() {
   ];
 
   return (
-    <div className="inline-flex rounded-lg border border-border bg-card p-0.5">
+    <div className="grid max-w-md grid-cols-2 gap-3" role="group" aria-label="Color theme">
       {options.map((opt) => (
         <button
           key={opt.value}
           onClick={() => setTheme(opt.value)}
-          className={`h-8 rounded-md px-4 text-xs font-medium transition-colors ${
-            theme === opt.value
-              ? "bg-primary text-primary-foreground"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
+          aria-pressed={theme === opt.value}
+          className={`rounded-xl border p-2 text-left transition-colors ${theme === opt.value ? "border-primary ring-1 ring-primary" : "border-border hover:border-input"}`}
         >
-          {opt.label}
+          <div aria-hidden="true" className={`flex h-24 overflow-hidden rounded-md border ${opt.value === "dark" ? "border-[#191919] bg-black" : "border-[#e4e4e7] bg-[#fcfcfc]"}`}>
+            <div className={`w-1/3 space-y-2 border-r p-2 ${opt.value === "dark" ? "border-[#191919]" : "border-[#e4e4e7] bg-[#fafafa]"}`}>
+              <div className={`h-1.5 w-3/4 rounded-full ${opt.value === "dark" ? "bg-[#a3a3a3]" : "bg-[#71717b]"}`} />
+              <div className={`h-3 rounded-sm ${opt.value === "dark" ? "bg-[#1a1b1b]" : "bg-[#e4e4e7]"}`} />
+              <div className={`h-1.5 w-2/3 rounded-full ${opt.value === "dark" ? "bg-[#333333]" : "bg-[#d4d4d8]"}`} />
+            </div>
+            <div className="flex flex-1 flex-col justify-end p-2">
+              <div className={`h-6 rounded-md border ${opt.value === "dark" ? "border-[#2e2e2e] bg-[#111111]" : "border-[#d4d4d8] bg-white"}`} />
+            </div>
+          </div>
+          <span className="mt-2 flex items-center justify-between px-1 text-xs font-medium">
+            {opt.label}
+            {theme === opt.value && <span aria-hidden="true" className="text-primary">✓</span>}
+          </span>
         </button>
       ))}
     </div>
@@ -571,6 +581,7 @@ export function SettingsPage() {
   const openSettings = useAppStore((s) => s.openSettings);
   const closeSettings = useAppStore((s) => s.closeSettings);
   const navRef = useRef<HTMLElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -581,6 +592,19 @@ export function SettingsPage() {
         e.preventDefault();
         e.stopImmediatePropagation();
         closeSettings();
+      } else if (e.key === "Tab") {
+        const controls = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], [tabindex="0"]',
+        ) ?? []).filter((element) => element.getClientRects().length > 0);
+        const first = controls[0];
+        const last = controls[controls.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last?.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first?.focus();
+        }
       }
     };
     window.addEventListener("keydown", onKeyDown, true);
@@ -594,8 +618,8 @@ export function SettingsPage() {
   const current = SETTINGS_SECTIONS.find((item) => item.id === section)!;
 
   return (
-    <div role="dialog" aria-modal="true" aria-label="Settings" className="fixed inset-0 z-50 flex bg-background">
-      <aside className="flex w-48 shrink-0 flex-col border-r border-border bg-card sm:w-60">
+    <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Settings" className="fixed inset-0 z-50 flex bg-background">
+      <aside className="flex w-48 shrink-0 flex-col border-r border-sidebar-border bg-sidebar sm:w-60">
         <div data-tauri-drag-region className="h-11 shrink-0" />
         <div className="px-3 pb-4">
           <button onClick={() => closeSettings()} className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground">
@@ -609,7 +633,7 @@ export function SettingsPage() {
               key={item.id}
               onClick={() => openSettings(item.id)}
               aria-current={section === item.id ? "page" : undefined}
-              className={`flex h-9 items-center rounded-md px-3 text-left text-sm transition-colors ${section === item.id ? "bg-muted text-foreground font-medium" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+              className={`flex h-9 items-center rounded-md px-3 text-left text-sm transition-colors ${section === item.id ? "bg-sidebar-selected text-foreground font-medium" : "text-muted-foreground hover:bg-sidebar-hover hover:text-foreground"}`}
             >
               {item.label}
             </button>

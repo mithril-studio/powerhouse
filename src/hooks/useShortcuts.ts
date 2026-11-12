@@ -12,6 +12,12 @@ export function useShortcuts() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const s = useAppStore.getState();
+      if (e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.key === ",") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!s.settingsOpen) s.openSettings();
+        return;
+      }
       // Settings owns focus; workspace shortcuts must not mutate a covered chat.
       if (s.settingsOpen) return;
 

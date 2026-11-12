@@ -130,10 +130,10 @@ export function TelemetryPage() {
         debounceRef.current = null;
         refetch();
       }, REFETCH_DEBOUNCE_MS);
-    });
+    }).catch(() => null);
     return () => {
       if (debounceRef.current != null) window.clearTimeout(debounceRef.current);
-      void unlisten.then((fn) => fn());
+      void unlisten.then((fn) => fn?.());
     };
   }, [refetch]);
 
@@ -147,115 +147,115 @@ export function TelemetryPage() {
 
   return (
     <section aria-label="Telemetry">
-          <div className="mb-4 flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">Run history, usage, and agent health.</p>
-            <button
-              type="button"
-              disabled={(stats?.activeRuns ?? 0) > 0}
-              onClick={() => {
-                telemetryRebuild()
-                  .then(() => refetch())
-                  .catch(() => {});
-              }}
-              title={
-                (stats?.activeRuns ?? 0) > 0
-                  ? "Wait for active runs to finish before rebuilding"
-                  : "Wipe projections and re-derive them from raw events"
-              }
-              className="pi-btn text-[11px] disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Rebuild projections
-            </button>
-          </div>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">Run history, usage, and agent health.</p>
+        <button
+          type="button"
+          disabled={(stats?.activeRuns ?? 0) > 0}
+          onClick={() => {
+            telemetryRebuild()
+              .then(() => refetch())
+              .catch(() => {});
+          }}
+          title={
+            (stats?.activeRuns ?? 0) > 0
+              ? "Wait for active runs to finish before rebuilding"
+              : "Wipe projections and re-derive them from raw events"
+          }
+          className="pi-btn text-[11px] disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Rebuild projections
+        </button>
+      </div>
 
-          <div className="mb-4 flex gap-4 border-b border-border">
-            {TABS.map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => setTab(t)}
-                className={`-mb-px border-b pb-1.5 text-[11px] font-semibold uppercase tracking-wider ${
-                  tab === t
-                    ? "border-accent-brand text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
+      <div className="mb-4 flex gap-4 border-b border-border">
+        {TABS.map((t) => (
+          <button
+            key={t}
+            type="button"
+            onClick={() => setTab(t)}
+            className={`-mb-px border-b pb-1.5 text-[11px] font-semibold uppercase tracking-wider ${
+              tab === t
+                ? "border-accent-brand text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
 
-          {!unavailable && <HealthStrip checks={checks} />}
+      {!unavailable && <HealthStrip checks={checks} />}
 
-          {unavailable ? (
-            <p className="text-xs text-muted-foreground">
-              Telemetry database unavailable — check the dev console for details.
-            </p>
-          ) : tab === "Tasks" ? (
-            <TasksView refreshKey={refreshKey} />
-          ) : tab === "Proposals" ? (
-            <ProposalsView refreshKey={refreshKey} />
-          ) : (
-            <>
-              {stats && (
-                <div className="mb-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
-                  <StatTile label="runs" value={String(stats.totalRuns)} />
-                  <StatTile label="active" value={String(stats.activeRuns)} />
-                  <StatTile
-                    label="failed"
-                    value={String(stats.failedRuns + stats.interruptedRuns)}
-                    alert={stats.failedRuns + stats.interruptedRuns > 0}
-                  />
-                  <StatTile label="turns" value={String(stats.totalTurns)} />
-                  <StatTile label="tool calls" value={String(stats.totalToolCalls)} />
-                  <StatTile
-                    label="tokens in/out"
-                    value={`${fmtTokens(stats.inputTokens)}/${fmtTokens(stats.outputTokens)}`}
-                  />
-                  <StatTile label="cost" value={fmtCost(stats.costUsd)} />
-                  <StatTile
-                    label="usage coverage"
-                    value={usageCoveragePct(stats.instrumentedRuns, stats.runsWithUsage)}
-                  />
-                  {(stats.droppedEvents > 0 || stats.parseErrors > 0) && (
-                    <StatTile
-                      label="dropped / unparsed"
-                      value={`${stats.droppedEvents}/${stats.parseErrors}`}
-                      alert
-                    />
-                  )}
-                </div>
+      {unavailable ? (
+        <p className="text-xs text-muted-foreground">
+          Telemetry database unavailable — check the dev console for details.
+        </p>
+      ) : tab === "Tasks" ? (
+        <TasksView refreshKey={refreshKey} />
+      ) : tab === "Proposals" ? (
+        <ProposalsView refreshKey={refreshKey} />
+      ) : (
+        <>
+          {stats && (
+            <div className="mb-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
+              <StatTile label="runs" value={String(stats.totalRuns)} />
+              <StatTile label="active" value={String(stats.activeRuns)} />
+              <StatTile
+                label="failed"
+                value={String(stats.failedRuns + stats.interruptedRuns)}
+                alert={stats.failedRuns + stats.interruptedRuns > 0}
+              />
+              <StatTile label="turns" value={String(stats.totalTurns)} />
+              <StatTile label="tool calls" value={String(stats.totalToolCalls)} />
+              <StatTile
+                label="tokens in/out"
+                value={`${fmtTokens(stats.inputTokens)}/${fmtTokens(stats.outputTokens)}`}
+              />
+              <StatTile label="cost" value={fmtCost(stats.costUsd)} />
+              <StatTile
+                label="usage coverage"
+                value={usageCoveragePct(stats.instrumentedRuns, stats.runsWithUsage)}
+              />
+              {(stats.droppedEvents > 0 || stats.parseErrors > 0) && (
+                <StatTile
+                  label="dropped / unparsed"
+                  value={`${stats.droppedEvents}/${stats.parseErrors}`}
+                  alert
+                />
               )}
-
-              <div className="flex flex-col gap-6 xl:flex-row">
-                <div className="min-w-0 flex-1">
-                  <h2 className="mb-1 border-b border-border pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    Runs
-                  </h2>
-                  <RunsTable
-                    runs={runs}
-                    selected={selected}
-                    onSelect={(id) => setSelected((cur) => (cur === id ? null : id))}
-                    now={Date.now()}
-                  />
-                  {runs.length >= RUNS_PAGE && (
-                    <button
-                      type="button"
-                      onClick={loadOlder}
-                      className="pi-btn mt-2 text-[11px]"
-                    >
-                      Load older runs
-                    </button>
-                  )}
-                </div>
-                {selected && (
-                  <div className="w-full shrink-0 xl:w-[26rem]">
-                    <RunDetailPane runId={selected} refreshKey={refreshKey} />
-                  </div>
-                )}
-              </div>
-            </>
+            </div>
           )}
+
+          <div className="flex flex-col gap-6 xl:flex-row">
+            <div className="min-w-0 flex-1">
+              <h2 className="mb-1 border-b border-border pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Runs
+              </h2>
+              <RunsTable
+                runs={runs}
+                selected={selected}
+                onSelect={(id) => setSelected((cur) => (cur === id ? null : id))}
+                now={Date.now()}
+              />
+              {runs.length >= RUNS_PAGE && (
+                <button
+                  type="button"
+                  onClick={loadOlder}
+                  className="pi-btn mt-2 text-[11px]"
+                >
+                  Load older runs
+                </button>
+              )}
+            </div>
+            {selected && (
+              <div className="w-full shrink-0 xl:w-[26rem]">
+                <RunDetailPane runId={selected} refreshKey={refreshKey} />
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </section>
   );
 }

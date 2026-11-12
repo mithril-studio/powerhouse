@@ -12,11 +12,14 @@ export function RepoItem({ repo }: { repo: Repo }) {
     <div className="mb-1">
       <div
         onClick={() => select(repo.id, null)}
-        className={`group flex h-7 items-center gap-1.5 rounded-md px-1.5 ${
-          selected ? "bg-muted" : "hover:bg-muted/50"
+        className={`group flex h-8 items-center gap-2 rounded-md px-2 ${
+          selected ? "bg-sidebar-selected" : "hover:bg-sidebar-hover"
         }`}
       >
-        <span className="min-w-0 flex-1 truncate font-medium">{repo.name}</span>
+        <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.3" className="size-4 shrink-0 text-muted-foreground">
+          <path d="M2.5 5a1.5 1.5 0 0 1 1.5-1.5h4l2 2h6a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 15Z" strokeLinejoin="round" />
+        </svg>
+        <span className="min-w-0 flex-1 truncate text-xs font-medium">{repo.name}</span>
         <span className="hidden shrink-0 font-mono text-[11px] text-muted-foreground group-hover:inline">
           {repo.defaultBranch}
         </span>

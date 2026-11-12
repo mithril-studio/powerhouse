@@ -47,10 +47,10 @@ export function BranchItem({ repo, branch }: Props) {
   return (
     <div
       onClick={onSelect}
-      className={`group flex h-7 cursor-default items-center gap-2 rounded-md pl-6 pr-1.5 ${
+      className={`group flex h-8 cursor-default items-center gap-2 rounded-md pl-8 pr-2 ${
         selected
-          ? "bg-muted text-foreground"
-          : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+          ? "bg-sidebar-selected text-foreground"
+          : "text-muted-foreground hover:bg-sidebar-hover hover:text-foreground"
       }`}
     >
       <span
@@ -65,7 +65,7 @@ export function BranchItem({ repo, branch }: Props) {
         }`}
         aria-hidden
       />
-      <span className="min-w-0 flex-1 truncate font-mono text-xs">{branch.name}</span>
+      <span className="min-w-0 flex-1 truncate text-xs">{branch.name}</span>
       {quickStage ? (
         <span
           title={`Sending to cloud: ${QUICK_STAGE_LABEL[quickStage] ?? quickStage}`}

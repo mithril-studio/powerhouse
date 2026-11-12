@@ -88,7 +88,7 @@ function PanelTerminal({ branch, kind, active, agentCmd }: TerminalProps) {
 }
 
 function tabClass(active: boolean): string {
-  return `h-6 px-3 text-[11px] font-mono uppercase tracking-wider ${
+  return `h-8 px-3 text-xs ${
     active
       ? "border-b border-accent-brand text-foreground"
       : "text-muted-foreground hover:text-foreground"
@@ -115,7 +115,7 @@ export function BottomPanel() {
 
   return (
     <div className={open ? "flex h-64 shrink-0 flex-col border-t border-border" : "hidden"}>
-      <div className="flex h-6 shrink-0 items-center gap-1 border-b border-border bg-background px-2">
+      <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border bg-background px-2">
         <button className={tabClass(tab === "shell")} onClick={() => setBottomTab("shell")}>
           Shell
         </button>
