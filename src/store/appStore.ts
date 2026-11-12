@@ -27,6 +27,7 @@ export interface Chat {
   agentId?: string;
   /** When set, the agent is launched via its promptTemplate instead of bare command. */
   initialPrompt?: string;
+  initialPromptState?: "sending" | "sent";
   /**
    * Present once the chat has launched a resumable agent session; value is the
    * id passed to the agent's `--session-id` (initially `chat.id`). Its presence
