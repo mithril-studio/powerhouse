@@ -11,7 +11,7 @@ interface Props {
 }
 
 const buttonClass =
-  "h-7 border border-border px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:border-accent-brand disabled:opacity-40";
+  "pi-btn h-8 text-xs";
 
 export function AcpConnectionPanel({
   state,
@@ -32,8 +32,8 @@ export function AcpConnectionPanel({
           : "Agent is not running";
 
   return (
-    <div className="chat-column border-t border-border bg-background px-6 py-4">
-      <div className="flex items-center justify-between gap-4">
+    <div className="shrink-0 px-6 pb-5 pt-3">
+      <div className="chat-column connection-card flex flex-wrap items-center justify-between gap-4">
         <div>
           <p className="text-xs text-foreground">
             <span className="mr-2 text-accent-brand">!</span>
@@ -57,9 +57,9 @@ export function AcpConnectionPanel({
           <button
             disabled={state === "starting"}
             onClick={onStartFresh}
-            className="h-7 border border-accent-brand/70 px-2 text-xs text-foreground hover:bg-muted disabled:opacity-40"
+            className="pi-btn pi-btn-primary h-8 text-xs"
           >
-            Start fresh
+            {resumable ? "Start fresh" : `Start ${agentName}`}
           </button>
         </div>
       </div>

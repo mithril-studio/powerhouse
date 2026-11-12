@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import type { ToolCallContent } from "@agentclientprotocol/sdk";
 import type { AcpTranscriptItem } from "../../lib/acpTranscript";
 import { ChatImage } from "./ChatImage";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { CopyButton } from "./CopyButton";
+import { ToolActivity } from "./ToolActivity";
 
 const statusGlyph: Record<string, string> = {
   pending: "·",
@@ -11,116 +12,14 @@ const statusGlyph: Record<string, string> = {
   failed: "×",
 };
 
-function readableValue(value: unknown): string {
-  if (value == null) return "";
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-function ToolContent({ item }: { item: ToolCallContent }) {
-  if (item.type === "content") {
-    if (item.content.type === "image") return <ChatImage mimeType={item.content.mimeType} data={item.content.data} />;
-    return item.content.type === "text" ? (
-      <pre className="whitespace-pre-wrap break-words text-xs text-muted-foreground">
-        {item.content.text}
-      </pre>
-    ) : (
-      <p className="text-xs text-muted-foreground">{item.content.type} output</p>
-    );
-  }
-  if (item.type === "diff") {
-    return (
-      <div className="space-y-2">
-        <p className="text-xs text-muted-foreground">{item.path}</p>
-        <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words border-l border-border bg-card py-1 pl-3 text-xs">
-          {item.newText}
-        </pre>
-      </div>
-    );
-  }
-  return <p className="text-xs text-muted-foreground">Terminal {item.terminalId}</p>;
-}
-
-function ToolItem({ item }: { item: Extract<AcpTranscriptItem, { type: "tool" }> }) {
-  const details = Boolean(
-    item.content?.length ||
-      item.locations?.length ||
-      item.rawInput !== undefined ||
-      item.rawOutput !== undefined,
-  );
-  const header = (
-    <>
-      <span
-        className={
-          item.status === "failed"
-            ? "text-destructive"
-            : item.status === "in_progress"
-              ? "text-accent-brand"
-              : "text-muted-foreground"
-        }
-        aria-hidden
-      >
-        {statusGlyph[item.status ?? "pending"] ?? "·"}
-      </span>
-      <span className="truncate text-xs text-foreground/90">{item.title}</span>
-      {item.kind && (
-        <span className="ml-auto shrink-0 text-[10px] text-muted-foreground/70">
-          {item.kind}
-        </span>
-      )}
-    </>
-  );
-
-  if (!details) {
-    return <div className="flex items-center gap-2 py-0.5">{header}</div>;
-  }
-  return (
-    <div className="chat-tool">
-    <details className="group py-0.5">
-      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-md py-1 outline-none focus-visible:ring-2 focus-visible:ring-ring">
-        <span className="tool-chevron text-muted-foreground" aria-hidden>›</span>
-        {header}
-      </summary>
-      <div className="ml-1 mt-1 space-y-2 border-l border-border py-1 pl-4">
-        {item.locations?.map((location) => (
-          <p key={`${location.path}:${location.line ?? ""}`} className="text-xs text-muted-foreground">
-            {location.path}{location.line ? `:${location.line}` : ""}
-          </p>
-        ))}
-        {item.content?.filter((content) => !(content.type === "content" && content.content.type === "image")).map((content, index) => (
-          <ToolContent key={index} item={content} />
-        ))}
-        {item.rawInput !== undefined && (
-          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs text-muted-foreground">
-            {readableValue(item.rawInput)}
-          </pre>
-        )}
-        {item.rawOutput !== undefined && (
-          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs text-muted-foreground">
-            {readableValue(item.rawOutput)}
-          </pre>
-        )}
-      </div>
-    </details>
-    {item.content?.filter((content) => content.type === "content" && content.content.type === "image").map((content, index) => (
-      <ToolContent key={index} item={content} />
-    ))}
-    </div>
-  );
-}
-
 function TranscriptItem({ item }: { item: AcpTranscriptItem }) {
   if (item.type === "image") return <ChatImage mimeType={item.mimeType} data={item.data} />;
-  if (item.type === "tool") return <ToolItem item={item} />;
+  if (item.type === "tool") return <ToolActivity items={[item]} />;
   if (item.type === "plan") {
     return (
-      <section className="border-l border-accent-brand/40 pl-3" aria-label="Agent plan">
-        <p className="mb-1 text-xs text-accent-brand">
-          ◇ plan
+      <section className="agent-plan" aria-label="Agent plan">
+        <p className="mb-3 text-xs font-medium text-foreground">
+          Plan
         </p>
         <ol className="space-y-1">
           {item.entries.map((entry, index) => (
@@ -139,9 +38,9 @@ function TranscriptItem({ item }: { item: AcpTranscriptItem }) {
   }
   if (item.role === "thought") {
     return (
-      <details className="text-xs text-muted-foreground">
-        <summary className="cursor-default outline-none focus-visible:bg-muted">
-          ◇ thinking
+      <details className="agent-thought text-xs text-muted-foreground">
+        <summary className="cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          Thinking
         </summary>
         <div className="mt-3 border-l border-border pl-4"><ChatMarkdown text={item.text} /></div>
       </details>
@@ -169,10 +68,22 @@ function TranscriptItem({ item }: { item: AcpTranscriptItem }) {
     );
   }
   return (
-    <article aria-label="Agent response">
+    <article aria-label="Agent response" className="agent-response group">
       <ChatMarkdown text={item.text} />
+      <div className="response-actions"><CopyButton text={item.text} label="Copy response" /></div>
     </article>
   );
+}
+
+/** Keep each message in order and compact only adjacent tool calls. */
+function transcriptBlocks(items: AcpTranscriptItem[]): AcpTranscriptItem[][] {
+  const blocks: AcpTranscriptItem[][] = [];
+  for (const item of items) {
+    const previous = blocks[blocks.length - 1];
+    if (item.type === "tool" && previous?.[0].type === "tool") previous.push(item);
+    else blocks.push([item]);
+  }
+  return blocks;
 }
 
 export function AcpTranscript({
@@ -211,26 +122,30 @@ export function AcpTranscript({
         followRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
         setShowLatest(!followRef.current);
       }}
-      className="h-full overflow-y-auto px-6 py-8"
+      className="transcript-scroll h-full overflow-y-auto px-6 py-8"
     >
       <div className="chat-column flex flex-col gap-5">
         {items.length === 0 && (
-          <div className="py-8" role="status">
-            <p className="text-sm text-accent-brand">Powerhouse / {agentName}</p>
-            <p className="mt-1 text-xs text-muted-foreground">{branchName}</p>
-            <p className="mt-4 text-xs text-muted-foreground">
-              ⌘⇧P commands{commandCount > 0 ? ` · ${commandCount} from agent` : ""}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Type <span className="text-foreground">/</span> for agent commands and skills.
-            </p>
+          <div className="chat-welcome" role="status">
+            <div className="agent-mark" aria-hidden="true">✳</div>
+            <h2>What are we building?</h2>
+            <p>Ask {agentName} to explore, build, or fix something in your project.</p>
+            <span className="chat-context">⑂ {branchName}</span>
+            <p className="text-xs">Type / for commands{commandCount > 0 ? ` · ${commandCount} available` : ""}</p>
           </div>
         )}
-        {items.map((item) => (
-          <TranscriptItem key={item.id} item={item} />
-        ))}
+        {transcriptBlocks(items).map((block, index, blocks) => {
+          const first = block[0];
+          const previous = blocks[index - 1]?.[0];
+          const isAgent = first.type === "tool" || first.type === "plan" || (first.type === "image" && first.role !== "user") || (first.type === "message" && first.role !== "user" && first.role !== "system");
+          const startsTurn = isAgent && (!previous || (previous.type === "message" && previous.role === "user") || (previous.type === "image" && previous.role === "user"));
+          return <div key={first.id} className={first.type === "message" && first.role === "user" ? "chat-user-row" : ""}>
+            {startsTurn && <div className="agent-turn-label"><span className="agent-mark" aria-hidden="true">✳</span>{agentName}</div>}
+            {first.type === "tool" ? <ToolActivity items={block.filter((item): item is Extract<AcpTranscriptItem, { type: "tool" }> => item.type === "tool")} /> : <TranscriptItem item={first} />}
+          </div>;
+        })}
         {busy && (
-          <p className="flex items-center gap-2 text-xs text-accent-brand" role="status">
+          <p className="flex items-center gap-2 text-xs text-muted-foreground" role="status">
             <span className="animate-pulse">●</span>
             {agentName} is working…
           </p>

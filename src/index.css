@@ -203,3 +203,55 @@
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* Conversation and coding surfaces share the same quiet, compact hierarchy. */
+.chat-column { max-width: 50rem; }
+.chat-user-row { display: flex; justify-content: flex-end; padding-top: 1.25rem; }
+.chat-user { border-radius: 16px; padding: 0.75rem 1rem; margin-bottom: 0.75rem; }
+.agent-turn-label { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1rem; font-size: 12px; font-weight: 500; }
+.agent-mark { display: grid; place-items: center; width: 24px; height: 24px; border: 1px solid var(--border); border-radius: 7px; color: var(--muted-foreground); }
+.agent-response { position: relative; }
+.response-actions { margin-top: 0.5rem; opacity: 0; transition: opacity 0.1s ease; }
+.agent-response:hover .response-actions, .agent-response:focus-within .response-actions { opacity: 1; }
+.copy-button { display: inline-flex; align-items: center; gap: 0.375rem; border-radius: 5px; padding: 0.25rem 0.4rem; color: var(--muted-foreground); font-size: 11px; }
+.copy-button:hover { color: var(--foreground); background: var(--accent); }
+.chat-welcome { display: flex; flex-direction: column; align-items: center; gap: 0.875rem; padding: clamp(2rem, 10vh, 7rem) 1rem 2rem; text-align: center; color: var(--muted-foreground); }
+.chat-welcome > .agent-mark { width: 40px; height: 40px; font-size: 22px; margin-bottom: 0.5rem; }
+.chat-welcome h2 { color: var(--foreground); font-size: 24px; font-weight: 500; letter-spacing: -0.03em; }
+.chat-welcome > p { max-width: 24rem; }
+.chat-context { max-width: 100%; overflow-wrap: anywhere; border: 1px solid var(--border); border-radius: 6px; padding: 0.2rem 0.6rem; font-size: 12px; }
+.agent-plan { border: 1px solid var(--border); border-radius: 10px; background: var(--card); padding: 1rem; }
+.agent-thought summary { padding-block: 0.25rem; }
+.tool-card-header { display: flex; align-items: center; gap: 0.5rem; list-style: none; padding: 0.6rem 0.75rem; font-size: 12px; color: var(--muted-foreground); }
+summary.tool-card-header { cursor: pointer; border-radius: 7px; }
+.tool-card-header::-webkit-details-marker { display: none; }
+.tool-card-header:hover { color: var(--foreground); }
+.tool-state { width: 12px; text-align: center; flex-shrink: 0; }
+.tool-chevron { display: inline-block; transition: transform 0.1s ease; }
+.tool-card, .tool-group { border: 1px solid var(--border); border-radius: 8px; background: var(--card); overflow: hidden; }
+.tool-card-body { display: flex; flex-direction: column; gap: 0.75rem; border-top: 1px solid var(--border); padding: 0.75rem; }
+.tool-group-body { border-top: 1px solid var(--border); padding: 0.375rem; }
+.tool-group-body .tool-card { border-color: transparent; }
+.tool-output { max-height: 20rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--app-font-mono); font-size: 11px; line-height: 1.6; user-select: text; }
+.tool-raw { border-top: 1px solid var(--border); padding-top: 0.5rem; color: var(--muted-foreground); font-size: 11px; }
+.tool-raw summary { cursor: pointer; }
+.tool-edit { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.tool-edit pre { padding: 0.5rem 0.75rem; }
+.tool-edit-label { border-top: 1px solid var(--border); padding: 0.25rem 0.75rem; font-size: 10px; }
+.code-toolbar { display: flex; align-items: center; gap: 0.75rem; min-height: 36px; padding: 0.25rem 0.75rem; border-bottom: 1px solid var(--border); font-size: 11px; color: var(--muted-foreground); }
+.code-toolbar > button:not(.copy-button) { padding: 0.25rem; border-radius: 4px; }
+.code-toolbar > button:hover, .code-toolbar > button[aria-pressed=true] { background: var(--accent); color: var(--foreground); }
+.chat-code > pre { padding: 0.875rem 1rem; font-size: 12px; }
+.chat-code > pre.code-wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+.composer-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; margin-top: 0.75rem; }
+.composer-agent { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.25rem 0.5rem; color: var(--muted-foreground); }
+.session-control { display: inline-flex; max-width: 12rem; }
+.session-control select { max-width: 100%; appearance: auto; padding: 0.25rem; border-radius: 5px; font-size: 11px; color: var(--muted-foreground); background: var(--card); cursor: pointer; }
+.session-control select:hover, .session-control select:focus-visible { color: var(--foreground); background: var(--accent); }
+.session-control select:disabled { opacity: 0.5; cursor: default; }
+.composer-send { display: grid; place-items: center; width: 30px; height: 30px; flex-shrink: 0; border: 1px solid var(--input); border-radius: 50%; background: var(--muted); font-size: 16px; }
+.composer-send-primary { background: var(--foreground); color: var(--background); border-color: transparent; }
+.composer-send:disabled { opacity: 0.3; }
+.command-popover { position: absolute; bottom: 100%; left: 1.5rem; right: 1.5rem; z-index: 20; display: flex; flex-direction: column; max-height: min(22rem, 45vh); max-width: 50rem; margin: 0 auto 0.25rem; background: var(--card); border: 1px solid var(--input); border-radius: 12px; box-shadow: 0 12px 40px rgb(0 0 0 / 20%); overflow: hidden; }
+.connection-card, .permission-card { border: 1px solid var(--border); border-radius: 12px; padding: 1rem; background: var(--card); }
+@media (hover: none) { .response-actions { opacity: 1; } }
