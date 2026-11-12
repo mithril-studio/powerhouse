@@ -107,31 +107,31 @@ export function AcpChatPane({ repoId, branch, chat, active }: Props) {
         />
       ) : (
         <div className="relative shrink-0">
-        {paletteOpen && (
-        <AcpCommandPalette
-          view={paletteView}
-          onApply={session.applyOp}
-          onInsert={(prompt) => setDraft(prompt)}
-          onNativeCli={openNativeCli}
-          onRestart={session.restart}
-          onClose={() => setPaletteOpen(false)}
-        />
-        )}
-        <AcpComposer
-          active={active && !paletteOpen}
-          busy={session.busy}
-          agentName={profile.name}
-          draft={draft}
-          onDraftChange={setDraft}
-          onSubmit={(prompt) => {
-            setDraft("");
-            void session.submitPrompt(prompt);
-          }}
-          onOpenCommands={() => setPaletteOpen((open) => !open)}
-          onCancel={session.cancel}
-          thinkingLevel={session.thinkingLevel}
-          controls={<SessionControls state={session.controlState} disabled={session.busy} onApply={session.applyOp} />}
-        />
+          {paletteOpen && (
+            <AcpCommandPalette
+              view={paletteView}
+              onApply={session.applyOp}
+              onInsert={(prompt) => setDraft(prompt)}
+              onNativeCli={openNativeCli}
+              onRestart={session.restart}
+              onClose={() => setPaletteOpen(false)}
+            />
+          )}
+          <AcpComposer
+            active={active && !paletteOpen}
+            busy={session.busy}
+            agentName={profile.name}
+            draft={draft}
+            onDraftChange={setDraft}
+            onSubmit={(prompt) => {
+              setDraft("");
+              void session.submitPrompt(prompt);
+            }}
+            onOpenCommands={() => setPaletteOpen((open) => !open)}
+            onCancel={session.cancel}
+            thinkingLevel={session.thinkingLevel}
+            controls={<SessionControls state={session.controlState} disabled={session.busy} onApply={session.applyOp} />}
+          />
         </div>
       )}
       {connected && (
