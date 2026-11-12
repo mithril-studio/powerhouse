@@ -2,44 +2,13 @@ import { useAppStore } from "../store/appStore";
 import { pickAndAddRepo } from "../lib/actions";
 import { RepoItem } from "./RepoItem";
 
-const NAV_ITEMS = [
-  { label: "Home" },
-  { label: "Workflows" },
-  { label: "Memory" },
-  { label: "Telemetry" },
-] as const;
-
 export function Sidebar() {
   const repos = useAppStore((s) => s.repos);
   const openSettings = useAppStore((s) => s.openSettings);
-  const openTelemetry = useAppStore((s) => s.openTelemetry);
-  const workspaceView = useAppStore((s) => s.workspaceView);
-  const setWorkspaceView = useAppStore((s) => s.setWorkspaceView);
-
-  const navAction: Partial<Record<(typeof NAV_ITEMS)[number]["label"], () => void>> = {
-    Home: () => setWorkspaceView("home"),
-    Workflows: () => setWorkspaceView("workflows"),
-    Telemetry: openTelemetry,
-  };
-
   return (
     <aside aria-label="Main sidebar" className="flex w-60 shrink-0 flex-col border-r border-border bg-card">
       {/* Traffic-light strip (titleBarStyle: Overlay) — draggable. */}
       <div data-tauri-drag-region className="h-11 shrink-0" />
-      <nav aria-label="Main navigation" className="flex flex-col gap-0.5 px-2 pb-2">
-        {NAV_ITEMS.map((item) => (
-          <button
-            key={item.label}
-            type="button"
-            onClick={navAction[item.label]}
-            aria-current={item.label.toLowerCase() === workspaceView ? "page" : undefined}
-            className={`flex h-9 items-center rounded-md px-3 text-left text-sm hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring ${item.label.toLowerCase() === workspaceView ? "bg-muted text-foreground" : "text-muted-foreground"}`}
-          >
-            {item.label}
-          </button>
-        ))}
-      </nav>
-      <div className="mx-2 mb-1 border-t border-border" />
       <div className="flex items-center justify-between px-3 pb-1">
         <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           Projects

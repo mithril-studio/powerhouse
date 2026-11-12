@@ -196,9 +196,9 @@ interface LegacyTree {
   agentCmd?: string;
 }
 
+export type SettingsSection = "general" | "appearance" | "connections" | "cloud" | "agents" | "memory" | "telemetry";
+
 interface AppState extends PersistedTree {
-  workspaceView: "home" | "workflows";
-  setWorkspaceView: (view: "home" | "workflows") => void;
   saveWorkflowDraft: (draft: WorkflowDraft) => void;
   hydrated: boolean;
   chatStatus: Record<string, ChatStatus>;
@@ -220,16 +220,14 @@ interface AppState extends PersistedTree {
   cloudQuickErrors: Record<string, string>;
 
   settingsOpen: boolean;
-  telemetryOpen: boolean;
+  settingsSection: SettingsSection;
 
   hydrate: (tree: (Partial<PersistedTree> & LegacyTree) | null) => void;
   setDefaultAgent: (agentId: string) => void;
   setTheme: (theme: Theme) => void;
   setGithubConnection: (github: GithubConnection) => void;
-  openSettings: () => void;
+  openSettings: (section?: SettingsSection) => void;
   closeSettings: () => void;
-  openTelemetry: () => void;
-  closeTelemetry: () => void;
   addRepo: (repo: Omit<Repo, "id" | "branches" | "workflow" | "pushOnMerge">) => Repo;
   addBranch: (repoId: string, branch: Branch) => void;
   removeBranch: (repoId: string, branchId: string) => void;
@@ -469,8 +467,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   settings: seedSettings(),
   queues: {},
   workflowDrafts: [],
-  workspaceView: "home",
-  setWorkspaceView: (workspaceView) => set({ workspaceView, settingsOpen: false, telemetryOpen: false }),
   saveWorkflowDraft: (draft) => set((s) => ({
     workflowDrafts: s.workflowDrafts.some((d) => d.id === draft.id)
       ? s.workflowDrafts.map((d) => d.id === draft.id ? draft : d)
@@ -488,7 +484,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   shellStatus: {},
   pendingHandoff: {},
   settingsOpen: false,
-  telemetryOpen: false,
+  settingsSection: "general",
   cloudRuns: {},
   cloudQuickStages: {},
   cloudQuickErrors: {},
@@ -537,11 +533,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       },
     })),
 
-  openSettings: () => set({ settingsOpen: true }),
+  openSettings: (settingsSection = "general") => set({ settingsOpen: true, settingsSection }),
   closeSettings: () => set({ settingsOpen: false }),
-
-  openTelemetry: () => set({ telemetryOpen: true }),
-  closeTelemetry: () => set({ telemetryOpen: false }),
 
   addRepo: (repo) => {
     const existing = get().repos.find((r) => r.path === repo.path);
@@ -644,7 +637,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       })),
     })),
 
-  select: (repoId, branchId) => set({ selection: { repoId, branchId }, workspaceView: "home" }),
+  select: (repoId, branchId) => set({ selection: { repoId, branchId } }),
 
   setChatStatus: (chatId, status) =>
     set((s) => ({ chatStatus: { ...s.chatStatus, [chatId]: status } })),

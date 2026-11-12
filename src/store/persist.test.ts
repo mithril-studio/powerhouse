@@ -12,14 +12,14 @@ it("persists workflow edits but not workspace navigation", async () => {
   try {
     useAppStore.getState().hydrate(null);
     startPersistence();
-    useAppStore.getState().setWorkspaceView("workflows");
+    useAppStore.getState().openSettings("telemetry");
     await vi.advanceTimersByTimeAsync(400);
     expect(disk.set).not.toHaveBeenCalled();
     const draft = newWorkflowDraft("repo");
     useAppStore.getState().saveWorkflowDraft(draft);
     await vi.advanceTimersByTimeAsync(400);
     expect(disk.set).toHaveBeenCalledWith("tree", expect.objectContaining({ workflowDrafts: [draft] }));
-    expect(disk.set.mock.calls[0][1]).not.toHaveProperty("workspaceView");
+    expect(disk.set.mock.calls[0][1]).not.toHaveProperty("settingsSection");
     expect(disk.save).toHaveBeenCalledOnce();
   } finally {
     vi.useRealTimers();

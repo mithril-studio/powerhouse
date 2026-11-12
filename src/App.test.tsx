@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { useAppStore } from "./store/appStore";
 import App from "./App";
 
-// Render the real App, sidebar and workflow page. Isolate native transports;
+// Render the real App and sidebar. Isolate native transports;
 // checking the app shell must never start/stop an actual agent or Tauri app.
 vi.mock("./store/appStore", async (original) => {
   const actual = await original<typeof import("./store/appStore")>();
@@ -27,36 +27,35 @@ vi.mock("./components/NewBranchModal", () => ({ NewBranchModal: () => null }));
 vi.mock("./components/WorkflowModal", () => ({ WorkflowModal: () => null }));
 vi.mock("./components/RightSidebar", () => ({ RightSidebar: () => <div>Project inspector</div> }));
 vi.mock("./components/NewChatPicker", () => ({ NewChatPicker: () => null }));
-vi.mock("./components/SettingsPage", () => ({ SettingsPage: () => null }));
-vi.mock("./components/telemetry/TelemetryPage", () => ({ TelemetryPage: () => null }));
+vi.mock("./components/SettingsPage", () => ({ SettingsPage: () => useAppStore.getState().settingsOpen ? <div>Settings content</div> : null }));
 
 beforeEach(() => {
   useAppStore.getState().hydrate(null);
-  useAppStore.setState({ workspaceView: "home", rightSidebarOpen: true });
+  useAppStore.setState({ settingsOpen: false, settingsSection: "general", rightSidebarOpen: true });
 });
 
-it("shows Workflows alongside the main navigation, with the project workspace still mounted but inert", () => {
-  const repo = useAppStore.getState().addRepo({ name: "repo", path: "/repo", defaultBranch: "main" });
-  useAppStore.getState().addBranch(repo.id, { id: "branch", name: "feature", worktreePath: "/worktree", chats: [{ id: "chat", title: "Chat" }], activeChatId: "chat" });
-  useAppStore.getState().setWorkspaceView("workflows");
-  const html = renderToStaticMarkup(<App />);
-  expect(html).toContain('aria-label="Main sidebar"');
-  expect(html).toContain('aria-label="Main navigation"');
-  expect(html).toContain('aria-current="page"');
-  expect(html).toContain('id="workflows-title"');
-  expect(html).toContain('aria-label="Project workspace" inert="" class="hidden');
-  expect(html).toContain("Mounted terminal panel");
-  expect(html).toContain('data-chat-active="false">Mounted chat');
-  expect(html).not.toContain("Project inspector");
-  expect(html).not.toContain("fixed inset-0");
-});
-
-it("returns to the project workspace without removing navigation", () => {
-  useAppStore.getState().setWorkspaceView("workflows");
-  useAppStore.getState().setWorkspaceView("home");
+it("opens directly into the project workspace with only project navigation", () => {
   const html = renderToStaticMarkup(<App />);
   expect(html).toContain('aria-label="Main sidebar"');
   expect(html).toContain('aria-label="Project workspace" class="flex');
   expect(html).toContain("Project inspector");
-  expect(html).not.toContain('id="workflows-title"');
+  expect(html).toContain('aria-label="Settings"');
+  for (const label of ["Home", "Workflows", "Memory", "Telemetry"]) {
+    expect(html).not.toContain(`>${label}<`);
+  }
+});
+
+it("keeps chats and terminals mounted but inactive while settings is open", () => {
+  const repo = useAppStore.getState().addRepo({ name: "repo", path: "/repo", defaultBranch: "main" });
+  useAppStore.getState().addBranch(repo.id, { id: "branch", name: "feature", worktreePath: "/worktree", chats: [{ id: "chat", title: "Chat" }], activeChatId: "chat" });
+  useAppStore.getState().select(repo.id, "branch");
+  useAppStore.getState().openSettings("telemetry");
+  const html = renderToStaticMarkup(<App />);
+  expect(html).toContain('aria-label="Project workspace" inert=""');
+  expect(html).toContain("Mounted terminal panel");
+  expect(html).toContain('data-chat-active="false">Mounted chat');
+  expect(html).toContain("Settings content");
+  useAppStore.getState().closeSettings();
+  expect(renderToStaticMarkup(<App />)).toContain('data-chat-active="true">Mounted chat');
+  expect(useAppStore.getState().selection).toEqual({ repoId: repo.id, branchId: "branch" });
 });

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { useAppStore } from "../../store/appStore";
 import {
   telemetryListRuns,
   telemetryRebuild,
@@ -102,9 +101,6 @@ function StatTile({
 }
 
 export function TelemetryPage() {
-  const open = useAppStore((s) => s.telemetryOpen);
-  const closeTelemetry = useAppStore((s) => s.closeTelemetry);
-
   const [tab, setTab] = useState<Tab>("Runs");
   const [checks, setChecks] = useState<CheckResult[]>([]);
   const [stats, setStats] = useState<TelemetryStats | null>(null);
@@ -127,7 +123,6 @@ export function TelemetryPage() {
   }, []);
 
   useEffect(() => {
-    if (!open) return;
     refetch();
     const unlisten = listen<string>("telemetry-updated", () => {
       if (debounceRef.current != null) window.clearTimeout(debounceRef.current);
@@ -140,21 +135,7 @@ export function TelemetryPage() {
       if (debounceRef.current != null) window.clearTimeout(debounceRef.current);
       void unlisten.then((fn) => fn());
     };
-  }, [open, refetch]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        closeTelemetry();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [open, closeTelemetry]);
-
-  if (!open) return null;
+  }, [refetch]);
 
   const loadOlder = () => {
     const oldest = runs[runs.length - 1];
@@ -165,26 +146,9 @@ export function TelemetryPage() {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-background">
-      {/* Draggable title strip (traffic-light overlay) with a close affordance. */}
-      <div
-        data-tauri-drag-region
-        className="flex h-11 shrink-0 items-center justify-end px-3"
-      >
-        <button
-          onClick={() => closeTelemetry()}
-          title="Close telemetry"
-          aria-label="Close telemetry"
-          className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-        >
-          ✕
-        </button>
-      </div>
-
-      <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-5xl px-8 pb-16 pt-2">
+    <section aria-label="Telemetry">
           <div className="mb-4 flex items-center justify-between">
-            <h1 className="text-lg font-semibold text-foreground">Telemetry</h1>
+            <p className="text-sm text-muted-foreground">Run history, usage, and agent health.</p>
             <button
               type="button"
               disabled={(stats?.activeRuns ?? 0) > 0}
@@ -234,7 +198,7 @@ export function TelemetryPage() {
           ) : (
             <>
               {stats && (
-                <div className="mb-4 flex gap-2">
+                <div className="mb-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
                   <StatTile label="runs" value={String(stats.totalRuns)} />
                   <StatTile label="active" value={String(stats.activeRuns)} />
                   <StatTile
@@ -263,7 +227,7 @@ export function TelemetryPage() {
                 </div>
               )}
 
-              <div className="flex gap-6">
+              <div className="flex flex-col gap-6 xl:flex-row">
                 <div className="min-w-0 flex-1">
                   <h2 className="mb-1 border-b border-border pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                     Runs
@@ -285,15 +249,13 @@ export function TelemetryPage() {
                   )}
                 </div>
                 {selected && (
-                  <div className="w-[26rem] shrink-0">
+                  <div className="w-full shrink-0 xl:w-[26rem]">
                     <RunDetailPane runId={selected} refreshKey={refreshKey} />
                   </div>
                 )}
               </div>
             </>
           )}
-        </div>
-      </div>
-    </div>
+    </section>
   );
 }

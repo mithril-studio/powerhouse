@@ -8,6 +8,7 @@ import {
   type AgentProfile,
   type CloudSettings,
   type Theme,
+  type SettingsSection,
 } from "../store/appStore";
 import { cloudSecretStatus, cloudSetSecret, type SecretStatus } from "../lib/cloud";
 import {
@@ -21,6 +22,8 @@ import {
   githubPoll,
   type DeviceStart,
 } from "../lib/ipc";
+
+import { TelemetryPage } from "./telemetry/TelemetryPage";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -38,7 +41,7 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section className="grid grid-cols-[minmax(0,12rem)_1fr] gap-6 border-t border-border py-6 first:border-t-0 first:pt-0">
+    <section className="grid grid-cols-1 lg:grid-cols-[minmax(0,12rem)_1fr] gap-6 border-t border-border py-6 first:border-t-0 first:pt-0">
       <div>
         <h2 className="text-sm font-semibold text-foreground">{title}</h2>
         {description && (
@@ -540,73 +543,98 @@ function CloudSection() {
   );
 }
 
+const SETTINGS_SECTIONS: { id: SettingsSection; label: string; description: string }[] = [
+  { id: "general", label: "General", description: "Your Powerhouse account and workspace." },
+  { id: "appearance", label: "Appearance", description: "Make Powerhouse feel like home." },
+  { id: "connections", label: "Connections", description: "Connect the services you work with." },
+  { id: "cloud", label: "Cloud", description: "Credentials and defaults for cloud runs." },
+  { id: "agents", label: "Agents", description: "Manage your coding agents and CLI access." },
+  { id: "memory", label: "Memory", description: "Context and learnings across your projects." },
+  { id: "telemetry", label: "Telemetry", description: "Understand what your agents are doing." },
+];
+
+function MemorySection() {
+  return (
+    <div className="rounded-lg border border-border bg-card p-6">
+      <h2 className="text-sm font-medium">Project memory</h2>
+      <p className="mt-2 max-w-lg text-sm leading-6 text-muted-foreground">
+        Memory management isn't available in Powerhouse yet. Your agents continue
+        to use the instructions and memory files in each project.
+      </p>
+    </div>
+  );
+}
+
 export function SettingsPage() {
   const open = useAppStore((s) => s.settingsOpen);
+  const section = useAppStore((s) => s.settingsSection);
+  const openSettings = useAppStore((s) => s.openSettings);
   const closeSettings = useAppStore((s) => s.closeSettings);
+  const navRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     if (!open) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    navRef.current?.querySelector<HTMLButtonElement>('[aria-current="page"]')?.focus();
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        e.stopPropagation();
+        e.preventDefault();
+        e.stopImmediatePropagation();
         closeSettings();
       }
     };
     window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      previousFocus?.focus();
+    };
   }, [open, closeSettings]);
 
   if (!open) return null;
+  const current = SETTINGS_SECTIONS.find((item) => item.id === section)!;
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-background">
-      {/* Draggable title strip (traffic-light overlay) with a close affordance. */}
-      <div
-        data-tauri-drag-region
-        className="flex h-11 shrink-0 items-center justify-end px-3"
-      >
-        <button
-          onClick={() => closeSettings()}
-          title="Close settings"
-          aria-label="Close settings"
-          className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-        >
-          ✕
-        </button>
-      </div>
-
-      <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-2xl px-8 pb-16 pt-2">
-          <h1 className="mb-6 text-lg font-semibold text-foreground">Settings</h1>
-
-          <Section title="Account" description="Your Powerhouse identity.">
-            <AccountSection />
-          </Section>
-
-          <Section title="Appearance" description="Choose your color theme.">
-            <AppearanceSection />
-          </Section>
-
-          <Section
-            title="Connections"
-            description="Link external services to Powerhouse."
-          >
-            <ConnectionsSection />
-          </Section>
-
-          <Section
-            title="Cloud"
-            description="Credentials and defaults for one-click cloud runs."
-          >
-            <CloudSection />
-          </Section>
-
-          <Section
-            title="Agents"
-            description="CLI access — run the login flow for each coding agent."
-          >
-            <AgentsSection />
-          </Section>
+    <div role="dialog" aria-modal="true" aria-label="Settings" className="fixed inset-0 z-50 flex bg-background">
+      <aside className="flex w-48 shrink-0 flex-col border-r border-border bg-card sm:w-60">
+        <div data-tauri-drag-region className="h-11 shrink-0" />
+        <div className="px-3 pb-4">
+          <button onClick={() => closeSettings()} className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground">
+            <span aria-hidden="true">←</span> Back to workspace
+          </button>
+        </div>
+        <h1 className="px-5 pb-3 text-sm font-semibold">Settings</h1>
+        <nav ref={navRef} aria-label="Settings sections" className="flex flex-col gap-1 px-3">
+          {SETTINGS_SECTIONS.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => openSettings(item.id)}
+              aria-current={section === item.id ? "page" : undefined}
+              className={`flex h-9 items-center rounded-md px-3 text-left text-sm transition-colors ${section === item.id ? "bg-muted text-foreground font-medium" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </nav>
+        <p className="mt-auto px-5 py-4 text-xs text-muted-foreground">Powerhouse</p>
+      </aside>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div data-tauri-drag-region className="flex h-11 shrink-0 items-center justify-end border-b border-border px-3">
+          <button onClick={() => closeSettings()} title="Close settings (Esc)" aria-label="Close settings" className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground">✕</button>
+        </div>
+        <div key={section} className="flex-1 overflow-y-auto">
+          <div className={`mx-auto w-full px-6 py-8 lg:px-10 ${section === "telemetry" ? "max-w-6xl" : "max-w-3xl"}`}>
+            <header className="mb-8">
+              <h2 className="text-xl font-semibold tracking-tight">{current.label}</h2>
+              <p className="mt-1 text-sm text-muted-foreground">{current.description}</p>
+            </header>
+            {section === "general" && <AccountSection />}
+            {section === "appearance" && <Section title="Color theme" description="T3's neutral palette, in light or dark."><AppearanceSection /></Section>}
+            {section === "connections" && <ConnectionsSection />}
+            {section === "cloud" && <CloudSection />}
+            {section === "agents" && <AgentsSection />}
+            {section === "memory" && <MemorySection />}
+            {section === "telemetry" && <TelemetryPage />}
+          </div>
         </div>
       </div>
     </div>
