@@ -1,3 +1,5 @@
+import type { Task } from "../features/tasks/types";
+import { hydrateTasks } from "../features/tasks/taskState";
 import { create } from "zustand";
 import type { WorkflowDraft } from "../features/workflows/workflowDrafts";
 import type { AcpTranscriptItem } from "../lib/acpTranscript";
@@ -184,6 +186,8 @@ export interface Selection {
 export type ChatStatus = "idle" | "running" | "exited";
 
 export interface PersistedTree {
+  schemaVersion?: number;
+  tasks?: Task[];
   repos: Repo[];
   selection: Selection;
   settings: Settings;
@@ -199,6 +203,8 @@ interface LegacyTree {
 export type SettingsSection = "general" | "appearance" | "connections" | "cloud" | "agents" | "memory" | "telemetry";
 
 interface AppState extends PersistedTree {
+  tasks: Task[];
+  workspaceView: "workspace" | "board" | "mission";
   saveWorkflowDraft: (draft: WorkflowDraft) => void;
   hydrated: boolean;
   chatStatus: Record<string, ChatStatus>;
@@ -473,6 +479,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       : [...s.workflowDrafts, draft],
   })),
   hydrated: false,
+  tasks: [],
+  workspaceView: "workspace",
   chatStatus: {},
   branchModalRepoId: null,
   workflowModalRepoId: null,
@@ -491,6 +499,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   hydrate: (tree) =>
     set({
+      tasks: hydrateTasks(tree?.tasks),
+      workspaceView: "workspace",
       workflowDrafts: tree?.workflowDrafts ?? [],
       // Migration: default the queue-config fields for repos persisted before
       // they existed.
@@ -567,6 +577,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   removeBranch: (repoId, branchId) =>
     set((s) => ({
+      tasks: s.tasks.map((t) => t.branchId === branchId ? { ...t, branchId: null, primaryChatId: null, archivedAt: Date.now(), launch: { stage: "not_started" as const } } : t),
       repos: updateRepo(s.repos, repoId, (r) => ({
         ...r,
         branches: r.branches.filter((b) => b.id !== branchId),
@@ -637,7 +648,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       })),
     })),
 
-  select: (repoId, branchId) => set({ selection: { repoId, branchId } }),
+  select: (repoId, branchId) => set({ selection: { repoId, branchId }, workspaceView: "workspace" }),
 
   setChatStatus: (chatId, status) =>
     set((s) => ({ chatStatus: { ...s.chatStatus, [chatId]: status } })),
