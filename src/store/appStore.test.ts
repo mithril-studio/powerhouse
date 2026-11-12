@@ -374,3 +374,34 @@ describe("chat updates", () => {
     expect(useAppStore.getState().repos).toEqual(before);
   });
 });
+
+describe("machine terminals", () => {
+  beforeEach(() => useAppStore.getState().hydrate(null));
+
+  it("opens one tab per VM and falls back to the shell when the active one closes", () => {
+    const s = () => useAppStore.getState();
+    s().openMachineTerminal("ph-a");
+    s().openMachineTerminal("ph-b");
+    s().openMachineTerminal("ph-a");
+    expect(s().machineTerminals).toEqual(["ph-a", "ph-b"]);
+    expect(s().bottomTab).toBe("vm:ph-a");
+    expect(s().bottomPanelOpen).toBe(true);
+    s().closeMachineTerminal("ph-b");
+    expect(s().bottomTab).toBe("vm:ph-a");
+    s().closeMachineTerminal("ph-a");
+    expect(s().machineTerminals).toEqual([]);
+    expect(s().bottomTab).toBe("shell");
+  });
+
+  it("forgets a closed terminal's running state, so reconnecting starts a new one", () => {
+    const s = () => useAppStore.getState();
+    s().openMachineTerminal("ph-a");
+    s().setShellStatus("vm:ph-a", "running");
+    s().setShellStatus("shell:b1", "running");
+    s().closeMachineTerminal("ph-a");
+    // Closing disposes the terminal before its exit event can arrive; a status
+    // left at "running" would make the next Connect show an empty tab.
+    expect(s().shellStatus["vm:ph-a"]).toBeUndefined();
+    expect(s().shellStatus["shell:b1"]).toBe("running");
+  });
+});

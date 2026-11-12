@@ -105,7 +105,7 @@ export function Sidebar() {
   };
 
   return (
-    <aside aria-label="Main sidebar" className="flex w-60 shrink-0 flex-col border-r border-border bg-background">
+    <aside aria-label="Main sidebar" className="flex w-60 shrink-0 flex-col border-r border-border bg-card">
       {/* Traffic-light strip (titleBarStyle: Overlay) — draggable. */}
       <div data-tauri-drag-region className="h-11 shrink-0" />
       <nav aria-label="Main navigation" className="flex flex-col gap-0.5 px-2 pb-2">
@@ -136,7 +136,7 @@ export function Sidebar() {
               type="button"
               onClick={() => navAction(item.label)}
               aria-current={active ? "page" : undefined}
-              className={`flex items-center rounded-md px-2 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider hover:bg-muted hover:text-foreground ${
+              className={`flex h-9 items-center rounded-md px-3 text-left text-sm hover:bg-muted hover:text-foreground ${
                 active ? "bg-muted text-foreground" : "text-muted-foreground"
               }`}
             >

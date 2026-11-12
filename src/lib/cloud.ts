@@ -361,7 +361,7 @@ export function runInShell(branchId: string, command: string) {
   window.setTimeout(() => void ptyWrite(`shell-${branchId}`, `${command}\r`).catch(() => {}), 600);
 }
 
-/** Opens a shell on the VM in the bottom panel. */
+/** Opens the VM's own terminal tab in the bottom panel (leaves the branch shell alone). */
 export function openCloudShell(w: CloudWorkspace) {
-  runInShell(w.branchId, `boxd connect ${w.vmName}`);
+  useAppStore.getState().openMachineTerminal(w.vmName);
 }

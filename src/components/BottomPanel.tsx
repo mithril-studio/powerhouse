@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
+import { homeDir } from "@tauri-apps/api/path";
 import {
   resolveAgent,
   resolveHandoff,
   selectedBranch,
   useAppStore,
-  type Branch,
-  type BottomTab,
 } from "../store/appStore";
+import { connectCommand } from "../lib/machines";
 import {
   disposeTerminal,
   fitTerminal,
@@ -16,42 +16,44 @@ import {
 
 export const shellId = (branchId: string) => `shell-${branchId}`;
 export const agentCliId = (branchId: string) => `agentcli-${branchId}`;
+export const machineTerminalId = (vm: string) => `vm-${vm}`;
 
 interface TerminalProps {
-  branch: Branch;
-  kind: BottomTab;
+  sessionId: string;
+  statusKey: string;
+  /** Working directory; undefined = the home folder. */
+  cwd?: string;
   active: boolean;
   /** Command to launch; undefined = plain login shell. */
   agentCmd?: string;
 }
 
-// A persistent terminal for one branch surface (shell or native agent CLI). Kept
-// mounted (hidden) so a running process survives tab/panel/branch switches.
-function PanelTerminal({ branch, kind, active, agentCmd }: TerminalProps) {
+// A persistent terminal for one bottom-panel surface (branch shell, native agent
+// CLI, or a VM). Kept mounted (hidden) so a running process survives
+// tab/panel/branch switches.
+function PanelTerminal({ sessionId, statusKey, cwd, active, agentCmd }: TerminalProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const statusKey = `${kind}:${branch.id}`;
   const status = useAppStore((s) => s.shellStatus[statusKey] ?? "idle");
   const setShellStatus = useAppStore((s) => s.setShellStatus);
-  const sessionId = kind === "shell" ? shellId(branch.id) : agentCliId(branch.id);
 
-  const start = useCallback(() => {
+  const start = useCallback(async () => {
     const container = containerRef.current;
     if (!container) return;
     disposeTerminal(sessionId); // clear a dead instance before respawning
     setShellStatus(statusKey, "running");
     void spawnTerminal({
       chatId: sessionId,
-      cwd: branch.worktreePath,
+      cwd: cwd ?? (await homeDir().catch(() => "/")),
       agentCmd,
       container,
       onExit: () => setShellStatus(statusKey, "exited"),
     });
-  }, [sessionId, statusKey, branch.worktreePath, agentCmd, setShellStatus]);
+  }, [sessionId, statusKey, cwd, agentCmd, setShellStatus]);
 
   // Lazy spawn when first shown; a surface that exited respawns transparently.
   useEffect(() => {
-    if (active && status !== "running") start();
+    if (active && status !== "running") void start();
   }, [active, status, start]);
 
   // Never fit() a hidden terminal — fit + focus on un-hide, after layout.
@@ -102,6 +104,8 @@ export function BottomPanel() {
   const tab = useAppStore((s) => s.bottomTab);
   const setBottomTab = useAppStore((s) => s.setBottomTab);
   const repos = useAppStore((s) => s.repos);
+  const machineTerminals = useAppStore((s) => s.machineTerminals);
+  const closeMachineTerminal = useAppStore((s) => s.closeMachineTerminal);
   const settings = useAppStore((s) => s.settings);
   const branch = useAppStore(selectedBranch);
 
@@ -122,6 +126,28 @@ export function BottomPanel() {
         <button className={tabClass(tab === "agent")} onClick={() => setBottomTab("agent")}>
           Agent CLI
         </button>
+        {machineTerminals.map((vm) => (
+          <span key={vm} className="flex items-center">
+            <button
+              className={`${tabClass(tab === `vm:${vm}`)} normal-case`}
+              onClick={() => setBottomTab(`vm:${vm}`)}
+              title={connectCommand(vm)}
+            >
+              ☁ {vm}
+            </button>
+            <button
+              onClick={() => {
+                disposeTerminal(machineTerminalId(vm));
+                closeMachineTerminal(vm);
+              }}
+              aria-label={`Close ${vm}`}
+              title="Close and disconnect"
+              className="h-6 px-1 text-[11px] text-muted-foreground hover:text-foreground"
+            >
+              ×
+            </button>
+          </span>
+        ))}
         {tab === "agent" && agentProfile && handoff !== "unsupported" && (
           <span className="ml-2 truncate text-[10px] text-muted-foreground">
             {agentProfile.name}
@@ -135,16 +161,18 @@ export function BottomPanel() {
         {branches.map((b) => (
           <PanelTerminal
             key={`shell-${b.id}`}
-            branch={b}
-            kind="shell"
+            sessionId={shellId(b.id)}
+            statusKey={`shell:${b.id}`}
+            cwd={b.worktreePath}
             active={open && tab === "shell" && b.id === branch?.id}
           />
         ))}
         {branches.map((b) => (
           <PanelTerminal
             key={`agent-${b.id}`}
-            branch={b}
-            kind="agent"
+            sessionId={agentCliId(b.id)}
+            statusKey={`agent:${b.id}`}
+            cwd={b.worktreePath}
             active={
               open &&
               tab === "agent" &&
@@ -152,6 +180,15 @@ export function BottomPanel() {
               handoff !== "unsupported"
             }
             agentCmd={b.id === branch?.id ? agentCmd : undefined}
+          />
+        ))}
+        {machineTerminals.map((vm) => (
+          <PanelTerminal
+            key={`vm-${vm}`}
+            sessionId={machineTerminalId(vm)}
+            statusKey={`vm:${vm}`}
+            active={open && tab === `vm:${vm}`}
+            agentCmd={connectCommand(vm)}
           />
         ))}
         {tab === "agent" && (!agentProfile || handoff === "unsupported") && (

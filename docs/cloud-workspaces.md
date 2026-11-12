@@ -23,6 +23,19 @@ Follow-up messages go to the cloud agent (`claude -p --resume <session>`). **Bri
 deletes the VM, and hands the chat back to the local agent, which gets a recap of the cloud turns with
 its next prompt. Deleting the branch deletes its VM too.
 
+## Machines tab
+
+Right sidebar → **Machines** lists every boxd machine on the account (`boxd machine list`, every 15 s
+while open), running first. Per machine:
+
+- **Connect** opens a bottom-panel tab running `boxd connect <vm>`: boxd brings its own SSH, so
+  Powerhouse never handles keys. The cloud chat's **Open VM** opens the same tab.
+- **Copy ssh**, **Start/Stop**, and **Delete**, which only exists on `ph-…` machines and asks for the
+  name to be typed.
+
+**New** creates `ph-<name>`, defaulting to the branch's cloud VM name. Backend: `cloud/machines.rs`;
+frontend: `src/lib/machines.ts`, `src/components/MachinesPane.tsx`.
+
 ## Where things live
 
 | What | Where |
@@ -45,6 +58,8 @@ stop on a real throwaway VM with a fake agent.
 `PH_CLOUD_REAL=1 cargo test cloud_real_claude_flow -- --ignored --nocapture` runs the whole flow with
 real Claude and your Keychain tokens: a throwaway `ph-e2e-*` branch, two turns, then it deletes the VM,
 the remote branch and the worktree. About 90 s and $0.40.
+`PH_CLOUD_E2E=1 cargo test machines_on_a_real_vm -- --ignored --nocapture` runs the Machines tab's
+calls (list, create, stop, start, delete) on a throwaway `ph-e2e-*` VM in about 10 s.
 
 ## Not in v1
 

@@ -10,7 +10,8 @@ import {
   type ToolTranscriptItem,
 } from "../../lib/toolDisplay";
 import { CloudResultCard } from "./CloudResultCard";
-import { dataUrl, formatBytes, type AttachmentRef } from "../../lib/attachments";
+import { attachmentData, formatBytes, type AttachmentRef } from "../../lib/attachments";
+import { ChatImage } from "./ChatImage";
 import { AcpMarkdown } from "./AcpMarkdown";
 import { ContextUsageMeter } from "./ContextUsageMeter";
 
@@ -47,6 +48,7 @@ function readableValue(value: unknown): string {
 
 function ToolContent({ item }: { item: ToolCallContent }) {
   if (item.type === "content") {
+    if (item.content.type === "image") return <ChatImage mimeType={item.content.mimeType} data={item.content.data} />;
     return item.content.type === "text" ? (
       <pre className="whitespace-pre-wrap break-words text-xs text-muted-foreground">
         {item.content.text}
@@ -117,7 +119,7 @@ const ToolRow = memo(function ToolRow({ item }: { item: ToolTranscriptItem }) {
             {location.path}{location.line ? `:${location.line}` : ""}
           </p>
         ))}
-        {item.content?.map((content, index) => (
+        {item.content?.filter((content) => !(content.type === "content" && content.content.type === "image")).map((content, index) => (
           <ToolContent key={index} item={content} />
         ))}
         {item.rawInput !== undefined && (
@@ -159,6 +161,9 @@ function ToolGroupItem({ group }: { group: ToolGroup }) {
         <span className="min-w-0 truncate text-muted-foreground/70">{summarizeTools(tools)}</span>
         {failed > 0 && <span className="shrink-0 text-destructive">{failed} failed</span>}
       </button>
+      {tools.flatMap((tool) => (tool.content ?? []).filter((content) => content.type === "content" && content.content.type === "image").map((content, index) => (
+        <ToolContent key={`${tool.id}-${index}`} item={content} />
+      )))}
       {open ? (
         <div className="ml-1.5 border-l border-border pl-3">
           {tools.map((tool) => (
@@ -183,16 +188,11 @@ function Attachments({ items }: { items?: AttachmentRef[] }) {
   return (
     <ul className="mt-2 flex flex-wrap gap-2" aria-label="Images">
       {items.map((ref) => {
-        const src = dataUrl(ref);
+        const data = attachmentData(ref.id);
         return (
           <li key={ref.id} className="text-[11px] text-muted-foreground">
-            {src ? (
-              <img
-                src={src}
-                alt={ref.name}
-                title={`${ref.name} · ${formatBytes(ref.bytes)}`}
-                className="max-h-48 max-w-72 border border-border object-contain"
-              />
+            {data ? (
+              <ChatImage mimeType={ref.mimeType} data={data} />
             ) : (
               <span className="inline-flex items-center gap-1 border border-border px-1.5 py-0.5">
                 ▣ {ref.name} · {formatBytes(ref.bytes)}
@@ -208,7 +208,10 @@ function Attachments({ items }: { items?: AttachmentRef[] }) {
 // Memoised so a streaming chunk re-renders only the message it lands in, not
 // every markdown block above it.
 const TranscriptItem = memo(function TranscriptItem({ item }: { item: AcpTranscriptItem }) {
-  if (item.type === "tool") return <ToolRow item={item} />;
+  if (item.type === "tool") return <>
+    <ToolRow item={item} />
+    {item.content?.filter((content) => content.type === "content" && content.content.type === "image").map((content, index) => <ToolContent key={index} item={content} />)}
+  </>;
   if (item.type === "cloud-workspace-result") return <CloudResultCard item={item} />;
   if (item.type === "usage") return <UsageItem item={item} />;
   if (item.type === "plan") {
@@ -244,8 +247,7 @@ const TranscriptItem = memo(function TranscriptItem({ item }: { item: AcpTranscr
   }
   if (item.role === "user") {
     return (
-      <article className="flex gap-2 bg-muted/60 px-2 py-2">
-        <span className="shrink-0 text-accent-brand" aria-hidden>&gt;</span>
+      <article aria-label="Your message" className="chat-user">
         <div className="min-w-0 flex-1">
           {item.text && (
             <p className="select-text whitespace-pre-wrap break-words">{item.text}</p>
@@ -292,6 +294,7 @@ export function AcpTranscript({
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
+  const [showLatest, setShowLatest] = useState(false);
   const entries = useMemo(() => groupTools(items), [items]);
 
   useEffect(() => {
@@ -299,18 +302,23 @@ export function AcpTranscript({
   }, [items, busy]);
 
   return (
+    <div className="relative min-h-0 flex-1">
     <div
       ref={scrollRef}
       role="log"
       aria-live="polite"
       aria-label="Chat transcript"
+      onLoad={() => {
+        if (followRef.current) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+      }}
       onScroll={(event) => {
         const element = event.currentTarget;
         followRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
+        setShowLatest(!followRef.current);
       }}
-      className="min-h-0 flex-1 overflow-y-auto px-3 py-2"
+      className="h-full overflow-y-auto px-6 py-8"
     >
-      <div className="flex w-full flex-col gap-3 text-[13px]">
+      <div className="chat-column flex flex-col gap-5">
         {items.length === 0 && (
           <div className="py-8" role="status">
             <p className="text-sm text-accent-brand">Powerhouse / {agentName}</p>
@@ -337,6 +345,12 @@ export function AcpTranscript({
           </p>
         )}
       </div>
+    </div>
+    {showLatest && <button type="button" className="jump-latest pi-btn" onClick={() => {
+      followRef.current = true;
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+      setShowLatest(false);
+    }}>↓ Jump to latest</button>}
     </div>
   );
 }

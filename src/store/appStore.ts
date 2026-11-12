@@ -6,7 +6,8 @@ import type { AcpTranscriptItem } from "../lib/acpTranscript";
 export type AgentTransport = "acp" | "pty";
 
 /** Which surface the persistent bottom panel is showing. */
-export type BottomTab = "shell" | "agent";
+/** `vm:<name>` is a `boxd connect` terminal opened from the Machines tab. */
+export type BottomTab = "shell" | "agent" | `vm:${string}`;
 
 /**
  * How completely a native-CLI handoff shares state with the ACP session:
@@ -109,7 +110,7 @@ export interface Branch {
 }
 
 /** Tabs of the toggleable right inspector sidebar. */
-export type RightTab = "files" | "changes" | "diff" | "merge";
+export type RightTab = "files" | "changes" | "diff" | "merge" | "machines";
 
 /** A configurable check step. `type` is reserved for future "agent" steps. */
 export interface WorkflowStep {
@@ -213,6 +214,7 @@ interface AppState extends PersistedTree {
   workspaceView: "home" | "workflows";
   setWorkspaceView: (view: "home" | "workflows") => void;
   saveWorkflowDraft: (draft: WorkflowDraft) => void;
+  deleteWorkflowDraft: (id: string) => void;
   hydrated: boolean;
   chatStatus: Record<string, ChatStatus>;
   /** chatId → agent turn state; absent means idle or already seen. */
@@ -223,6 +225,8 @@ interface AppState extends PersistedTree {
   chatPickerOpen: boolean;
   bottomPanelOpen: boolean;
   bottomTab: BottomTab;
+  /** VMs with a `boxd connect` terminal in the bottom panel, in tab order (not persisted). */
+  machineTerminals: string[];
   shellStatus: Record<string, ChatStatus>;
   /** branchId → setTimeout id of the in-flight handoff (presence = pending). */
   pendingHandoff: Record<string, number>;
@@ -302,6 +306,8 @@ interface AppState extends PersistedTree {
   toggleBottomPanel: () => void;
   setBottomTab: (tab: BottomTab) => void;
   openBottomPanel: (tab: BottomTab) => void;
+  openMachineTerminal: (vm: string) => void;
+  closeMachineTerminal: (vm: string) => void;
   setShellStatus: (branchId: string, status: ChatStatus) => void;
   setPendingHandoff: (branchId: string, timerId: number) => void;
   clearPendingHandoff: (branchId: string) => void;
@@ -542,6 +548,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       ? s.workflowDrafts.map((d) => d.id === draft.id ? draft : d)
       : [...s.workflowDrafts, draft],
   })),
+  deleteWorkflowDraft: (id) => set((s) => ({ workflowDrafts: s.workflowDrafts.filter((draft) => draft.id !== id) })),
   hydrated: false,
   chatStatus: {},
   chatActivity: {},
@@ -551,6 +558,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   chatPickerOpen: false,
   bottomPanelOpen: false,
   bottomTab: "shell",
+  machineTerminals: [],
   shellStatus: {},
   pendingHandoff: {},
   settingsOpen: false,
@@ -876,6 +884,23 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleBottomPanel: () => set((s) => ({ bottomPanelOpen: !s.bottomPanelOpen })),
   setBottomTab: (tab) => set({ bottomTab: tab }),
   openBottomPanel: (tab) => set({ bottomPanelOpen: true, bottomTab: tab }),
+  openMachineTerminal: (vm) =>
+    set((s) => ({
+      machineTerminals: s.machineTerminals.includes(vm) ? s.machineTerminals : [...s.machineTerminals, vm],
+      bottomPanelOpen: true,
+      bottomTab: `vm:${vm}`,
+    })),
+  closeMachineTerminal: (vm) =>
+    set((s) => {
+      // The closed terminal is disposed before its exit event arrives, so drop
+      // its status here: left at "running", the next Connect would not spawn.
+      const { [`vm:${vm}`]: _closed, ...shellStatus } = s.shellStatus;
+      return {
+        machineTerminals: s.machineTerminals.filter((m) => m !== vm),
+        bottomTab: s.bottomTab === `vm:${vm}` ? "shell" : s.bottomTab,
+        shellStatus,
+      };
+    }),
   setShellStatus: (branchId, status) =>
     set((s) => ({ shellStatus: { ...s.shellStatus, [branchId]: status } })),
 
