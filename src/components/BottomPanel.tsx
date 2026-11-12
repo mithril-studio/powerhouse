@@ -104,6 +104,7 @@ export function BottomPanel() {
   const repos = useAppStore((s) => s.repos);
   const settings = useAppStore((s) => s.settings);
   const branch = useAppStore(selectedBranch);
+  const workspaceActive = useAppStore((s) => !s.settingsOpen && s.workspaceView === "workspace");
 
   const branches = repos.flatMap((r) => r.branches);
 
@@ -137,7 +138,7 @@ export function BottomPanel() {
             key={`shell-${b.id}`}
             branch={b}
             kind="shell"
-            active={open && tab === "shell" && b.id === branch?.id}
+            active={workspaceActive && open && tab === "shell" && b.id === branch?.id}
           />
         ))}
         {branches.map((b) => (
@@ -145,7 +146,7 @@ export function BottomPanel() {
             key={`agent-${b.id}`}
             branch={b}
             kind="agent"
-            active={
+            active={workspaceActive &&
               open &&
               tab === "agent" &&
               b.id === branch?.id &&

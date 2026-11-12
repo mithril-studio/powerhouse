@@ -2,8 +2,8 @@ import { listen } from "@tauri-apps/api/event";
 import { message } from "@tauri-apps/plugin-dialog";
 import { resolveChatTransport, useAppStore } from "../store/appStore";
 import { createHandoffChat } from "./actions";
-import { sendAcpPrompt } from "./acpRegistry";
-import { appendSystemMessage, appendUserMessage } from "./acpTranscript";
+import { sendSessionPrompt } from "./agentSessionService";
+import { appendSystemMessage } from "./acpTranscript";
 import {
   handoffEnsureCommands,
   ptyWrite,
@@ -62,10 +62,7 @@ export async function startHandoff(repoId: string, branchId: string) {
   s.setPendingHandoff(branchId, timer);
 
   if (resolveChatTransport(s.settings, chat) === "acp") {
-    s.updateChatAcpTranscript(repoId, branchId, chatId, (items) =>
-      appendUserMessage(items, HANDOFF_INSTRUCTION),
-    );
-    void sendAcpPrompt(chatId, HANDOFF_INSTRUCTION).catch(async (error) => {
+    void sendSessionPrompt(chatId, HANDOFF_INSTRUCTION).catch(async (error) => {
       cancelHandoff(branchId);
       useAppStore.getState().updateChatAcpTranscript(repoId, branchId, chatId, (items) =>
         appendSystemMessage(items, `Handoff failed: ${String(error)}`, "error"),

@@ -231,9 +231,8 @@ pub struct CloudStore {
 
 impl CloudStore {
     pub fn default_path() -> PathBuf {
-        dirs::home_dir()
+        crate::data_dir::root()
             .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join(".powerhouse")
             .join("cloud-runs.json")
     }
 

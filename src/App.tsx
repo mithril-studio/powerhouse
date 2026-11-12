@@ -1,3 +1,4 @@
+import { TaskBoardPage } from "./features/tasks/TaskBoardPage";
 import { useEffect } from "react";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -66,6 +67,8 @@ export default function App() {
   const rightSidebarOpen = useAppStore((s) => s.rightSidebarOpen);
   const theme = useAppStore((s) => s.settings.theme);
   const settingsOpen = useAppStore((s) => s.settingsOpen);
+  const workspaceView = useAppStore((s) => s.workspaceView);
+  const boardOpen = workspaceView !== "workspace";
 
   useShortcuts();
 
@@ -99,7 +102,8 @@ export default function App() {
     <div className="flex h-screen overflow-hidden">
       <div className="flex shrink-0" inert={settingsOpen}><Sidebar /></div>
       {/* Keep chats and terminals mounted while Settings owns focus. */}
-      <main aria-label="Project workspace" inert={settingsOpen} className="flex min-w-0 flex-1 flex-col">
+      <main aria-label="Project workspace" inert={settingsOpen || boardOpen} className={`flex min-w-0 flex-1 flex-col ${boardOpen ? "hidden" : ""}`}>
+        <button className="self-start px-4 py-2 text-xs text-muted-foreground hover:text-foreground" onClick={() => useAppStore.setState({ workspaceView: "board" })}>← Task board</button>
         <TabBar repo={repo} branch={branch} />
         <div className="relative flex-1 overflow-hidden">
           {hydrated &&
@@ -112,7 +116,7 @@ export default function App() {
                     branch={b}
                     chat={chat}
                     active={
-                      !settingsOpen &&
+                      !settingsOpen && !boardOpen &&
                       r.id === repo?.id &&
                       b.id === branch?.id &&
                       chat.id === b.activeChatId
@@ -144,7 +148,8 @@ export default function App() {
         </div>
         <BottomPanel />
       </main>
-      {!settingsOpen && hydrated && rightSidebarOpen && <RightSidebar repo={repo} branch={branch} />}
+      {hydrated && boardOpen && <div className="flex min-w-0 flex-1" inert={settingsOpen}><TaskBoardPage /></div>}
+      {!settingsOpen && !boardOpen && hydrated && rightSidebarOpen && <RightSidebar repo={repo} branch={branch} />}
       <NewBranchModal />
       <WorkflowModal />
       <NewChatPicker />

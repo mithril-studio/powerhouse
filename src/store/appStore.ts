@@ -28,6 +28,7 @@ export interface Chat {
   /** When set, the agent is launched via its promptTemplate instead of bare command. */
   initialPrompt?: string;
   initialPromptState?: "sending" | "sent";
+  taskTurn?: Task["turn"];
   /**
    * Present once the chat has launched a resumable agent session; value is the
    * id passed to the agent's `--session-id` (initially `chat.id`). Its presence
@@ -159,6 +160,7 @@ export interface QueueEntry {
   steps: StepState[];
   error: string | null;
   merge_commit: string | null;
+  source_sha?: string | null;
   created_at: number;
   finished_at: number | null;
 }
@@ -507,6 +509,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       // they existed.
       repos: (tree?.repos ?? []).map((r) => ({
         ...r,
+        branches: r.branches.map((b) => ({ ...b, chats: b.chats.map((c) => c.taskTurn?.outcome === "running" ? { ...c, taskTurn: { ...c.taskTurn, outcome: "interrupted" as const } } : c) })),
         workflow: r.workflow ?? [],
         pushOnMerge: r.pushOnMerge ?? true,
       })),
@@ -679,7 +682,14 @@ export const useAppStore = create<AppState>((set, get) => ({
           }))
         : s.repos;
 
-      return { queues: { ...s.queues, [repoId]: merged }, repos };
+      const tasks = s.tasks.map((task) => {
+        if (task.repoId !== repoId) return task;
+        const branch = repos.find((r) => r.id === repoId)?.branches.find((b) => b.id === task.branchId);
+        const entry = merged.find((e) => e.branch === branch?.name && e.created_at >= task.lastWorkAt);
+        if (entry?.state !== "merged" || !entry.merge_commit || task.completion?.queueId === entry.id) return task;
+        return { ...task, completion: { kind: "merged" as const, at: entry.finished_at ?? Date.now(), queueId: entry.id, commit: entry.merge_commit, sourceSha: entry.source_sha ?? undefined }, lastActivityAt: entry.finished_at ?? Date.now() };
+      });
+      return { queues: { ...s.queues, [repoId]: merged }, repos, tasks };
     }),
 
   dismissQueueEntry: (repoId, entryId) =>

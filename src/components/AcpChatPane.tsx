@@ -90,6 +90,7 @@ export function AcpChatPane({ repoId, branch, chat, active }: Props) {
       {session.permission && (
         <AcpPermissionCard
           permission={session.permission}
+          autoFocus={active}
           onResolve={session.resolvePermission}
         />
       )}

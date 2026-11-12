@@ -67,6 +67,7 @@ pub struct QueueEntry {
     steps: Vec<StepState>,
     error: Option<String>,
     merge_commit: Option<String>,
+    source_sha: Option<String>,
     created_at: u64,
     finished_at: Option<u64>,
 }
@@ -160,8 +161,8 @@ fn repo_slug(repo_path: &str) -> String {
 }
 
 fn queue_base(repo_path: &str) -> PathBuf {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
-    home.join(".powerhouse")
+    let root = crate::data_dir::root().unwrap_or_else(|| PathBuf::from("/tmp/powerhouse"));
+    root
         .join("worktrees")
         .join(repo_slug(repo_path))
         .join(".queue")
@@ -287,6 +288,7 @@ pub fn queue_enqueue(
             steps,
             error: None,
             merge_commit: None,
+            source_sha: None,
             created_at: now_ms(),
             finished_at: None,
         };
@@ -597,9 +599,15 @@ fn run_pipeline(app: &AppHandle, repo_id: &str, job: &Job) -> Outcome {
         return Outcome::Failed(format!("could not create worktree:\n{e}"));
     }
 
+    let source_sha = match git(repo, &["rev-parse", &job.branch]) {
+        Ok(sha) => sha,
+        Err(e) => { cleanup_worktree(repo, &wt); return Outcome::Failed(e); }
+    };
+    update_entry(app, repo_id, &job.entry_id, |e| e.source_sha = Some(source_sha.clone()));
+
     // Merge the candidate. Conflict → abort, fail, queue continues.
     let msg = format!("Merge {} (powerhouse queue)", job.branch);
-    if let Err(e) = git(&wt, &["merge", "--no-ff", "-m", &msg, &job.branch]) {
+    if let Err(e) = git(&wt, &["merge", "--no-ff", "-m", &msg, &source_sha]) {
         let _ = git(&wt, &["merge", "--abort"]);
         cleanup_worktree(repo, &wt);
         return Outcome::Failed(format!("merge conflict:\n{e}"));

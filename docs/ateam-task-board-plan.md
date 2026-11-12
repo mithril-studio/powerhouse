@@ -1,6 +1,6 @@
 # ATeam task workflow for Powerhouse
 
-Planning baseline: 2026-11-12. Powerhouse commit `10abad63e8276258b3c222c7a96091241a3bbc75` (`feature/readable-agent-chat`), with navigation/UI edits still in progress. Recheck those files before implementation. This is a proposed implementation plan; no application behavior has been changed.
+Planning baseline: 2026-11-12. Powerhouse commit `10abad63e8276258b3c222c7a96091241a3bbc75` (`feature/readable-agent-chat`), with navigation/UI edits still in progress. Recheck those files before implementation. Implementation of increments 1–6 is now on `feature/ateam-task-board`. See [implementation and verification](task-board-verification.md) for delivered behavior and remaining live-test limits. The design below records the intended architecture.
 
 Build a task workspace around Powerhouse's existing worktrees, chats, permissions, diffs, and merge queue. The useful outcome is that Joost can start several tasks, leave agents working, handle the ones needing him, and review and land finished work from one board.
 

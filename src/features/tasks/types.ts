@@ -1,5 +1,15 @@
-export type TaskColumn = "backlog" | "running" | "attention" | "review" | "done";
-export type TurnOutcome = "running" | "completed" | "cancelled" | "failed" | "interrupted";
+export type TaskColumn =
+  | "backlog"
+  | "running"
+  | "attention"
+  | "review"
+  | "done";
+export type TurnOutcome =
+  | "running"
+  | "completed"
+  | "cancelled"
+  | "failed"
+  | "interrupted";
 export interface Task {
   id: string;
   repoId: string;
@@ -15,9 +25,21 @@ export interface Task {
   lastActivityAt: number;
   seenAt: number;
   archivedAt: number | null;
-  launch: { stage: "not_started" | "preparing" | "ready" | "failed" | "interrupted"; attemptId?: string; branchName?: string; error?: string };
+  parked?: boolean;
+  launch: {
+    stage: "not_started" | "preparing" | "ready" | "failed" | "interrupted";
+    attemptId?: string;
+    branchName?: string;
+    error?: string;
+  };
   turn?: { outcome: TurnOutcome; at: number; summary?: string };
-  completion?: { kind: "manual" | "merged"; at: number; queueId?: string; commit?: string };
+  completion?: {
+    kind: "manual" | "merged";
+    at: number;
+    queueId?: string;
+    commit?: string;
+    sourceSha?: string;
+  };
   queueId?: string;
   lastWorkAt: number;
 }
@@ -29,6 +51,15 @@ export interface SessionActivity {
   error: string | null;
 }
 export const TASK_COLUMNS: { id: TaskColumn; label: string }[] = [
-  { id: "backlog", label: "Backlog" }, { id: "running", label: "In Progress" },
-  { id: "attention", label: "Needs You" }, { id: "review", label: "Review" }, { id: "done", label: "Done" },
+  { id: "backlog", label: "Backlog" },
+  { id: "running", label: "In Progress" },
+  { id: "attention", label: "Needs You" },
+  { id: "review", label: "Review" },
+  { id: "done", label: "Done" },
 ];
+
+export interface TaskFacts {
+  head: string;
+  dirty: boolean;
+  changed_files: number;
+}

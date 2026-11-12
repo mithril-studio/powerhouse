@@ -19,7 +19,7 @@ export function useShortcuts() {
         return;
       }
       // Settings owns focus; workspace shortcuts must not mutate a covered chat.
-      if (s.settingsOpen) return;
+      if (s.settingsOpen || s.workspaceView !== "workspace") return;
 
       // Ctrl+` toggles the bottom terminal (layout-independent via e.code).
       if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.code === "Backquote") {

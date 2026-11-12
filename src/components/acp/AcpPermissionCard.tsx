@@ -11,8 +11,10 @@ export interface PendingPermission {
 export function AcpPermissionCard({
   permission,
   onResolve,
+  autoFocus = true,
 }: {
   permission: PendingPermission;
+  autoFocus?: boolean;
   onResolve: (response: RequestPermissionResponse) => void;
 }) {
   return (
@@ -24,7 +26,7 @@ export function AcpPermissionCard({
           {permission.request.options.map((option, index) => (
             <button
               key={option.optionId}
-              autoFocus={index === 0}
+              autoFocus={autoFocus && index === 0}
               onClick={() =>
                 onResolve({ outcome: { outcome: "selected", optionId: option.optionId } })
               }

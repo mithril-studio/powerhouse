@@ -74,7 +74,7 @@ pub struct Telemetry {
 impl Telemetry {
     pub fn init(app: AppHandle) -> Telemetry {
         let boot_id = uuid::Uuid::new_v4().to_string();
-        let db_path = dirs::home_dir().map(|h| h.join(".powerhouse").join("telemetry.db"));
+        let db_path = crate::data_dir::root().map(|h| h.join("telemetry.db"));
         let conn = db_path.as_ref().and_then(|path| {
             if let Some(dir) = path.parent() {
                 let _ = std::fs::create_dir_all(dir);

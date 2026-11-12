@@ -1,4 +1,5 @@
 mod acp;
+mod data_dir;
 mod cloud;
 mod git;
 mod github;
@@ -53,6 +54,9 @@ pub fn run() {
             pty::pty_delete_transcript,
             git::git_validate_repo,
             git::git_create_worktree,
+            git::git_ensure_task_worktree,
+            git::git_worktree_dirty,
+            git::git_task_facts,
             git::git_remove_worktree,
             git::git_changed_files,
             git::git_file_diff,
@@ -69,6 +73,7 @@ pub fn run() {
             github::github_device_start,
             github::github_poll,
             github::github_account,
+            github::github_board_issues,
             github::github_disconnect,
             cloud::commands::cloud_list_runs,
             cloud::commands::cloud_inspect_source,

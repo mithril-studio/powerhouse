@@ -52,6 +52,32 @@ or a workflow needs direct CLI access, press **⌘⇧P** and choose **Open termi
   (`git worktree remove --force`, confirm dialog); quitting the app kills all
   sessions. `pty_kill_all` also runs on boot for dev-reload hygiene.
 
+## Task board
+
+Open **Task board** or **Mission Control** in the sidebar. Create a task, save it
+for later, or start its ACP agent in the background. Each task gets its own
+recoverable Git worktree. Attach existing branches from **Add existing work**.
+
+Cards follow agent activity through Backlog, In Progress, Needs You, Review, and
+Done. Answer live permission requests directly on the board; opening a card
+never approves anything. Review changes in the existing workspace, then use
+**Run checks & merge** (the button shows when push is enabled). A finished agent
+turn is ready for review; only a merge receipt or explicit non-code completion
+marks the task done. New work reopens it. Archive retains the workspace.
+
+Choose a project to read its GitHub issue backlog using the existing GitHub
+connection. Opening an issue pre-fills a task; starting it is explicit. The
+integration does not create issues, post comments, or close issues. Mission
+Control shows task activity and permissions without duplicating terminal input.
+Existing cloud runs can be linked, inspected, canceled, and imported from tasks.
+
+Local agents still stop when Powerhouse quits. On restart, interrupted tasks
+need an explicit Resume; no initial prompt is silently replayed. Custom PTY
+agents retain their workspace UI with limited board status. Background task
+launch uses ACP profiles.
+
+See [task board verification](docs/task-board-verification.md).
+
 ## Chat presentation
 
 The shared chat uses a warm, Conductor-inspired workspace with sans-serif prose,

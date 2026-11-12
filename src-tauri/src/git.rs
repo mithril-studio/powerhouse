@@ -127,7 +127,9 @@ pub fn git_create_worktree(
         Err(first_err) => {
             // Stale worktree metadata is the common failure — prune and retry once.
             let _ = git(&repo, &["worktree", "prune"]);
-            git(&repo, &args).map(|_| worktree_str).map_err(|_| first_err)?
+            git(&repo, &args)
+                .map(|_| worktree_str)
+                .map_err(|_| first_err)?
         }
     };
     crate::handoff::ensure_powerhouse_dir(Path::new(&created));
@@ -244,11 +246,7 @@ pub fn git_file_content(worktree_path: String, path: String) -> Result<String, S
 /// Unified diff for a single path: the merge base with `base` → working tree,
 /// so committed and uncommitted changes are shown together.
 #[tauri::command]
-pub fn git_file_diff(
-    worktree_path: String,
-    base: String,
-    path: String,
-) -> Result<String, String> {
+pub fn git_file_diff(worktree_path: String, base: String, path: String) -> Result<String, String> {
     let wt = PathBuf::from(&worktree_path);
     let base_ref = git(&wt, &["merge-base", &base, "HEAD"]).unwrap_or(base);
     let out = git_raw(&wt, &["diff", &base_ref, "--", &path])?;
@@ -257,4 +255,130 @@ pub fn git_file_diff(
     }
     // Untracked file — no tracked diff exists; diff against an empty file.
     Ok(git_raw(&wt, &["diff", "--no-index", "--", "/dev/null", &path]).unwrap_or_default())
+}
+
+/// Task UUIDs own stable paths, so admission can recover after an interrupted save.
+fn ensure_task_worktree(
+    repo: &Path,
+    root: &Path,
+    task_id: &str,
+    branch: &str,
+    base: &str,
+) -> Result<String, String> {
+    let id = uuid::Uuid::parse_str(task_id).map_err(|_| "Invalid task id")?;
+    git(repo, &["check-ref-format", "--branch", branch])?;
+    let path = root.join(id.to_string());
+    let target = path.to_string_lossy().to_string();
+    if path.exists() {
+        let listing = git(repo, &["worktree", "list", "--porcelain"])?;
+        let expected_path = std::fs::canonicalize(&path).map_err(|e| e.to_string())?;
+        let expected_branch = format!("branch refs/heads/{branch}");
+        if listing.split("\n\n").any(|block| {
+            block.lines().any(|l| {
+                l.strip_prefix("worktree ")
+                    .and_then(|p| std::fs::canonicalize(p).ok())
+                    .as_ref()
+                    == Some(&expected_path)
+            }) && block.lines().any(|l| l == expected_branch)
+        }) {
+            return Ok(target);
+        }
+        return Err("Task path exists but is not the expected registered worktree. Inspect it before retrying.".into());
+    }
+    std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
+    let reference = format!("refs/heads/{branch}");
+    if git(repo, &["show-ref", "--verify", "--quiet", &reference]).is_ok() {
+        git(repo, &["worktree", "add", &target, branch])?;
+    } else {
+        git(repo, &["worktree", "add", "-b", branch, &target, base])?;
+    }
+    crate::handoff::ensure_powerhouse_dir(&path);
+    Ok(target)
+}
+
+#[tauri::command]
+pub fn git_ensure_task_worktree(
+    repo_path: String,
+    task_id: String,
+    branch: String,
+    base: String,
+) -> Result<String, String> {
+    let root = crate::data_dir::root().ok_or("Cannot resolve data directory")?;
+    ensure_task_worktree(
+        Path::new(&repo_path),
+        &root.join("worktrees/tasks"),
+        &task_id,
+        &branch,
+        &base,
+    )
+}
+
+#[tauri::command]
+pub fn git_worktree_dirty(worktree_path: String) -> Result<bool, String> {
+    git(Path::new(&worktree_path), &["status", "--porcelain"]).map(|s| !s.is_empty())
+}
+
+#[cfg(test)]
+mod task_worktree_tests {
+    use super::*;
+    #[test]
+    fn recovers_the_same_allocation_and_rejects_foreign_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        git(&repo, &["init", "-b", "main"]).unwrap();
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        )
+        .unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let root = dir.path().join("tasks");
+        let first = ensure_task_worktree(&repo, &root, &id, "task/one", "main").unwrap();
+        assert_eq!(
+            first,
+            ensure_task_worktree(&repo, &root, &id, "task/one", "main").unwrap()
+        );
+        assert!(ensure_task_worktree(&repo, &root, &id, "task/other", "main").is_err());
+        assert!(ensure_task_worktree(&repo, &root, "../escape", "task/no", "main").is_err());
+        assert!(ensure_task_worktree(
+            &repo,
+            &root,
+            &uuid::Uuid::new_v4().to_string(),
+            "bad name",
+            "main"
+        )
+        .is_err());
+    }
+}
+
+#[derive(serde::Serialize)]
+pub struct TaskFacts {
+    head: String,
+    dirty: bool,
+    changed_files: usize,
+}
+#[tauri::command]
+pub fn git_task_facts(worktree_path: String, base: String) -> Result<TaskFacts, String> {
+    let path = Path::new(&worktree_path);
+    let head = git(path, &["rev-parse", "HEAD"])?;
+    let dirty = !git(path, &["status", "--porcelain"])?.is_empty();
+    let diff = git(
+        path,
+        &["diff", "--name-only", &format!("{base}...HEAD"), "--"],
+    )?;
+    Ok(TaskFacts {
+        head,
+        dirty,
+        changed_files: diff.lines().count(),
+    })
 }

@@ -21,6 +21,7 @@ pub struct HandoffWatchers(pub Mutex<HashMap<String, Arc<AtomicBool>>>);
 /// only — the watcher catches manual handoffs regardless). Never overwrites.
 #[tauri::command]
 pub fn handoff_ensure_commands() -> Result<(), String> {
+    if crate::data_dir::test_root().is_some() { return Ok(()); }
     let home = dirs::home_dir().ok_or("cannot resolve home directory")?;
     let targets = [
         home.join(".claude").join("commands").join("handoff.md"),

@@ -443,3 +443,6 @@ export const githubAccount = () =>
   invoke<GithubAccount | null>("github_account");
 
 export const githubDisconnect = () => invoke<void>("github_disconnect");
+
+export const gitEnsureTaskWorktree = (repoPath: string, taskId: string, branch: string, base: string) => invoke<string>("git_ensure_task_worktree", { repoPath, taskId, branch, base });
+export const gitWorktreeDirty = (worktreePath: string) => invoke<boolean>("git_worktree_dirty", { worktreePath });

@@ -26,3 +26,25 @@ it("persists workflow edits but not workspace navigation", async () => {
     vi.unstubAllGlobals();
   }
 });
+
+it("serializes launch-boundary saves so an older write cannot overtake a newer one", async () => {
+  const { flushPersistence } = await import("./persist");
+  vi.useFakeTimers();
+  let release!: () => void;
+  disk.set.mockClear(); disk.save.mockClear();
+  disk.save.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+  try {
+    useAppStore.getState().hydrate(null);
+    const first = newWorkflowDraft("repo");
+    useAppStore.getState().saveWorkflowDraft(first);
+    const a = flushPersistence();
+    await vi.advanceTimersByTimeAsync(0);
+    const second = { ...first, name: "Newer draft" };
+    useAppStore.getState().saveWorkflowDraft(second);
+    const b = flushPersistence();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(disk.set).toHaveBeenCalledTimes(1);
+    release(); await Promise.all([a, b]);
+    expect(disk.set).toHaveBeenLastCalledWith("tree", expect.objectContaining({ workflowDrafts: [second] }));
+  } finally { vi.useRealTimers(); }
+});

@@ -203,3 +203,13 @@
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* Task surfaces share the workspace's semantic palette. */
+.task-input { width: 100%; border: 1px solid var(--input); border-radius: var(--radius); background: var(--background); color: var(--foreground); padding: 8px 10px; font-size: 13px; }
+.task-input:focus { outline: 2px solid var(--ring); outline-offset: 1px; }
+.task-label { display: block; margin-top: 12px; font-size: 12px; }
+.task-label .task-input { margin-top: 6px; }
+.task-card { border: 1px solid var(--border); border-radius: 10px; background: var(--card); padding: 14px; overflow-wrap: anywhere; }
+.task-card:hover { border-color: var(--input); }
+.task-card-selected { border-color: var(--primary); }
+.task-card button:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; border-radius: 4px; }

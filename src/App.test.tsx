@@ -8,7 +8,7 @@ import App from "./App";
 vi.mock("./store/appStore", async (original) => {
   const actual = await original<typeof import("./store/appStore")>();
   return { ...actual, useAppStore: Object.assign(
-    (select: (s: ReturnType<typeof actual.useAppStore.getState>) => unknown) => select(actual.useAppStore.getState()),
+    (select?: (s: ReturnType<typeof actual.useAppStore.getState>) => unknown) => select ? select(actual.useAppStore.getState()) : actual.useAppStore.getState(),
     actual.useAppStore,
   ) };
 });
@@ -58,4 +58,16 @@ it("keeps chats and terminals mounted but inactive while settings is open", () =
   useAppStore.getState().closeSettings();
   expect(renderToStaticMarkup(<App />)).toContain('data-chat-active="true">Mounted chat');
   expect(useAppStore.getState().selection).toEqual({ repoId: repo.id, branchId: "branch" });
+});
+
+it("board navigation keeps chats mounted and disables the project workspace", () => {
+  const r = useAppStore.getState().addRepo({ name: "r", path: "/r", defaultBranch: "main" });
+  useAppStore.getState().addBranch(r.id, { id: "b", name: "f", worktreePath: "/b", chats: [{ id: "c", title: "C" }], activeChatId: "c" });
+  useAppStore.setState({ workspaceView: "board" });
+  const html = renderToStaticMarkup(<App />);
+  expect(html).toContain('aria-label="Task board"');
+  expect(html).toContain('aria-label="Project workspace" inert=""');
+  expect(html).toContain('data-chat-active="false">Mounted chat');
+  for (const label of ["Backlog", "In Progress", "Needs You", "Review", "Done"]) expect(html).toContain(label);
+  expect(html).not.toContain("Project inspector");
 });

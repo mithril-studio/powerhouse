@@ -4,6 +4,7 @@ import { RepoItem } from "./RepoItem";
 
 export function Sidebar() {
   const repos = useAppStore((s) => s.repos);
+  const view = useAppStore((s) => s.workspaceView);
   const openSettings = useAppStore((s) => s.openSettings);
   return (
     <aside aria-label="Main sidebar" className="flex w-60 shrink-0 flex-col border-r border-sidebar-border bg-sidebar">
@@ -15,6 +16,9 @@ export function Sidebar() {
         </svg>
         <span className="text-sm font-semibold tracking-tight">Powerhouse</span>
       </div>
+      <nav aria-label="Workspace views" className="mb-5 space-y-1 px-2">
+        {([ ["board", "Task board"], ["mission", "Mission Control"] ] as const).map(([id, label]) => <button key={id} aria-current={view === id ? "page" : undefined} onClick={() => useAppStore.setState({ workspaceView: id, settingsOpen: false })} className={`flex w-full items-center rounded-md px-3 py-2 text-left text-sm ${view === id ? "bg-sidebar-selected text-foreground" : "text-muted-foreground hover:bg-sidebar-hover"}`}>{label}</button>)}
+      </nav>
       <div className="flex items-center justify-between px-4 pb-2">
         <span className="text-xs font-medium text-muted-foreground">
           Projects

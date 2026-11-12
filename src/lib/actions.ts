@@ -17,7 +17,7 @@ import {
   ptyDeleteTranscript,
 } from "./ipc";
 import { disposeTerminal, markAutoSpawn } from "./terminalRegistry";
-import { disposeAcp } from "./acpRegistry";
+import { closeSession, useSessions } from "./agentSessionService";
 import { cloudImport, cloudSync } from "./cloud";
 
 export async function pickAndAddRepo() {
@@ -106,7 +106,7 @@ export async function createBranch(repoId: string, name: string) {
 
 export function deleteChat(repoId: string, branchId: string, chatId: string) {
   disposeTerminal(chatId);
-  void disposeAcp(chatId);
+  void closeSession(chatId);
   void ptyDeleteTranscript(chatId).catch(() => {});
   useAppStore.getState().removeChat(repoId, branchId, chatId);
 }
@@ -116,6 +116,10 @@ export async function deleteBranch(repoId: string, branchId: string) {
   const repo = s.repos.find((r) => r.id === repoId);
   const branch = repo?.branches.find((b) => b.id === branchId);
   if (!repo || !branch) return;
+  if (branch.chats.some((c) => { const live = useSessions.getState().sessions[c.id]; return live?.busy || live?.permissionCount || live?.connection === "starting" || (!live && s.chatStatus[c.id] === "running"); })) {
+    await message("Stop active agents and resolve permissions before removing this worktree.", { title: "Worktree is active", kind: "warning" });
+    return;
+  }
 
   const confirmed = await ask(
     `Delete branch “${branch.name}”?\n\nIts worktree and any uncommitted changes will be removed. The git branch itself is kept.`,
@@ -133,7 +137,7 @@ export async function deleteBranch(repoId: string, branchId: string) {
 
   for (const chat of branch.chats) {
     disposeTerminal(chat.id);
-    void disposeAcp(chat.id);
+    void closeSession(chat.id);
     void ptyDeleteTranscript(chat.id).catch(() => {});
   }
   // Bottom-panel surfaces (ids mirror BottomPanel's shellId/agentCliId).
@@ -216,14 +220,16 @@ export async function importCloudResult(runId: string) {
   const repo = s.repos.find((r) => r.id === rec.repo_id);
   if (!repo) throw new Error("the run's repository is no longer in Powerhouse");
   const imported = await cloudImport(runId);
-  const branch: Branch = {
+  const existing = useAppStore.getState().repos.find((r) => r.id === repo.id)?.branches.find((b) => b.worktreePath === imported.worktree_path);
+  const branch: Branch = existing ?? {
     id: crypto.randomUUID(),
     name: imported.branch,
     worktreePath: imported.worktree_path,
     chats: [],
     activeChatId: null,
   };
-  s.addBranch(repo.id, branch);
+  if (!existing) s.addBranch(repo.id, branch);
+  s.select(repo.id, branch.id);
   s.openRightTab("changes");
   // Refresh the record so the card shows the imported worktree.
   useAppStore.getState().setCloudRun(await cloudSync(runId).catch(() => ({ ...rec, imported_worktree: imported.worktree_path })));

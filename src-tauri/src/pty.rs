@@ -13,8 +13,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 /// after a restart. Keyed by chat/session id.
 fn transcript_path(id: &str) -> Option<PathBuf> {
     Some(
-        dirs::home_dir()?
-            .join(".powerhouse")
+        crate::data_dir::root()?
             .join("transcripts")
             .join(format!("{id}.log")),
     )

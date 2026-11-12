@@ -2,51 +2,127 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AcpCallbacks } from "./acpRegistry";
 import { useAppStore } from "../store/appStore";
 import { adoptBranch } from "../features/tasks/taskStore";
-import { closeSession, sendSessionPrompt, startSession, useSessions } from "./agentSessionService";
-const mock = vi.hoisted(() => ({ start: vi.fn(), send: vi.fn(), flush: vi.fn().mockResolvedValue(undefined) }));
-vi.mock("./acpRegistry", () => ({ startAcp: mock.start, sendAcpPrompt: mock.send, disposeAcp: vi.fn().mockResolvedValue(undefined), cancelAcpPrompt: vi.fn().mockResolvedValue(undefined), setAcpMode: vi.fn(), setAcpConfigOption: vi.fn() }));
+import {
+  closeSession,
+  sendSessionPrompt,
+  startSession,
+  useSessions,
+} from "./agentSessionService";
+const mock = vi.hoisted(() => ({
+  start: vi.fn(),
+  send: vi.fn(),
+  flush: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("./acpRegistry", () => ({
+  startAcp: mock.start,
+  sendAcpPrompt: mock.send,
+  disposeAcp: vi.fn().mockResolvedValue(undefined),
+  cancelAcpPrompt: vi.fn().mockResolvedValue(undefined),
+  setAcpMode: vi.fn(),
+  setAcpConfigOption: vi.fn(),
+}));
 vi.mock("../store/persist", () => ({ flushPersistence: mock.flush }));
-vi.mock("./ipc", () => ({ handoffWatchStart: vi.fn().mockResolvedValue(undefined), telemetryAnnotateRun: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("./ipc", () => ({
+  handoffWatchStart: vi.fn().mockResolvedValue(undefined),
+  telemetryAnnotateRun: vi.fn().mockResolvedValue(undefined),
+}));
 let callbacks: AcpCallbacks;
 let repoId: string;
 beforeEach(() => {
- useAppStore.getState().hydrate(null); mock.start.mockReset(); mock.send.mockReset();
- const r = useAppStore.getState().addRepo({ name: "r", path: "/r", defaultBranch: "main" }); repoId = r.id;
- useAppStore.getState().addBranch(r.id, { id: "branch", name: "f", worktreePath: "/f", chats: [{ id: "chat", title: "Chat" }], activeChatId: "chat" });
- adoptBranch(r.id, "branch");
- mock.start.mockImplementation(async (input) => { callbacks = input.callbacks; return { sessionId: "s", resumed: false, capabilities: {} }; });
- mock.send.mockResolvedValue({ stopReason: "end_turn" });
+  useAppStore.getState().hydrate(null);
+  mock.start.mockReset();
+  mock.send.mockReset();
+  const r = useAppStore
+    .getState()
+    .addRepo({ name: "r", path: "/r", defaultBranch: "main" });
+  repoId = r.id;
+  useAppStore
+    .getState()
+    .addBranch(r.id, {
+      id: "branch",
+      name: "f",
+      worktreePath: "/f",
+      chats: [{ id: "chat", title: "Chat" }],
+      activeChatId: "chat",
+    });
+  adoptBranch(r.id, "branch");
+  mock.start.mockImplementation(async (input) => {
+    callbacks = input.callbacks;
+    return { sessionId: "s", resumed: false, capabilities: {} };
+  });
+  mock.send.mockResolvedValue({ stopReason: "end_turn" });
 });
-afterEach(async () => { await closeSession("chat"); });
+afterEach(async () => {
+  await closeSession("chat");
+});
 it("coalesces simultaneous starts from two views", async () => {
- await Promise.all([startSession("chat", false), startSession("chat", false)]);
- expect(mock.start).toHaveBeenCalledOnce(); expect(useSessions.getState().sessions.chat.connection).toBe("ready");
+  await Promise.all([startSession("chat", false), startSession("chat", false)]);
+  expect(mock.start).toHaveBeenCalledOnce();
+  expect(useSessions.getState().sessions.chat.connection).toBe("ready");
 });
 it("keeps concurrent permissions and ignores a stale answer", async () => {
- await startSession("chat", false);
- const req = { sessionId: "s", toolCall: { toolCallId: "tool", title: "Write file" }, options: [{ optionId: "yes", name: "Allow", kind: "allow_once" as const }] };
- const a = callbacks.onPermission(req); const b = callbacks.onPermission(req);
- const old = useSessions.getState().sessions.chat.permissions[0];
- old.resolve({ outcome: { outcome: "selected", optionId: "yes" } }); await a;
- expect(useSessions.getState().sessions.chat.permissions).toHaveLength(1);
- old.resolve({ outcome: { outcome: "selected", optionId: "yes" } });
- expect(useSessions.getState().sessions.chat.permissions).toHaveLength(1);
- await closeSession("chat"); expect(await b).toEqual({ outcome: { outcome: "cancelled" } });
+  await startSession("chat", false);
+  const req = {
+    sessionId: "s",
+    toolCall: { toolCallId: "tool", title: "Write file" },
+    options: [{ optionId: "yes", name: "Allow", kind: "allow_once" as const }],
+  };
+  const a = callbacks.onPermission(req);
+  const b = callbacks.onPermission(req);
+  const old = useSessions.getState().sessions.chat.permissions[0];
+  old.resolve({ outcome: { outcome: "selected", optionId: "yes" } });
+  await a;
+  expect(useSessions.getState().sessions.chat.permissions).toHaveLength(1);
+  old.resolve({ outcome: { outcome: "selected", optionId: "yes" } });
+  expect(useSessions.getState().sessions.chat.permissions).toHaveLength(1);
+  await closeSession("chat");
+  expect(await b).toEqual({ outcome: { outcome: "cancelled" } });
 });
 it("failed and cancelled prompts never become successful review turns", async () => {
- await startSession("chat", false);
- mock.send.mockRejectedValueOnce(new Error("transport lost")); await sendSessionPrompt("chat", "Build it");
- expect(useAppStore.getState().tasks[0].turn?.outcome).toBe("failed");
- mock.send.mockResolvedValueOnce({ stopReason: "cancelled" }); await sendSessionPrompt("chat", "Try again");
- expect(useAppStore.getState().tasks[0].turn?.outcome).toBe("cancelled");
+  await startSession("chat", false);
+  mock.send.mockRejectedValueOnce(new Error("transport lost"));
+  await expect(sendSessionPrompt("chat", "Build it")).rejects.toThrow(
+    "transport lost",
+  );
+  expect(useAppStore.getState().tasks[0].turn?.outcome).toBe("failed");
+  mock.send.mockResolvedValueOnce({ stopReason: "cancelled" });
+  await sendSessionPrompt("chat", "Try again");
+  expect(useAppStore.getState().tasks[0].turn?.outcome).toBe("cancelled");
 });
 it("resume fallback never resends the initial prompt", async () => {
- useAppStore.setState((s) => ({ repos: s.repos.map((r) => ({ ...r, branches: r.branches.map((b) => ({ ...b, chats: [{ id: "chat", title: "Chat", initialPrompt: "Original", agentSessionId: "old" }] })) })) }));
- await startSession("chat", true);
- expect(mock.send).not.toHaveBeenCalled(); expect(useAppStore.getState().repos.find((r) => r.id === repoId)?.branches[0].chats[0].agentSessionId).toBe("s");
+  useAppStore.setState((s) => ({
+    repos: s.repos.map((r) => ({
+      ...r,
+      branches: r.branches.map((b) => ({
+        ...b,
+        chats: [
+          {
+            id: "chat",
+            title: "Chat",
+            initialPrompt: "Original",
+            agentSessionId: "old",
+          },
+        ],
+      })),
+    })),
+  }));
+  await startSession("chat", true);
+  expect(mock.send).not.toHaveBeenCalled();
+  expect(
+    useAppStore.getState().repos.find((r) => r.id === repoId)?.branches[0]
+      .chats[0].agentSessionId,
+  ).toBe("s");
 });
 it("callbacks from a closed generation cannot mutate a new session", async () => {
- await startSession("chat", false); const old = callbacks; await closeSession("chat"); await startSession("chat", true);
- old.onExit(1); old.onBusyChange?.(true);
- expect(useSessions.getState().sessions.chat).toMatchObject({ connection: "ready", busy: false, error: null });
+  await startSession("chat", false);
+  const old = callbacks;
+  await closeSession("chat");
+  await startSession("chat", true);
+  old.onExit(1);
+  old.onBusyChange?.(true);
+  expect(useSessions.getState().sessions.chat).toMatchObject({
+    connection: "ready",
+    busy: false,
+    error: null,
+  });
 });
