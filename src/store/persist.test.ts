@@ -12,7 +12,7 @@ it("persists workflow edits but not workspace navigation", async () => {
   try {
     useAppStore.getState().hydrate(null);
     startPersistence();
-    useAppStore.getState().setWorkspaceView("workflows");
+    useAppStore.getState().setWorkspaceView("board");
     await vi.advanceTimersByTimeAsync(400);
     expect(disk.set).not.toHaveBeenCalled();
     const draft = newWorkflowDraft("repo");

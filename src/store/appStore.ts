@@ -217,7 +217,7 @@ interface LegacyTree {
   agentCmd?: string;
 }
 
-export type WorkspaceView = "home" | "workflows" | "board" | "mission";
+export type WorkspaceView = "home" | "board" | "mission";
 
 interface AppState extends PersistedTree {
   tasks: Task[];

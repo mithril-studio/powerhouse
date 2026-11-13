@@ -22,10 +22,7 @@ import { RightSidebar } from "./components/RightSidebar";
 import { NewChatPicker } from "./components/NewChatPicker";
 import { SettingsPage } from "./components/SettingsPage";
 import { ProjectSettingsPage } from "./components/ProjectSettingsPage";
-import { TelemetryPage } from "./components/telemetry/TelemetryPage";
 import { PowerConfirmationDialog } from "./components/PowerConfirmationDialog";
-import { WorkflowsPage } from "./features/workflows/WorkflowsPage";
-import { MemoryPage } from "./components/memory/MemoryPage";
 
 let booted = false;
 
@@ -153,16 +150,13 @@ export default function App() {
         </div>
         <BottomPanel />
       </main>
-      {workspaceView === "workflows" && <WorkflowsPage />}
       {hydrated && (workspaceView === "board" || workspaceView === "mission") && <TaskBoardPage />}
       {homeVisible && hydrated && rightSidebarOpen && <RightSidebar repo={repo} branch={branch} />}
       <NewBranchModal />
       <NewChatPicker />
       <SettingsPage />
       <ProjectSettingsPage />
-      <TelemetryPage />
       <PowerConfirmationDialog />
-      <MemoryPage />
     </div>
   );
 }

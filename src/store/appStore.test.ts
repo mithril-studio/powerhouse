@@ -207,10 +207,10 @@ describe("page navigation overlays", () => {
     );
 
     useAppStore.getState().openMemory();
-    useAppStore.getState().setWorkspaceView("workflows");
+    useAppStore.getState().setWorkspaceView("board");
     expect(useAppStore.getState()).toEqual(
       expect.objectContaining({
-        workspaceView: "workflows",
+        workspaceView: "board",
         settingsOpen: false,
         memoryOpen: false,
         telemetryOpen: false,

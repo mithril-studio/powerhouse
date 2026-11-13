@@ -5,7 +5,8 @@ import { RepoItem } from "./RepoItem";
 import { AddProjectModal, type AddProjectMode } from "./AddProjectModal";
 import { BoardIcon, BoltIcon, ClockIcon, GearIcon } from "./ui/icons";
 
-const NAV_ITEMS = ["Task board", "Mission Control", "Workflows", "Memory", "Telemetry"] as const;
+// Tools (memory, telemetry) live in Settings; the sidebar is for work.
+const NAV_ITEMS = ["Task board", "Mission Control"] as const;
 type NavItem = (typeof NAV_ITEMS)[number];
 
 const iconProps = {
@@ -35,30 +36,9 @@ const PlusBoxIcon = ({ size = "size-[18px]" }: { size?: string }) => (
     <path d="M12 8v8M8 12h8" />
   </svg>
 );
-const WorkflowIcon = () => (
-  <svg {...iconProps} strokeWidth={1.6} className="size-4 shrink-0" aria-hidden>
-    <circle cx="6" cy="6" r="2.5" />
-    <circle cx="18" cy="18" r="2.5" />
-    <path d="M8.5 6H15a3 3 0 0 1 3 3v6.5" />
-  </svg>
-);
-const MemoryIcon = () => (
-  <svg {...iconProps} strokeWidth={1.6} className="size-4 shrink-0" aria-hidden>
-    <path d="M12 4.5c-4.4 0-8 1.6-8 3.5s3.6 3.5 8 3.5 8-1.6 8-3.5-3.6-3.5-8-3.5Z" />
-    <path d="M4 8v8c0 1.9 3.6 3.5 8 3.5s8-1.6 8-3.5V8M4 12c0 1.9 3.6 3.5 8 3.5s8-1.6 8-3.5" />
-  </svg>
-);
-const PulseIcon = () => (
-  <svg {...iconProps} strokeWidth={1.6} className="size-4 shrink-0" aria-hidden>
-    <path d="M3 12h4l2.5-6 5 12L17 12h4" />
-  </svg>
-);
 const NAV_ICONS: Record<NavItem, () => ReactNode> = {
   "Task board": () => <BoardIcon />,
   "Mission Control": () => <ClockIcon />,
-  Workflows: WorkflowIcon,
-  Memory: MemoryIcon,
-  Telemetry: PulseIcon,
 };
 
 const FilterIcon = () => (
@@ -72,13 +52,7 @@ export function Sidebar() {
   const recentRepos = useAppStore((s) => s.recentRepos);
   const openSettings = useAppStore((s) => s.openSettings);
   const settingsOpen = useAppStore((s) => s.settingsOpen);
-  const openTelemetry = useAppStore((s) => s.openTelemetry);
-  const closeTelemetry = useAppStore((s) => s.closeTelemetry);
   const closeSettings = useAppStore((s) => s.closeSettings);
-  const telemetryOpen = useAppStore((s) => s.telemetryOpen);
-  const openMemory = useAppStore((s) => s.openMemory);
-  const closeMemory = useAppStore((s) => s.closeMemory);
-  const memoryOpen = useAppStore((s) => s.memoryOpen);
   const workspaceView = useAppStore((s) => s.workspaceView);
   const setWorkspaceView = useAppStore((s) => s.setWorkspaceView);
 
@@ -98,31 +72,9 @@ export function Sidebar() {
 
   // Board, Mission Control and Workflows switch the main view; Telemetry and
   // Memory each toggle their own overlay. A project or branch opens its workspace.
-  const navAction = (label: NavItem) => {
-    if (label === "Telemetry") {
-      closeSettings();
-      closeMemory();
-      return telemetryOpen ? closeTelemetry() : openTelemetry();
-    }
-    if (label === "Memory") {
-      closeSettings();
-      closeTelemetry();
-      return memoryOpen ? closeMemory() : openMemory();
-    }
-    closeTelemetry();
-    closeMemory();
-    closeSettings();
-    setWorkspaceView(label === "Workflows" ? "workflows" : label === "Mission Control" ? "mission" : "board");
-  };
-  const isActive = (label: NavItem) =>
-    label === "Telemetry"
-      ? telemetryOpen
-      : label === "Memory"
-        ? memoryOpen
-        : !telemetryOpen &&
-          !memoryOpen &&
-          !settingsOpen &&
-          workspaceView === (label === "Workflows" ? "workflows" : label === "Mission Control" ? "mission" : "board");
+  const view = (label: NavItem) => (label === "Mission Control" ? "mission" : "board");
+  const navAction = (label: NavItem) => setWorkspaceView(view(label));
+  const isActive = (label: NavItem) => !settingsOpen && workspaceView === view(label);
 
   const openPaths = new Set(repos.map((r) => r.path));
   const recents = recentRepos.filter((r) => !openPaths.has(r.path));

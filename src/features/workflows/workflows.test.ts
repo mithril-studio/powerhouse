@@ -8,17 +8,17 @@ beforeEach(() => {
 });
 
 describe("workflow navigation", () => {
-  it("opens Workflows without changing the selected chat or closing sessions", () => {
+  it("opens the task board without changing the selected chat or closing sessions", () => {
     useAppStore.setState({ selection: { repoId: "repo", branchId: "branch" }, chatStatus: { chat: "running" }, telemetryOpen: true });
-    useAppStore.getState().setWorkspaceView("workflows");
-    expect(useAppStore.getState().workspaceView).toBe("workflows");
+    useAppStore.getState().setWorkspaceView("board");
+    expect(useAppStore.getState().workspaceView).toBe("board");
     expect(useAppStore.getState().selection).toEqual({ repoId: "repo", branchId: "branch" });
     expect(useAppStore.getState().chatStatus.chat).toBe("running");
     expect(useAppStore.getState().telemetryOpen).toBe(false);
   });
 
   it("returns to Home when a project or branch is selected", () => {
-    useAppStore.getState().setWorkspaceView("workflows");
+    useAppStore.getState().setWorkspaceView("board");
     useAppStore.getState().select("repo", "branch");
     expect(useAppStore.getState().workspaceView).toBe("home");
   });

@@ -41,39 +41,26 @@ beforeEach(() => {
   });
 });
 
-it("shows Workflows alongside the main navigation, with the project workspace still mounted but inert", () => {
+it("lists only Task board and Mission Control in the sidebar; tools live in Settings", () => {
   const repo = useAppStore.getState().addRepo({ name: "repo", path: "/repo", defaultBranch: "main" });
   useAppStore.getState().addBranch(repo.id, { id: "branch", name: "feature", worktreePath: "/worktree", chats: [{ id: "chat", title: "Chat" }], activeChatId: "chat" });
-  useAppStore.getState().setWorkspaceView("workflows");
+  useAppStore.getState().setWorkspaceView("board");
   const html = renderToStaticMarkup(<App />);
-  expect(html).toContain('aria-label="Main sidebar"');
   expect(html).toContain('aria-label="Main navigation"');
-  expect(html).toContain('aria-current="page"');
-  expect(html).toContain('id="workflows-title"');
+  expect(html).toContain("Task board</button>");
+  expect(html).toContain("Mission Control</button>");
+  for (const gone of ["Workflows", "Memory", "Telemetry", "Home"]) expect(html).not.toContain(`${gone}</button>`);
   expect(html).toContain('aria-label="Project workspace" inert="" class="hidden');
-  expect(html).toContain("Mounted terminal panel");
   expect(html).toContain('data-chat-active="false">Mounted chat');
-  expect(html).not.toContain("Project inspector");
-  expect(html).not.toContain("fixed inset-0");
 });
 
 it("returns to the project workspace without removing navigation", () => {
-  useAppStore.getState().setWorkspaceView("workflows");
+  useAppStore.getState().setWorkspaceView("board");
   useAppStore.getState().setWorkspaceView("home");
   const html = renderToStaticMarkup(<App />);
   expect(html).toContain('aria-label="Main sidebar"');
   expect(html).toContain('aria-label="Project workspace" class="flex');
   expect(html).toContain("Project inspector");
-  expect(html).not.toContain('id="workflows-title"');
-});
-
-it("shows Memory beside the main navigation instead of covering it", () => {
-  useAppStore.getState().openMemory();
-  const html = renderToStaticMarkup(<App />);
-  expect(html).toContain('aria-label="Main sidebar"');
-  expect(html).toContain('aria-current="page"');
-  expect(html).toContain('class="fixed inset-y-0 right-0 left-60 z-40 flex flex-col border-l border-border bg-background"');
-  expect(html).not.toContain('class="fixed inset-0 z-50 flex flex-col bg-background"');
 });
 
 it("shows the task board and Mission Control in place of the workspace, keeping chats mounted", () => {

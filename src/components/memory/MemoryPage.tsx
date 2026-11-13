@@ -54,8 +54,9 @@ async function fetchInbox(
   return { pending, promoted: corrections.length };
 }
 
-export function MemoryPage() {
-  const open = useAppStore((s) => s.memoryOpen);
+/** The memory browser lives in Settings → Memory (`embedded`). */
+export function MemoryPage({ embedded = false }: { embedded?: boolean } = {}) {
+  const open = useAppStore((s) => s.memoryOpen) || embedded;
   const closeMemory = useAppStore((s) => s.closeMemory);
   const settings = useAppStore((s) => s.settings);
   const repos = useAppStore((s) => s.repos);
@@ -255,7 +256,7 @@ export function MemoryPage() {
   }, [selected, memory]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || embedded) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -264,7 +265,7 @@ export function MemoryPage() {
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [open, closeMemory]);
+  }, [open, embedded, closeMemory]);
 
   if (!open) return null;
 
@@ -280,15 +281,14 @@ export function MemoryPage() {
   const list = view === "inbox" ? inbox : notes;
 
   return (
-    <div className="fixed inset-y-0 right-0 left-60 z-40 flex flex-col border-l border-border bg-background">
-      {/* Titlebar drag strip. The sidebar toggle opens and closes this panel,
-          so there is no close button here. */}
-      <div data-tauri-drag-region className="h-11 shrink-0 px-3" />
+    <div className={embedded ? "contents" : "fixed inset-y-0 right-0 left-60 z-40 flex flex-col border-l border-border bg-background"}>
+      {!embedded && <div data-tauri-drag-region className="h-11 shrink-0 px-3" />}
 
-      <div className="flex-1 overflow-hidden">
-        <div className="mx-auto flex h-full w-full max-w-5xl flex-col px-8 pb-8 pt-2">
-          <div className="ph-page-header mx-0 mb-6 pt-0">
-            <h1 className="ph-page-title">Memory</h1>
+      {/* Embedded in Settings: a fixed-height block so the note list and reader scroll inside it. */}
+      <div className={embedded ? "mt-6 h-[min(40rem,70vh)]" : "flex-1 overflow-hidden"}>
+        <div className={embedded ? "flex h-full flex-col" : "mx-auto flex h-full w-full max-w-5xl flex-col px-8 pb-8 pt-2"}>
+          <div className={embedded ? "mb-4 flex items-center justify-between" : "ph-page-header mx-0 mb-6 pt-0"}>
+            {embedded ? <h2 className="ph-section-label">Notes</h2> : <h1 className="ph-page-title">Memory</h1>}
             <span className={`text-[11px] ${healthy ? "text-muted-foreground" : "text-destructive"}`}>
               <span
                 className={`mr-1.5 inline-block size-1.5 rounded-full align-middle ${
