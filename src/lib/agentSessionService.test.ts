@@ -4,6 +4,7 @@ import { useAppStore } from "../store/appStore";
 import { adoptBranch } from "../features/tasks/taskStore";
 import {
   closeSession,
+  cancelSession,
   sendSessionPrompt,
   startSession,
   useSessions,
@@ -11,13 +12,14 @@ import {
 const mock = vi.hoisted(() => ({
   start: vi.fn(),
   send: vi.fn(),
+  cancel: vi.fn().mockResolvedValue(undefined),
   flush: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("./acpRegistry", () => ({
   startAcp: mock.start,
   sendAcpPrompt: mock.send,
   disposeAcp: vi.fn().mockResolvedValue(undefined),
-  cancelAcpPrompt: vi.fn().mockResolvedValue(undefined),
+  cancelAcpPrompt: mock.cancel,
   setAcpMode: vi.fn(),
   setAcpConfigOption: vi.fn(),
 }));
@@ -32,6 +34,8 @@ beforeEach(() => {
   useAppStore.getState().hydrate(null);
   mock.start.mockReset();
   mock.send.mockReset();
+  mock.cancel.mockReset().mockResolvedValue(undefined);
+  mock.flush.mockReset().mockResolvedValue(undefined);
   const r = useAppStore
     .getState()
     .addRepo({ name: "r", path: "/r", defaultBranch: "main" });
@@ -125,4 +129,33 @@ it("callbacks from a closed generation cannot mutate a new session", async () =>
     busy: false,
     error: null,
   });
+});
+
+it("Stop during persistence prevents prompt dispatch", async () => {
+  await startSession("chat", false);
+  let release!: () => void;
+  mock.flush.mockReturnValueOnce(new Promise<void>((resolve) => { release = resolve; }));
+  const pending = sendSessionPrompt("chat", "Build it");
+  cancelSession("chat");
+  release();
+  await pending;
+  expect(mock.send).not.toHaveBeenCalled();
+  expect(mock.cancel).not.toHaveBeenCalled();
+  expect(useAppStore.getState().tasks[0].turn?.outcome).toBe("cancelled");
+  expect(useSessions.getState().sessions.chat).toMatchObject({ busy: false, canceling: false });
+  await sendSessionPrompt("chat", "Continue explicitly");
+  expect(mock.send).toHaveBeenCalledExactlyOnceWith("chat", "Continue explicitly");
+});
+
+it("Stop cancels an already dispatched prompt and records cancellation", async () => {
+  await startSession("chat", false);
+  let finish!: (result: { stopReason: string }) => void;
+  mock.send.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+  const pending = sendSessionPrompt("chat", "Build it");
+  await vi.waitFor(() => expect(mock.send).toHaveBeenCalledOnce());
+  cancelSession("chat");
+  await vi.waitFor(() => expect(mock.cancel).toHaveBeenCalledExactlyOnceWith("chat"));
+  finish({ stopReason: "end_turn" });
+  await pending;
+  expect(useAppStore.getState().tasks[0].turn?.outcome).toBe("cancelled");
 });

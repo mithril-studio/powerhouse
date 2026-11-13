@@ -61,7 +61,7 @@ export const useSessions = create<{
 }>(() => ({ sessions: {} }));
 const controllers = new Map<
   string,
-  { generation: number; start?: Promise<void>; closed: boolean }
+  { generation: number; start?: Promise<void>; closed: boolean; prompt?: { dispatched: boolean; cancelled: boolean } }
 >();
 function snapshot(id: string) {
   return useSessions.getState().sessions[id] ?? EMPTY_SESSION;
@@ -131,6 +131,7 @@ export async function startSession(id: string, resume: boolean): Promise<void> {
     controllers.set(id, owner);
   }
   owner.closed = false;
+  owner.prompt = undefined;
   const generation = ++owner.generation;
   const valid = () =>
     controllers.get(id) === owner &&
@@ -213,7 +214,7 @@ export async function startSession(id: string, resume: boolean): Promise<void> {
               if (value) transcript(id, () => []);
             }
           },
-          onBusyChange: (busy) => write({ busy }),
+          onBusyChange: (busy) => write({ busy: busy || !!owner.prompt }),
           onStderr: (chunk) =>
             write({
               diagnostics: `${snapshot(id).diagnostics}${chunk}`.slice(-4000),
@@ -315,17 +316,26 @@ export async function sendSessionPrompt(id: string, text: string) {
   if (!prompt) return;
   if (snapshot(id).busy || snapshot(id).connection !== "ready") return;
   const owner = controllers.get(id);
+  if (!owner || owner.prompt) return;
+  const turn = { dispatched: false, cancelled: false };
+  owner.prompt = turn;
   const generation = owner?.generation;
   const valid = () =>
     controllers.get(id) === owner &&
     owner?.generation === generation &&
-    !owner?.closed;
+    !owner?.closed && owner.prompt === turn;
   patch(id, { busy: true, canceling: false, error: null });
   transcript(id, (items) => appendUserMessage(items, prompt));
   recordTaskTurn(id, "running");
   try {
     await flushPersistence();
     if (!valid()) return;
+    if (turn.cancelled) {
+      recordTaskTurn(id, "cancelled");
+      noteSession(id, "Stopped before the prompt was sent.");
+      return;
+    }
+    turn.dispatched = true;
     const result = await sendAcpPrompt(id, prompt);
     if (!valid()) return;
     const outcome =
@@ -351,17 +361,29 @@ export async function sendSessionPrompt(id: string, text: string) {
   } finally {
     if (valid()) {
       settlePermissions(id);
+      owner.prompt = undefined;
       patch(id, { busy: false, canceling: false });
     }
   }
 }
 export function cancelSession(id: string) {
   if (!snapshot(id).busy) return;
+  const owner = controllers.get(id);
+  const turn = owner?.prompt;
+  if (turn) turn.cancelled = true;
   patch(id, { canceling: true });
   settlePermissions(id);
+  // A protocol cancel sent before session/prompt cannot cancel that future prompt.
+  if (turn && !turn.dispatched) return;
   void Promise.resolve()
-    .then(() => cancelAcpPrompt(id))
-    .catch((e) => patch(id, { canceling: false, error: String(e) }));
+    .then(() => {
+      if (controllers.get(id) === owner && owner?.prompt === turn && !owner?.closed)
+        return cancelAcpPrompt(id);
+    })
+    .catch((e) => {
+      if (controllers.get(id) === owner && owner?.prompt === turn && !owner?.closed)
+        patch(id, { canceling: false, error: String(e) });
+    });
 }
 export async function closeSession(id: string) {
   const owner = controllers.get(id);
