@@ -45,6 +45,9 @@ import type { AgentControlState, ApplyOp } from "../lib/agentControls";
 import type { AcpConnectionState } from "../components/acp/AcpConnectionPanel";
 import type { PendingPermission } from "../components/acp/AcpPermissionCard";
 import { promptBlocks, toRef, type Attachment } from "../lib/attachments";
+import { publishSession, registerSession, type SessionHandle } from "../lib/agentSessionService";
+import { recordTaskTurn } from "../features/tasks/taskStore";
+import type { TurnOutcome } from "../features/tasks/types";
 
 interface Params {
   repoId: string;
@@ -82,10 +85,20 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
   const [commands, setCommands] = useState<AvailableCommand[]>([]);
   const [agentLabel, setAgentLabel] = useState(profile.name);
   const [supportsImages, setSupportsImages] = useState(false);
+  const [canceling, setCanceling] = useState(false);
   const closingRef = useRef(false);
   const replayingRef = useRef(false);
   const activeRef = useRef(active);
   activeRef.current = active;
+
+  /** Task board bookkeeping: only chats on a task's branch record turns. */
+  const recordTurn = useCallback(
+    (outcome: TurnOutcome, summary?: string) => {
+      if (useAppStore.getState().tasks.some((t) => t.branchId === branch.id))
+        recordTaskTurn(chat.id, outcome, summary);
+    },
+    [branch.id, chat.id],
+  );
 
   /** Marks a finished turn unseen, unless the user is looking at this chat. */
   const finishTurn = useCallback(
@@ -175,18 +188,24 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
           );
         }
       }
+      recordTurn("running");
       try {
         const response = await sendAcpPrompt(chat.id, promptBlocks(outbound, attachments));
         finishTurn(activityFromStopReason(response.stopReason));
+        recordTurn(
+          response.stopReason === "cancelled" ? "cancelled" : response.stopReason === "end_turn" ? "completed" : "failed",
+          response.stopReason === "end_turn" || response.stopReason === "cancelled" ? undefined : `Agent stopped: ${response.stopReason}`,
+        );
         checkpoint();
       } catch (cause) {
         finishTurn("error");
+        recordTurn("failed", String(cause));
         mutateTranscript((items) =>
           appendSystemMessage(items, `Prompt failed: ${String(cause)}`, "error"),
         );
       }
     },
-    [chat.id, branch.id, mutateTranscript, finishTurn, checkpoint, memory, repoId, setChatCloudRecap],
+    [chat.id, branch.id, mutateTranscript, finishTurn, recordTurn, checkpoint, memory, repoId, setChatCloudRecap],
   );
 
   const start = useCallback(
@@ -278,6 +297,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
               });
               setBusy(false);
               finishTurn("error");
+              if (code !== 0) recordTurn("interrupted", "Agent process exited");
               setConnection("exited");
               setChatStatus(chat.id, "exited");
               if (code !== 0) {
@@ -324,6 +344,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : String(cause);
         setError(message);
+        recordTurn("failed", message);
         setConnection("error");
         setChatStatus(chat.id, "exited");
       }
@@ -342,6 +363,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
       setChatStatus,
       setChatActivity,
       finishTurn,
+      recordTurn,
       submitPrompt,
     ],
   );
@@ -366,8 +388,12 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
   }, [active, chat.id, chat.agentSessionId, connection, start]);
 
   const cancel = useCallback(() => {
-    void cancelAcpPrompt(chat.id).catch(() => {});
+    setCanceling(true);
+    void cancelAcpPrompt(chat.id).catch(() => setCanceling(false));
   }, [chat.id]);
+  useEffect(() => {
+    if (!busy) setCanceling(false);
+  }, [busy]);
 
   /** Reconnect the agent, resuming the existing session when one exists. */
   const restart = useCallback(() => {
@@ -412,6 +438,40 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
   const note = useCallback(
     (text: string) => mutateTranscript((items) => appendSystemMessage(items, text)),
     [mutateTranscript],
+  );
+
+  // Mirror this session for the task board and Mission Control.
+  useEffect(() => {
+    publishSession(chat.id, {
+      connection,
+      busy,
+      canceling,
+      error,
+      permissionCount: permission ? 1 : 0,
+      permissions: permission
+        ? [{ id: `${chat.id}:permission`, request: permission.request, resolve: resolvePermission }]
+        : [],
+    });
+  }, [chat.id, connection, busy, canceling, error, permission, resolvePermission]);
+
+  const handleRef = useRef<SessionHandle | null>(null);
+  handleRef.current = {
+    start,
+    submit: (text) => submitPrompt(text),
+    cancel,
+    acknowledgeError: () => setError(null),
+    resolvePermission,
+  };
+  useEffect(
+    () =>
+      registerSession(chat.id, {
+        start: (resume) => handleRef.current!.start(resume),
+        submit: (text) => handleRef.current!.submit(text),
+        cancel: () => handleRef.current!.cancel(),
+        acknowledgeError: () => handleRef.current!.acknowledgeError(),
+        resolvePermission: (response) => handleRef.current!.resolvePermission(response),
+      }),
+    [chat.id],
   );
 
   const controlState: AgentControlState = useMemo(

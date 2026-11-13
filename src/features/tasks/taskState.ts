@@ -1,5 +1,4 @@
 import type { Branch, QueueEntry } from "../../store/appStore";
-import type { CloudRunRecord } from "../../lib/cloud";
 import type { SessionActivity, Task, TaskColumn, TaskFacts } from "./types";
 
 export function hydrateTasks(tasks: Task[] = []): Task[] {
@@ -27,7 +26,6 @@ export function taskPresentation(
   branch: Branch | undefined,
   sessions: Record<string, SessionActivity>,
   queue: QueueEntry[],
-  cloud?: CloudRunRecord,
   facts?: TaskFacts,
 ): { column: TaskColumn; reason: string } {
   const live = (branch?.chats ?? []).map((c) => sessions[c.id]).filter(Boolean);
@@ -66,7 +64,6 @@ export function taskPresentation(
       reason: latest.error || `Checks ${latest.state}`,
     };
   const savedFailure =
-    (!task.cloudRunId || task.turn) &&
     branch?.chats.find(
       (c) =>
         !sessions[c.id]?.busy &&
@@ -120,32 +117,6 @@ export function taskPresentation(
       column: "done",
       reason: `Merged · ${latest.merge_commit.slice(0, 8)}`,
     };
-  // Once imported, local turns take precedence over the old remote result.
-  if (task.cloudRunId && (!branch || !task.turn)) {
-    if (!cloud)
-      return {
-        column: "attention",
-        reason: "Cloud run unavailable — reconnect to inspect",
-      };
-    const state = cloud.snapshot?.state ?? cloud.receipt?.state;
-    const stale = cloud.last_sync_error ? "Offline · last confirmed: " : "";
-    if (cloud.phase === "submission_unknown" || cloud.phase === "submit_failed")
-      return {
-        column: "attention",
-        reason: cloud.phase_detail ?? "Cloud submission needs attention",
-      };
-    if (["failed", "blocked", "interrupted"].includes(state ?? ""))
-      return { column: "attention", reason: `${stale}${state}` };
-    if (state === "completed" || state === "cancelled")
-      return {
-        column: "review",
-        reason: `${stale}${state === "completed" ? "Cloud result ready" : "Cloud run stopped"}`,
-      };
-    return {
-      column: "running",
-      reason: `${stale}${cloud.snapshot?.cancel_requested ? "Canceling" : (state ?? "Preparing cloud")}`,
-    };
-  }
   if (task.turn?.outcome === "running")
     return {
       column: "attention",

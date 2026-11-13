@@ -1,4 +1,6 @@
 import { create } from "zustand";
+import type { Task } from "../features/tasks/types";
+import { hydrateTasks } from "../features/tasks/taskState";
 import type { WorkflowDraft } from "../features/workflows/workflowDrafts";
 import { DEFAULT_MEMORY_SETTINGS, type MemorySettings } from "../lib/memory";
 import type { AcpTranscriptItem } from "../lib/acpTranscript";
@@ -27,6 +29,8 @@ export interface Chat {
   agentId?: string;
   /** When set, the agent is launched via its promptTemplate instead of bare command. */
   initialPrompt?: string;
+  /** Last agent turn, recorded for chats that belong to a task. */
+  taskTurn?: Task["turn"];
   /**
    * Present once the chat has launched a resumable agent session; value is the
    * id passed to the agent's `--session-id` (initially `chat.id`). Its presence
@@ -147,6 +151,7 @@ export interface QueueEntry {
   steps: StepState[];
   error: string | null;
   merge_commit: string | null;
+  source_sha?: string | null;
   created_at: number;
   finished_at: number | null;
 }
@@ -191,6 +196,8 @@ export type ChatStatus = "idle" | "running" | "exited";
 export type ChatActivity = "working" | "done" | "error";
 
 export interface PersistedTree {
+  schemaVersion?: number;
+  tasks?: Task[];
   repos: Repo[];
   selection: Selection;
   settings: Settings;
@@ -210,9 +217,12 @@ interface LegacyTree {
   agentCmd?: string;
 }
 
+export type WorkspaceView = "home" | "workflows" | "board" | "mission";
+
 interface AppState extends PersistedTree {
-  workspaceView: "home" | "workflows";
-  setWorkspaceView: (view: "home" | "workflows") => void;
+  tasks: Task[];
+  workspaceView: WorkspaceView;
+  setWorkspaceView: (view: WorkspaceView) => void;
   saveWorkflowDraft: (draft: WorkflowDraft) => void;
   deleteWorkflowDraft: (id: string) => void;
   hydrated: boolean;
@@ -541,6 +551,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   settings: seedSettings(),
   queues: {},
   workflowDrafts: [],
+  tasks: [],
   workspaceView: "home",
   setWorkspaceView: (workspaceView) => set({ workspaceView, settingsOpen: false, telemetryOpen: false, memoryOpen: false, projectSettingsRepoId: null }),
   saveWorkflowDraft: (draft) => set((s) => ({
@@ -569,6 +580,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   hydrate: (tree) =>
     set({
+      tasks: hydrateTasks(tree?.tasks),
       workflowDrafts: tree?.workflowDrafts ?? [],
       // Migration: default the queue-config fields for repos persisted before
       // they existed.
@@ -576,7 +588,15 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...r,
         workflow: r.workflow ?? [],
         pushOnMerge: r.pushOnMerge ?? true,
-        branches: r.branches.map(dropLegacyCloudItems),
+        // A turn can't still be running after a restart.
+        branches: r.branches.map(dropLegacyCloudItems).map((b) => ({
+          ...b,
+          chats: b.chats.map((c) =>
+            c.taskTurn?.outcome === "running"
+              ? { ...c, taskTurn: { ...c.taskTurn, outcome: "interrupted" as const } }
+              : c,
+          ),
+        })),
       })),
       selection: tree?.selection ?? { repoId: null, branchId: null },
       recentRepos: tree?.recentRepos ?? [],
@@ -701,6 +721,12 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   removeBranch: (repoId, branchId) =>
     set((s) => ({
+      // A task loses its workspace with the branch; archive it, keep the record.
+      tasks: s.tasks.map((t) =>
+        t.branchId === branchId
+          ? { ...t, branchId: null, primaryChatId: null, archivedAt: Date.now(), launch: { stage: "not_started" as const } }
+          : t,
+      ),
       repos: updateRepo(s.repos, repoId, (r) => ({
         ...r,
         branches: r.branches.filter((b) => b.id !== branchId),
@@ -723,6 +749,20 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   removeChat: (repoId, branchId, chatId) =>
     set((s) => ({
+      tasks: s.tasks.map((task) => {
+        if (task.repoId !== repoId || task.branchId !== branchId || task.primaryChatId !== chatId) return task;
+        const now = Date.now();
+        return {
+          ...task,
+          primaryChatId: null,
+          launch: { ...task.launch, stage: "ready" as const, error: undefined },
+          turn: task.turn?.outcome === "running"
+            ? { outcome: "cancelled" as const, at: now, summary: "Primary conversation removed" }
+            : task.turn,
+          updatedAt: now,
+          lastActivityAt: now,
+        };
+      }),
       repos: updateBranch(s.repos, repoId, branchId, (b) => {
         const chats = b.chats.filter((c) => c.id !== chatId);
         let activeChatId = b.activeChatId;
@@ -844,7 +884,20 @@ export const useAppStore = create<AppState>((set, get) => ({
           }))
         : s.repos;
 
-      return { queues: { ...s.queues, [repoId]: merged }, repos };
+      // A merge the queue verified completes the task that owns the branch.
+      const tasks = s.tasks.map((task) => {
+        if (task.repoId !== repoId) return task;
+        const branch = repos.find((r) => r.id === repoId)?.branches.find((b) => b.id === task.branchId);
+        const entry = merged.find((e) => e.branch === branch?.name && e.created_at >= task.lastWorkAt);
+        if (entry?.state !== "merged" || !entry.merge_commit || task.completion?.queueId === entry.id) return task;
+        const at = entry.finished_at ?? Date.now();
+        return {
+          ...task,
+          completion: { kind: "merged" as const, at, queueId: entry.id, commit: entry.merge_commit, sourceSha: entry.source_sha ?? undefined },
+          lastActivityAt: at,
+        };
+      });
+      return { queues: { ...s.queues, [repoId]: merged }, repos, tasks };
     }),
 
   dismissQueueEntry: (repoId, entryId) =>

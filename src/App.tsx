@@ -1,3 +1,4 @@
+import { TaskBoardPage } from "./features/tasks/TaskBoardPage";
 import { useEffect } from "react";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -152,7 +153,8 @@ export default function App() {
         </div>
         <BottomPanel />
       </main>
-      {!homeVisible && <WorkflowsPage />}
+      {workspaceView === "workflows" && <WorkflowsPage />}
+      {hydrated && (workspaceView === "board" || workspaceView === "mission") && <TaskBoardPage />}
       {homeVisible && hydrated && rightSidebarOpen && <RightSidebar repo={repo} branch={branch} />}
       <NewBranchModal />
       <NewChatPicker />

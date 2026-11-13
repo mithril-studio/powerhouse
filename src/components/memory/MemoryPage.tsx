@@ -287,8 +287,8 @@ export function MemoryPage() {
 
       <div className="flex-1 overflow-hidden">
         <div className="mx-auto flex h-full w-full max-w-5xl flex-col px-8 pb-8 pt-2">
-          <div className="mb-3 flex items-center justify-between">
-            <h1 className="text-lg font-semibold text-foreground">Memory</h1>
+          <div className="ph-page-header mx-0 mb-6 pt-0">
+            <h1 className="ph-page-title">Memory</h1>
             <span className={`text-[11px] ${healthy ? "text-muted-foreground" : "text-destructive"}`}>
               <span
                 className={`mr-1.5 inline-block size-1.5 rounded-full align-middle ${

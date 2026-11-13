@@ -15,9 +15,7 @@ import {
   startSession,
   useSessions,
 } from "../../lib/agentSessionService";
-import { cloudCancel, type CloudRunRecord } from "../../lib/cloud";
-import { importCloudResult } from "../../lib/actions";
-import { createTask, updateTask } from "./taskStore";
+import { updateTask } from "./taskStore";
 import { taskPresentation } from "./taskState";
 const launches = new Map<string, Promise<void>>();
 export function taskContext(id: string) {
@@ -39,10 +37,6 @@ export async function startTask(id: string, open = false): Promise<void> {
   if (pending) return pending;
   const run = (async () => {
     let { task, repo, branch } = taskContext(id);
-    if (task.cloudRunId && !branch)
-      throw new Error(
-        "Import the cloud result before starting a local conversation.",
-      );
     const profile = useAppStore
       .getState()
       .settings.agents.find((a) => a.id === task.agentId);
@@ -157,7 +151,6 @@ function presentation(id: string, ignoredQueueId?: string) {
     c.branch,
     useSessions.getState().sessions,
     (c.state.queues[c.repo.id] ?? []).filter((entry) => entry.id !== ignoredQueueId),
-    c.task.cloudRunId ? c.state.cloudRuns[c.task.cloudRunId] : undefined,
   );
 }
 function assertNoLegacyRun(id: string) {
@@ -234,49 +227,6 @@ async function enqueueTaskChecks(id: string, retryEntryId?: string) {
   const current = useAppStore.getState().queues[repo.id] ?? [];
   if (!current.some((q) => q.id === entry.id))
     useAppStore.getState().setQueueEntries(repo.id, [...current, entry]);
-}
-export function linkCloudTask(run: CloudRunRecord) {
-  const s = useAppStore.getState();
-  const linked = s.tasks.find((t) => t.cloudRunId === run.run_id);
-  if (linked) return linked;
-  const local = s.tasks.find(
-    (t) =>
-      t.repoId === run.repo_id &&
-      !t.cloudRunId &&
-      s.repos
-        .find((r) => r.id === t.repoId)
-        ?.branches.some(
-          (b) => b.id === t.branchId && b.name === run.source_branch,
-        ),
-  );
-  const task =
-    local ??
-    createTask({
-      repoId: run.repo_id,
-      title: run.manifest.task.text.slice(0, 100) || "Cloud task",
-      description: run.manifest.task.text,
-      agentId: "claude",
-    });
-  updateTask(task.id, {
-    cloudRunId: run.run_id,
-    turn: undefined,
-    completion: undefined,
-    queueId: undefined,
-    lastWorkAt: Date.now(),
-    lastActivityAt: Date.now(),
-    launch: { stage: "ready" },
-  });
-  return task;
-}
-export async function importTaskCloudResult(id: string) {
-  const { task } = taskContext(id);
-  if (!task.cloudRunId) return;
-  await importCloudResult(task.cloudRunId);
-}
-export async function cancelTaskCloud(id: string) {
-  const { task } = taskContext(id);
-  if (task.cloudRunId)
-    useAppStore.getState().setCloudRun(await cloudCancel(task.cloudRunId));
 }
 export function branchSessions(branch?: Branch) {
   return (branch?.chats ?? []).map((c) => ({

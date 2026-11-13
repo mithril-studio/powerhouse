@@ -71,11 +71,8 @@ export function WorkflowsPage() {
   return (
     <main aria-labelledby="workflows-title" className="flex min-w-0 flex-1 flex-col overflow-hidden bg-background">
       <div data-tauri-drag-region className="h-11 shrink-0 border-b border-border bg-card" />
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-5">
-        <div>
-          <h1 ref={heading} tabIndex={-1} id="workflows-title" className="text-lg font-semibold outline-none">Workflows</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Reusable script sequences for your projects.</p>
-        </div>
+      <header data-tauri-drag-region className="ph-page-header">
+        <h1 ref={heading} tabIndex={-1} id="workflows-title" className="ph-page-title outline-none">Workflows</h1>
         <button type="button" className={`${button} pi-btn-primary`} disabled={!hydrated || !creationRepo} onClick={() => create()}>+ New workflow</button>
       </header>
       {deleted && <div role="status" className="flex items-center gap-3 border-b border-border bg-card px-6 py-3 text-sm">

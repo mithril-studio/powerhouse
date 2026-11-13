@@ -111,21 +111,21 @@ it("completed merge returns to review when the working copy advances", () => {
     },
   };
   expect(
-    taskPresentation(t, branch, {}, [], undefined, {
+    taskPresentation(t, branch, {}, [], {
       head: "tested",
       dirty: false,
       changed_files: 1,
     }).column,
   ).toBe("done");
   expect(
-    taskPresentation(t, branch, {}, [], undefined, {
+    taskPresentation(t, branch, {}, [], {
       head: "new",
       dirty: false,
       changed_files: 2,
     }).column,
   ).toBe("review");
   expect(
-    taskPresentation(t, branch, {}, [], undefined, {
+    taskPresentation(t, branch, {}, [], {
       head: "tested",
       dirty: true,
       changed_files: 1,
@@ -139,30 +139,6 @@ it("a failed sibling session survives a later completed turn and restart", () =>
   const s = useAppStore.getState();
   const b = s.repos[0].branches[0];
   expect(taskPresentation(s.tasks[0], b, {}, []).column).toBe("attention");
-});
-it("cloud completion is review, and loss of connection preserves the observed state", () => {
-  const t = { ...seed(), cloudRunId: "run", branchId: null };
-  const cloud = {
-    phase: "accepted",
-    snapshot: { state: "completed" },
-    last_sync_error: "offline",
-  } as import("../../lib/cloud").CloudRunRecord;
-  expect(taskPresentation(t, undefined, {}, [], cloud)).toEqual({
-    column: "review",
-    reason: "Offline · last confirmed: Cloud result ready",
-  });
-  expect(
-    taskPresentation(t, undefined, {}, [], {
-      ...cloud,
-      snapshot: { ...cloud.snapshot!, state: "running" },
-    }).column,
-  ).toBe("running");
-  expect(
-    taskPresentation(t, undefined, {}, [], {
-      ...cloud,
-      snapshot: { ...cloud.snapshot!, state: "failed" },
-    }).column,
-  ).toBe("attention");
 });
 it("merge completion survives queue-history eviction", () => {
   const t = seed();

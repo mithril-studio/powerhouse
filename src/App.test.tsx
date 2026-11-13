@@ -75,3 +75,21 @@ it("shows Memory beside the main navigation instead of covering it", () => {
   expect(html).toContain('class="fixed inset-y-0 right-0 left-60 z-40 flex flex-col border-l border-border bg-background"');
   expect(html).not.toContain('class="fixed inset-0 z-50 flex flex-col bg-background"');
 });
+
+it("shows the task board and Mission Control in place of the workspace, keeping chats mounted", () => {
+  const repo = useAppStore.getState().addRepo({ name: "repo", path: "/repo", defaultBranch: "main" });
+  useAppStore.getState().addBranch(repo.id, { id: "branch", name: "feature", worktreePath: "/worktree", chats: [{ id: "chat", title: "Chat" }], activeChatId: "chat" });
+  useAppStore.getState().setWorkspaceView("board");
+  useAppStore.setState({ hydrated: true });
+  let html = renderToStaticMarkup(<App />);
+  expect(html).toContain('aria-label="Task board"');
+  for (const label of ["Backlog", "In progress", "Needs you", "Review", "Done"]) expect(html).toContain(label);
+  expect(html).toContain('aria-label="Project workspace" inert=""');
+  expect(html).toContain('data-chat-active="false">Mounted chat');
+  expect(html).not.toContain("Project inspector");
+
+  useAppStore.getState().setWorkspaceView("mission");
+  html = renderToStaticMarkup(<App />);
+  expect(html).toContain('aria-label="Mission Control"');
+  expect(html).toContain("No agents running");
+});

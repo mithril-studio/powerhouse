@@ -11,9 +11,12 @@ export interface PendingPermission {
 export function AcpPermissionCard({
   permission,
   onResolve,
+  autoFocus = true,
 }: {
   permission: PendingPermission;
   onResolve: (response: RequestPermissionResponse) => void;
+  /** Off where several requests can be on screen at once (task board). */
+  autoFocus?: boolean;
 }) {
   return (
     <section className="border-t border-border bg-background px-3 py-2 font-mono" aria-label="Permission request">
@@ -24,7 +27,7 @@ export function AcpPermissionCard({
           {permission.request.options.map((option, index) => (
             <button
               key={option.optionId}
-              autoFocus={index === 0}
+              autoFocus={autoFocus && index === 0}
               onClick={() =>
                 onResolve({ outcome: { outcome: "selected", optionId: option.optionId } })
               }

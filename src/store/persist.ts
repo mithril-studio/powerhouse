@@ -7,11 +7,44 @@ const getStore = () => (storePromise ??= load("powerhouse.json", { autoSave: fal
 export async function hydrateFromDisk() {
   const store = await getStore();
   const tree = await store.get<PersistedTree>("tree");
+  // First launch with tasks: keep a copy of the pre-tasks tree, once.
+  if (tree && (tree.schemaVersion ?? 0) < 1) {
+    await store.set("tree-before-tasks-v1", tree);
+    await store.save();
+  }
   useAppStore.getState().hydrate(tree ?? null);
 }
 
 let started = false;
-let timer: number | undefined;
+let timer: ReturnType<typeof setTimeout> | undefined;
+let writes: Promise<void> = Promise.resolve();
+
+/** Write the tree now. Writes are serialized so an older, slower save can never
+ *  overwrite a newer one (task launches flush before and after each step). */
+export function flushPersistence(): Promise<void> {
+  clearTimeout(timer);
+  const { repos, selection, settings, queues, recentRepos, workflowDrafts, tasks } =
+    useAppStore.getState();
+  const tree: PersistedTree = {
+    schemaVersion: 1,
+    repos,
+    selection,
+    settings,
+    queues,
+    recentRepos,
+    workflowDrafts,
+    tasks,
+  };
+  const next = writes
+    .catch(() => {})
+    .then(async () => {
+      const store = await getStore();
+      await store.set("tree", tree);
+      await store.save();
+    });
+  writes = next;
+  return next;
+}
 
 /** Debounced (300ms) write of the tree on any persisted-field change. */
 export function startPersistence() {
@@ -25,24 +58,14 @@ export function startPersistence() {
       s.settings === prev.settings &&
       s.queues === prev.queues &&
       s.recentRepos === prev.recentRepos &&
-      s.workflowDrafts === prev.workflowDrafts
+      s.workflowDrafts === prev.workflowDrafts &&
+      s.tasks === prev.tasks
     ) {
       return;
     }
-    window.clearTimeout(timer);
-    timer = window.setTimeout(async () => {
-      const { repos, selection, settings, queues, recentRepos, workflowDrafts } =
-        useAppStore.getState();
-      const store = await getStore();
-      await store.set("tree", {
-        repos,
-        selection,
-        settings,
-        queues,
-        recentRepos,
-        workflowDrafts,
-      } satisfies PersistedTree);
-      await store.save();
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      void flushPersistence().catch((e) => console.error("Could not save workspace", e));
     }, 300);
   });
 }

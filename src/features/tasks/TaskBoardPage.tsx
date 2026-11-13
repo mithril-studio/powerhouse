@@ -1,4 +1,3 @@
-import { TaskCloudDetails } from "./TaskCloudDetails";
 import { useTaskFacts } from "./useTaskFacts";
 import { useEffect, useState } from "react";
 import { useAppStore, type Branch } from "../../store/appStore";
@@ -15,12 +14,9 @@ import { adoptBranch, updateTask } from "./taskStore";
 import {
   acknowledgeTask,
   archiveTask,
-  cancelTaskCloud,
   chooseTaskAgent,
   completeTask,
   enqueueTask,
-  importTaskCloudResult,
-  linkCloudTask,
   openTask,
   parkTask,
   retryTaskChecks,
@@ -70,7 +66,7 @@ function changesLabel(facts?: TaskFacts) {
 }
 
 export function TaskBoardPage() {
-  const state = useAppStore();
+  const state = useAppStore((s) => s);
   const sessions = useSessions((s) => s.sessions);
   const caches = useIssueCache((s) => s.repos);
   const [scope, setScope] = useState(state.selection.repoId ?? "all");
@@ -123,20 +119,15 @@ export function TaskBoardPage() {
   function row(task: Task) {
     const repo = state.repos.find((r) => r.id === task.repoId);
     const branch = repo?.branches.find((b) => b.id === task.branchId);
-    const cloud = task.cloudRunId
-      ? state.cloudRuns[task.cloudRunId]
-      : undefined;
     return {
       task,
       repo,
       branch,
-      cloud,
       status: taskPresentation(
         task,
         branch,
         sessions,
         state.queues[task.repoId] ?? [],
-        cloud,
         facts[task.id],
       ),
     };
@@ -164,12 +155,6 @@ export function TaskBoardPage() {
             issueCache.repository.toLowerCase() &&
           !t.archivedAt,
       ),
-  );
-  const unlinkedRuns = Object.values(state.cloudRuns).filter(
-    (r) =>
-      (scope === "all" || r.repo_id === scope) &&
-      !state.tasks.some((t) => t.cloudRunId === r.run_id) &&
-      state.repos.some((p) => p.id === r.repo_id),
   );
   const unlinkedBranches = state.repos
     .filter((r) => scope === "all" || r.id === scope)
@@ -200,11 +185,6 @@ export function TaskBoardPage() {
       label: `Attach ${scope === "all" ? `${repo.name} / ` : ""}${branch.name}`,
       onSelect: () => select(adoptBranch(repo.id, branch.id).id),
     })),
-    ...(unlinkedBranches.length && unlinkedRuns.length ? ["separator" as const] : []),
-    ...unlinkedRuns.map((r) => ({
-      label: `Link cloud run: ${r.manifest.task.text.slice(0, 60)}`,
-      onSelect: () => void run(r.run_id, () => select(linkCloudTask(r).id)),
-    })),
   ];
 
   const card = (item: Row) => {
@@ -214,11 +194,6 @@ export function TaskBoardPage() {
       scope === "all" ? (item.repo?.name ?? "Missing project") : null,
       item.branch?.name ?? item.task.launch.branchName,
       item.task.source ? `#${item.task.source.number}` : null,
-      item.cloud
-        ? item.cloud.last_sync_ms
-          ? `cloud · synced ${new Date(item.cloud.last_sync_ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
-          : "cloud · awaiting sync"
-        : null,
     ].filter(Boolean).join(" · ");
     const statusLabel =
       column === "running" && item.status.reason === "Agent working"
@@ -361,7 +336,7 @@ export function TaskBoardPage() {
             items={
               attachItems.length
                 ? attachItems
-                : [{ label: "No branches or cloud runs to attach", disabled: true, onSelect: () => {} }]
+                : [{ label: "No branches to attach", disabled: true, onSelect: () => {} }]
             }
           />
         </PageHeader>
@@ -446,7 +421,6 @@ type DetailRow = {
   task: Task;
   repo?: ReturnType<typeof useAppStore.getState>["repos"][number];
   branch?: Branch;
-  cloud?: ReturnType<typeof useAppStore.getState>["cloudRuns"][string];
   status: { column: TaskColumn; reason: string };
 };
 
@@ -469,13 +443,12 @@ function TaskDetail({
   run: (key: string, action: () => unknown | Promise<unknown>) => Promise<void>;
   onClose: () => void;
 }) {
-  const state = useAppStore();
+  const state = useAppStore((s) => s);
   const sessions = useSessions((s) => s.sessions);
-  const { task, branch, repo, cloud, status } = item;
+  const { task, branch, repo, status } = item;
   const column = status.column;
   const busy = !!pending;
   const ready = !!task.primaryChatId && sessions[task.primaryChatId]?.connection === "ready";
-  const canStart = !task.cloudRunId || !!branch;
   const queue = (state.queues[task.repoId] ?? []).filter((q) => q.branch === branch?.name);
   const activeQueue = queue.find((q) => ["queued", "validating", "merging", "failed", "interrupted"].includes(q.state));
   const failedQueue = queue.find((q) => ["failed", "interrupted"].includes(q.state));
@@ -483,15 +456,13 @@ function TaskDetail({
   const reply = lastReply(branch);
 
   const primary =
-    branch && (ready || !canStart)
+    branch && ready
       ? { label: "Open workspace", onClick: () => openTask(task.id), disabled: false }
-      : canStart
-        ? {
-            label: task.primaryChatId ? "Resume agent" : "Start task",
-            onClick: () => void run(task.id, () => startTask(task.id)),
-            disabled: busy || column === "running",
-          }
-        : null;
+      : {
+          label: task.primaryChatId ? "Resume agent" : "Start task",
+          onClick: () => void run(task.id, () => startTask(task.id)),
+          disabled: busy || column === "running",
+        };
 
   const moreItems: (MenuItem | "separator")[] = [
     {
@@ -504,13 +475,6 @@ function TaskDetail({
       disabled: busy || ["running", "attention", "backlog"].includes(column),
       onSelect: () => void run(task.id, () => parkTask(task.id)),
     },
-    ...(cloud
-      ? [{
-          label: "Cancel cloud run",
-          disabled: busy || column !== "running",
-          onSelect: () => void run(task.id, () => cancelTaskCloud(task.id)),
-        }]
-      : []),
     ...(failedQueue
       ? [{
           label: "Dismiss failed checks",
@@ -579,7 +543,6 @@ function TaskDetail({
         </dd>
         {facts && (<><dt>Changes</dt><dd>{changesLabel(facts)}</dd></>)}
         {task.source && (<><dt>Issue</dt><dd className="font-mono text-xs leading-5">#{task.source.number}</dd></>)}
-        {cloud && (<><dt>Cloud</dt><dd>{cloud.last_sync_ms ? `Synced ${new Date(cloud.last_sync_ms).toLocaleTimeString()}` : "Awaiting sync"}</dd></>)}
       </dl>
 
       <textarea
@@ -643,16 +606,7 @@ function TaskDetail({
             {["failed", "interrupted"].includes(activeQueue.state) ? "Retry checks" : "Cancel checks"}
           </button>
         )}
-        {cloud && (
-          <button
-            className="ph-btn"
-            disabled={busy || cloud.snapshot?.state !== "completed"}
-            onClick={() => void run(task.id, () => importTaskCloudResult(task.id))}
-          >
-            Import cloud result
-          </button>
-        )}
-        {column === "attention" && !task.cloudRunId && (
+        {column === "attention" && (
           <button className="ph-btn" disabled={busy} onClick={() => void run(task.id, () => acknowledgeTask(task.id))}>
             Acknowledge interruption
           </button>
@@ -682,12 +636,6 @@ function TaskDetail({
             })}
           </ul>
         </section>
-      )}
-      {cloud && repo && (
-        <details className="mt-7">
-          <summary className="ph-section-label cursor-pointer">Cloud run details and logs</summary>
-          <TaskCloudDetails task={task} />
-        </details>
       )}
     </aside>
   );

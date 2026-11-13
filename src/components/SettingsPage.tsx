@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { PageHeader, Segmented } from "./ui/page";
 import { getVersion } from "@tauri-apps/api/app";
 import { homeDir } from "@tauri-apps/api/path";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -646,24 +647,14 @@ export function SettingsPage() {
 
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-4xl px-8 pb-16 pt-2">
-          <h1 className="mb-4 text-lg font-semibold text-foreground">Settings</h1>
-
-          <div className="mb-6 flex gap-4 border-b border-border">
-            {TABS.map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => setTab(t)}
-                className={`-mb-px border-b pb-1.5 text-[11px] font-semibold uppercase tracking-wider ${
-                  tab === t
-                    ? "border-accent-brand text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
+          <PageHeader title="Settings" className="mx-0 mb-2 border-b-0 pt-0">
+            <Segmented
+              label="Settings section"
+              value={tab}
+              onChange={setTab}
+              options={TABS.map((t) => ({ value: t, label: t }))}
+            />
+          </PageHeader>
 
           {tab === "Main" ? (
             <>

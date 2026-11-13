@@ -19,7 +19,6 @@ export interface Task {
   branchId: string | null;
   primaryChatId: string | null;
   source?: { repository: string; number: number; url: string };
-  cloudRunId?: string;
   createdAt: number;
   updatedAt: number;
   lastActivityAt: number;

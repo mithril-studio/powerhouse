@@ -15,7 +15,10 @@ export function BranchItem({ repo, branch }: Props) {
   // ☁ while the branch has a cloud workspace (a VM); pulses while it works.
   const cloud = useAppStore((s) => workspaceForBranch(s.cloudWorkspaces, branch.id));
   const selected = useAppStore(
-    (s) => s.selection.repoId === repo.id && s.selection.branchId === branch.id,
+    (s) =>
+      s.workspaceView === "home" &&
+      s.selection.repoId === repo.id &&
+      s.selection.branchId === branch.id,
   );
   const queued = useAppStore((s) =>
     (s.queues[repo.id] ?? []).some(
@@ -40,29 +43,27 @@ export function BranchItem({ repo, branch }: Props) {
   return (
     <div
       onClick={onSelect}
-      className={`group flex h-7 cursor-default items-center gap-2 rounded-md pl-6 pr-1.5 ${
+      className={`group flex h-8 cursor-default items-center gap-2.5 rounded-md pl-2.5 pr-1.5 ${
         selected
-          ? "bg-muted text-foreground"
-          : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+          ? "bg-sidebar-selected text-foreground"
+          : "text-muted-foreground hover:bg-sidebar-hover hover:text-foreground"
       }`}
     >
       {activity ? (
         <ActivityDot activity={activity} />
       ) : (
         <span
-          className={`size-1.5 shrink-0 rounded-full ${
-            branch.merged
-              ? "bg-success"
-              : queued
-                ? "animate-pulse bg-accent-brand"
-                : selected
-                  ? "bg-accent-brand"
-                  : "bg-muted-foreground/40"
+          className={`ph-dot ${
+            queued
+              ? "animate-pulse bg-accent-brand"
+              : branch.merged
+                ? "ph-dot-ring text-success"
+                : "ph-dot-ring text-muted-foreground/60"
           }`}
           aria-hidden
         />
       )}
-      <span className="min-w-0 flex-1 truncate font-mono text-xs">{branch.name}</span>
+      <span className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{branch.name}</span>
       {cloud && (
         <span
           title={`In the cloud on ${cloud.vmName}: ${cloud.stage ?? cloud.status}`}

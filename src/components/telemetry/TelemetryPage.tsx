@@ -172,8 +172,8 @@ export function TelemetryPage() {
 
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-5xl px-8 pb-16 pt-2">
-          <div className="mb-4 flex items-center justify-between">
-            <h1 className="text-lg font-semibold text-foreground">Telemetry</h1>
+          <div className="ph-page-header mx-0 mb-6 pt-0">
+            <h1 className="ph-page-title">Telemetry</h1>
             <button
               type="button"
               disabled={(stats?.activeRuns ?? 0) > 0}
