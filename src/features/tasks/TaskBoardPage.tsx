@@ -8,7 +8,6 @@ import {
   deleteBranch,
   cancelQueueEntry,
   dismissEntry,
-  retryQueueEntry,
 } from "../../lib/actions";
 import { TASK_COLUMNS, type Task } from "./types";
 import { taskPresentation } from "./taskState";
@@ -24,6 +23,7 @@ import {
   linkCloudTask,
   openTask,
   parkTask,
+  retryTaskChecks,
   startTask,
 } from "./taskActions";
 import { refreshIssues, useIssueCache } from "./githubIssues";
@@ -647,7 +647,7 @@ export function TaskBoardPage() {
                       onClick={() =>
                         void run(q.id, () =>
                           ["failed", "interrupted"].includes(q.state)
-                            ? retryQueueEntry(selected.task.repoId, q)
+                            ? retryTaskChecks(selected.task.id, q.id)
                             : cancelQueueEntry(selected.task.repoId, q),
                         )
                       }

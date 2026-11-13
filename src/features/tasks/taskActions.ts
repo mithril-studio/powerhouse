@@ -8,6 +8,7 @@ import {
   gitEnsureTaskWorktree,
   gitWorktreeDirty,
   queueEnqueue,
+  queueDismiss,
 } from "../../lib/ipc";
 import {
   acknowledgeSessionError,
@@ -57,7 +58,6 @@ export async function startTask(id: string, open = false): Promise<void> {
       throw new Error(
         "Background tasks require an ACP agent. Existing terminal workspaces remain available through Open workspace.",
       );
-    const alreadyStarted = Boolean(task.primaryChatId);
     const activeQueue = useAppStore
       .getState()
       .queues[
@@ -112,6 +112,7 @@ export async function startTask(id: string, open = false): Promise<void> {
         await flushPersistence();
       }
       let chat = branch.chats.find((c) => c.id === task.primaryChatId);
+      const alreadyStarted = Boolean(chat);
       if (!chat) {
         chat = {
           id: crypto.randomUUID(),
@@ -149,13 +150,13 @@ export async function startTask(id: string, open = false): Promise<void> {
     launches.delete(id);
   }
 }
-function presentation(id: string) {
+function presentation(id: string, ignoredQueueId?: string) {
   const c = taskContext(id);
   return taskPresentation(
     c.task,
     c.branch,
     useSessions.getState().sessions,
-    c.state.queues[c.repo.id] ?? [],
+    (c.state.queues[c.repo.id] ?? []).filter((entry) => entry.id !== ignoredQueueId),
     c.task.cloudRunId ? c.state.cloudRuns[c.task.cloudRunId] : undefined,
   );
 }
@@ -188,17 +189,35 @@ export function completeTask(id: string) {
   });
 }
 export async function enqueueTask(id: string) {
+  return enqueueTaskChecks(id);
+}
+export async function retryTaskChecks(id: string, entryId: string) {
+  const { state, repo, branch } = taskContext(id);
+  const previous = state.queues[repo.id]?.find((entry) => entry.id === entryId);
+  if (!previous || previous.branch !== branch?.name || !["failed", "interrupted"].includes(previous.state))
+    throw new Error("Only this task's failed or interrupted checks can be retried.");
+  await enqueueTaskChecks(id, entryId);
+  // Keep the failure visible if validation or queue admission fails.
+  await queueDismiss(repo.id, entryId);
+  useAppStore.getState().dismissQueueEntry(repo.id, entryId);
+}
+async function enqueueTaskChecks(id: string, retryEntryId?: string) {
   assertNoLegacyRun(id);
   const { task, repo, branch } = taskContext(id);
   if (!branch) throw new Error("This task has no local workspace.");
-  if (["running", "attention"].includes(presentation(id).column))
-    throw new Error(
-      "Resolve attention and stop active work before running merge checks.",
-    );
+  const assertReady = () => {
+    assertNoLegacyRun(id);
+    if (taskContext(id).branch?.id !== branch.id)
+      throw new Error("The task workspace changed. Inspect it before running checks.");
+    if (["running", "attention"].includes(presentation(id, retryEntryId).column))
+      throw new Error("Resolve attention and stop active work before running merge checks.");
+  };
+  assertReady();
   if (await gitWorktreeDirty(branch.worktreePath))
     throw new Error(
       "Commit the task's working changes before running merge checks.",
     );
+  assertReady();
   const entry = await queueEnqueue(
     repo.id,
     repo.path,

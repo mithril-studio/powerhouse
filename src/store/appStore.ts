@@ -603,6 +603,20 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   removeChat: (repoId, branchId, chatId) =>
     set((s) => ({
+      tasks: s.tasks.map((task) => {
+        if (task.repoId !== repoId || task.branchId !== branchId || task.primaryChatId !== chatId) return task;
+        const now = Date.now();
+        return {
+          ...task,
+          primaryChatId: null,
+          launch: { ...task.launch, stage: "ready" as const, error: undefined },
+          turn: task.turn?.outcome === "running"
+            ? { outcome: "cancelled" as const, at: now, summary: "Primary conversation removed" }
+            : task.turn,
+          updatedAt: now,
+          lastActivityAt: now,
+        };
+      }),
       repos: updateBranch(s.repos, repoId, branchId, (b) => {
         const chats = b.chats.filter((c) => c.id !== chatId);
         let activeChatId = b.activeChatId;
