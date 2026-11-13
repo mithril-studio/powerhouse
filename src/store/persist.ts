@@ -7,11 +7,6 @@ const getStore = () => (storePromise ??= load("powerhouse.json", { autoSave: fal
 export async function hydrateFromDisk() {
   const store = await getStore();
   const tree = await store.get<PersistedTree>("tree");
-  // First launch with tasks: keep a copy of the pre-tasks tree, once.
-  if (tree && (tree.schemaVersion ?? 0) < 1) {
-    await store.set("tree-before-tasks-v1", tree);
-    await store.save();
-  }
   useAppStore.getState().hydrate(tree ?? null);
 }
 

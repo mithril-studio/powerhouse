@@ -118,6 +118,11 @@ export async function startTask(id: string, open = false): Promise<void> {
         updateTask(id, { primaryChatId: chat.id });
         await flushPersistence();
       }
+      // An attached branch may point at a terminal chat; the board can't drive those.
+      if (resolveChatTransport(useAppStore.getState().settings, chat) !== "acp")
+        throw new Error(
+          "This task's conversation runs in a terminal. Use Open workspace to continue it.",
+        );
       if (open) openTask(id);
       await startSession(chat.id, alreadyStarted);
       task = taskContext(id).task;

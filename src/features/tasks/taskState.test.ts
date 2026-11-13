@@ -166,3 +166,10 @@ it("merge completion survives queue-history eviction", () => {
   });
   expect(taskPresentation(task, branch, {}, []).column).toBe("done");
 });
+
+it("removing a project removes its tasks, which could no longer be opened or archived", () => {
+  const t = seed();
+  expect(useAppStore.getState().tasks.some((x) => x.id === t.id)).toBe(true);
+  useAppStore.getState().removeRepo(t.repoId);
+  expect(useAppStore.getState().tasks.some((x) => x.repoId === t.repoId)).toBe(false);
+});

@@ -58,3 +58,16 @@ it("routes stop to the live session and forgets it on unmount", () => {
   cancelSession("c");
   expect(h.cancel).toHaveBeenCalledTimes(1);
 });
+
+it("rejects instead of hanging when the chat is removed mid-start", async () => {
+  let unregister = () => {};
+  const h = handle({
+    start: vi.fn(() => {
+      publishSession("gone", { ...EMPTY_SESSION, connection: "starting" });
+      setTimeout(() => unregister(), 10);
+      return new Promise<void>(() => {});
+    }),
+  });
+  unregister = registerSession("gone", h);
+  await expect(startSession("gone", false)).rejects.toThrow("closed before the agent started");
+});

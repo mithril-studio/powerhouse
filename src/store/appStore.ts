@@ -688,6 +688,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       const { [repoId]: _dropped, ...queues } = s.queues;
       return {
         repos: s.repos.filter((r) => r.id !== repoId),
+        // Tasks can't outlive their project: nothing could open or archive them.
+        tasks: s.tasks.filter((t) => t.repoId !== repoId),
         queues,
         selection:
           s.selection.repoId === repoId

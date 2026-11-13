@@ -70,6 +70,9 @@ function handleFor(id: string, timeoutMs = 5000): Promise<SessionHandle> {
   });
 }
 
+/** Agents can take a while to boot (first run may install), but never this long. */
+const START_TIMEOUT_MS = 180_000;
+
 /** Resolves once the agent is connected (its first prompt keeps running) or failed. */
 export async function startSession(id: string, resume: boolean): Promise<void> {
   const handle = await handleFor(id);
@@ -78,14 +81,29 @@ export async function startSession(id: string, resume: boolean): Promise<void> {
   let check: (s?: SessionSnapshot) => void = () => {};
   const settled = new Promise<void>((resolve, reject) => {
     let unsubscribe = () => {};
-    check = (s) => {
-      if (s?.connection === "starting") begun = true;
-      if (!begun || !s || s.connection === "starting" || s.connection === "idle") return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (error?: Error) => {
       unsubscribe();
-      if (s.connection === "ready") resolve();
-      else reject(new Error(s.error ?? "The agent could not start."));
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve();
+    };
+    check = (s) => {
+      // The chat (or its branch/project) was removed: its hook unmounted.
+      if (!s && !handles.has(id))
+        return finish(new Error("The conversation was closed before the agent started."));
+      if (s?.connection === "starting") begun = true;
+      if (!begun || !s || s.connection === "starting") return;
+      if (s.connection === "idle")
+        return finish(new Error("The conversation was detached before the agent started."));
+      if (s.connection === "ready") finish();
+      else finish(new Error(s.error ?? "The agent could not start."));
     };
     unsubscribe = useSessions.subscribe((state) => check(state.sessions[id]));
+    timer = setTimeout(
+      () => finish(new Error("The agent took too long to start. Open the workspace to check on it.")),
+      START_TIMEOUT_MS,
+    );
   });
   // `start` also runs the first prompt to completion, so don't wait on it alone.
   void handle
