@@ -294,3 +294,143 @@ pub async fn github_list_repos() -> Result<Vec<RepoSummary>, String> {
 pub fn github_disconnect() -> Result<(), String> {
     delete_token()
 }
+
+#[derive(Serialize)]
+pub struct BoardIssue {
+    number: u64,
+    title: String,
+    body: String,
+    url: String,
+    labels: Vec<String>,
+}
+#[derive(Serialize)]
+pub struct BoardIssues {
+    repository: String,
+    issues: Vec<BoardIssue>,
+    next_page: Option<u32>,
+}
+fn github_repository(remote: &str) -> Result<String, String> {
+    let path = remote
+        .trim()
+        .strip_prefix("git@github.com:")
+        .or_else(|| remote.trim().strip_prefix("https://github.com/"))
+        .or_else(|| remote.trim().strip_prefix("ssh://git@github.com/"))
+        .ok_or("The origin remote must use github.com.")?;
+    let path = path.trim_end_matches('/').trim_end_matches(".git");
+    let parts: Vec<_> = path.split('/').collect();
+    if parts.len() != 2
+        || parts.iter().any(|p| {
+            p.is_empty()
+                || *p == "."
+                || *p == ".."
+                || !p
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+        })
+    {
+        return Err("Invalid GitHub repository remote.".into());
+    }
+    Ok(path.to_string())
+}
+/// Read-only issue intake. Credentials never enter the webview or arbitrary hosts.
+#[tauri::command]
+pub async fn github_board_issues(repo_path: String, page: u32) -> Result<BoardIssues, String> {
+    if page == 0 || page > 10000 {
+        return Err("Invalid issue page.".into());
+    }
+    let remote = crate::git::git(
+        std::path::Path::new(&repo_path),
+        &["remote", "get-url", "origin"],
+    )?;
+    let repository = github_repository(&remote)?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut request = client
+        .get(format!("https://api.github.com/repos/{repository}/issues"))
+        .header("User-Agent", USER_AGENT)
+        .header("Accept", "application/vnd.github+json")
+        .query(&[
+            ("state", "open".to_string()),
+            ("sort", "updated".to_string()),
+            ("direction", "desc".to_string()),
+            ("per_page", "100".to_string()),
+            ("page", page.to_string()),
+        ]);
+    if let Some(token) = read_token() {
+        request = request.bearer_auth(token);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|_| "Could not reach GitHub. Cached issues are still available.".to_string())?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "GitHub returned {}. Check your connection, repository access, or rate limit.",
+            response.status().as_u16()
+        ));
+    }
+    let more = response
+        .headers()
+        .get("link")
+        .and_then(|h| h.to_str().ok())
+        .is_some_and(|s| s.contains("rel=\"next\""));
+    let rows: Vec<serde_json::Value> = response.json().await.map_err(|e| e.to_string())?;
+    let issues = rows
+        .into_iter()
+        .filter(|r| r.get("pull_request").is_none())
+        .filter_map(|r| {
+            Some(BoardIssue {
+                number: r.get("number")?.as_u64()?,
+                title: r.get("title")?.as_str()?.to_string(),
+                body: r
+                    .get("body")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                url: format!(
+                    "https://github.com/{repository}/issues/{}",
+                    r.get("number")?.as_u64()?
+                ),
+                labels: r
+                    .get("labels")
+                    .and_then(|v| v.as_array())
+                    .map(|v| {
+                        v.iter()
+                            .filter_map(|l| l.get("name")?.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            })
+        })
+        .collect();
+    Ok(BoardIssues {
+        repository,
+        issues,
+        next_page: more.then_some(page + 1),
+    })
+}
+#[cfg(test)]
+mod board_issue_tests {
+    use super::*;
+    #[test]
+    fn resolves_supported_remotes_without_accepting_other_hosts_or_paths() {
+        for remote in [
+            "git@github.com:org/repo.git",
+            "https://github.com/org/repo.git",
+            "ssh://git@github.com/org/repo",
+        ] {
+            assert_eq!(github_repository(remote).unwrap(), "org/repo");
+        }
+        for remote in [
+            "https://github.com.evil/org/repo",
+            "https://github.com/../repo",
+            "https://github.com/org/repo?x=y",
+            "git@elsewhere:org/repo",
+            "https://github.com/org/repo/extra",
+        ] {
+            assert!(github_repository(remote).is_err());
+        }
+    }
+}
