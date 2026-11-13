@@ -1,19 +1,22 @@
-import { memo, useRef, useState, type ReactNode } from "react";
+import { memo, isValidElement, useState, type ReactNode } from "react";
 import Markdown, { type Components } from "react-markdown";
+import { CopyButton } from "./CopyButton";
 import remarkGfm from "remark-gfm";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 function CodeBlock({ children }: { children?: ReactNode }) {
-  const code = useRef<HTMLPreElement>(null);
-  const [status, setStatus] = useState("Copy code");
+  const [wrap, setWrap] = useState(false);
+  const child = isValidElement<{ className?: string; children?: string }>(children) ? children : null;
+  const text = typeof child?.props.children === "string" ? child.props.children : "";
+  const language = child?.props.className?.match(/language-([\w+-]+)/)?.[1] ?? "text";
   return <div className="chat-code">
-    <button type="button" onClick={async () => {
-      try {
-        await navigator.clipboard.writeText(code.current?.textContent ?? "");
-        setStatus("Copied");
-      } catch { setStatus("Could not copy"); }
-    }}>{status}</button>
-    <pre ref={code}>{children}</pre>
+    <div className="code-toolbar">
+      <span className="font-mono">{language}</span>
+      <span className="flex-1" />
+      <button type="button" aria-pressed={wrap} onClick={() => setWrap(!wrap)}>Wrap</button>
+      <CopyButton text={text} label="Copy code" />
+    </div>
+    <pre className={wrap ? "code-wrap" : ""}>{children}</pre>
   </div>;
 }
 

@@ -271,11 +271,13 @@ function ChangesTab({
           </p>
         )}
         {files.map((f) => (
-          <div
+          <button
+            type="button"
+            aria-label={`View changes in ${f.path}`}
             key={f.path}
             onClick={() => onOpenDiff(f.path)}
             title={f.path}
-            className="flex h-7 cursor-default items-center gap-2 rounded-md px-1.5 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+            className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-muted-foreground hover:bg-muted/50 hover:text-foreground"
           >
             <span className={`shrink-0 font-mono text-[11px] ${statusColor(f.status)}`}>
               {f.status}
@@ -283,7 +285,7 @@ function ChangesTab({
             <span className="min-w-0 flex-1 truncate font-mono text-xs" dir="rtl">
               {f.path}
             </span>
-          </div>
+          </button>
         ))}
       </div>
     </div>
@@ -300,6 +302,9 @@ function DiffTab({
   path: string | null;
 }) {
   const [diff, setDiff] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const setRightTab = useAppStore((s) => s.setRightTab);
 
   useEffect(() => {
     if (!path) {
@@ -307,9 +312,13 @@ function DiffTab({
       return;
     }
     let cancelled = false;
+    setDiff("");
+    setError(null);
+    setLoading(true);
     void gitFileDiff(branch.worktreePath, repo.defaultBranch, path)
       .then((d) => !cancelled && setDiff(d))
-      .catch((e) => !cancelled && setDiff(String(e)));
+      .catch((e) => !cancelled && setError(String(e)))
+      .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
     };
@@ -327,13 +336,14 @@ function DiffTab({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-8 shrink-0 items-center border-b border-border px-2">
-        <span className="min-w-0 flex-1 truncate font-mono text-xs" dir="rtl">
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
+        <button onClick={() => setRightTab("changes")} aria-label="Back to changed files" className="text-muted-foreground hover:text-foreground">←</button>
+        <span title={path} className="min-w-0 flex-1 truncate font-mono text-xs">
           {path}
         </span>
       </div>
-      <div className="flex-1 overflow-auto py-1.5">
-        <DiffView diff={diff} />
+      <div className="min-h-0 flex-1 overflow-auto">
+        {loading ? <p role="status" className="p-6 text-xs text-muted-foreground">Loading changes…</p> : error ? <p role="alert" className="p-4 text-xs text-destructive">{error}</p> : <DiffView diff={diff} />}
       </div>
     </div>
   );
@@ -352,9 +362,10 @@ export function RightSidebar({
   const setRightTab = useAppStore((s) => s.setRightTab);
   const toggleRightSidebar = useAppStore((s) => s.toggleRightSidebar);
   const [diffPath, setDiffPath] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
 
   // Reset the selected diff file when the branch changes.
-  useEffect(() => setDiffPath(null), [branch?.id]);
+  useEffect(() => { setDiffPath(null); setExpanded(false); }, [branch?.id]);
 
   const openDiff = (path: string) => {
     setDiffPath(path);
@@ -362,12 +373,13 @@ export function RightSidebar({
   };
 
   return (
-    <aside className="flex w-90 shrink-0 flex-col border-l border-border bg-background">
+    <aside aria-label="Project inspector" className={`flex shrink-0 flex-col border-l border-border bg-background ${expanded ? "fixed inset-y-0 right-0 z-30 w-[calc(100%-15rem)]" : "w-90"}`}>
       <div className="flex h-11 shrink-0 items-center gap-0.5 border-b border-border px-1.5">
         {TABS.map((t) => (
           <button
             key={t.id}
             onClick={() => setRightTab(t.id)}
+            aria-pressed={rightTab === t.id}
             className={`h-7 flex-1 rounded-md px-1 text-xs ${
               rightTab === t.id
                 ? "bg-muted text-foreground"
@@ -377,6 +389,7 @@ export function RightSidebar({
             {t.label}
           </button>
         ))}
+        <button onClick={() => setExpanded(!expanded)} aria-label={expanded ? "Collapse inspector" : "Expand inspector"} title={expanded ? "Collapse inspector" : "Expand inspector"} className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground">{expanded ? "↙" : "↗"}</button>
         <button
           onClick={toggleRightSidebar}
           title="Close sidebar"

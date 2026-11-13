@@ -14,6 +14,7 @@ import { AcpPermissionCard } from "./acp/AcpPermissionCard";
 import { AcpComposer } from "./acp/AcpComposer";
 import { AcpConnectionPanel } from "./acp/AcpConnectionPanel";
 import { AcpCommandPalette } from "./acp/AcpCommandPalette";
+import { SessionControls } from "./acp/SessionControls";
 import { AcpFooter } from "./acp/AcpFooter";
 
 interface Props {
@@ -105,39 +106,40 @@ export function AcpChatPane({ repoId, branch, chat, active }: Props) {
           onResume={() => void session.start(true)}
           onStartFresh={() => void session.start(false)}
         />
-      ) : paletteOpen ? (
-        <AcpCommandPalette
-          view={paletteView}
-          onApply={session.applyOp}
-          onInsert={(prompt) => setDraft(prompt)}
-          onNativeCli={openNativeCli}
-          onRestart={session.restart}
-          onClose={() => setPaletteOpen(false)}
-        />
       ) : (
-        <AcpComposer
-          active={active}
-          busy={session.busy}
-          agentName={profile.name}
-          draft={draft}
-          onDraftChange={setDraft}
-          onSubmit={(prompt) => {
-            setDraft("");
-            void session.submitPrompt(prompt);
-          }}
-          onOpenCommands={() => setPaletteOpen(true)}
-          onCancel={session.cancel}
-          thinkingLevel={session.thinkingLevel}
-        />
+        <div className="relative shrink-0">
+          {paletteOpen && (
+            <AcpCommandPalette
+              view={paletteView}
+              onApply={session.applyOp}
+              onInsert={(prompt) => setDraft(prompt)}
+              onNativeCli={openNativeCli}
+              onRestart={session.restart}
+              onClose={() => setPaletteOpen(false)}
+            />
+          )}
+          <AcpComposer
+            active={active && !paletteOpen}
+            busy={session.busy}
+            agentName={profile.name}
+            draft={draft}
+            onDraftChange={setDraft}
+            onSubmit={(prompt) => {
+              setDraft("");
+              void session.submitPrompt(prompt);
+            }}
+            onOpenCommands={() => setPaletteOpen((open) => !open)}
+            onCancel={session.cancel}
+            thinkingLevel={session.thinkingLevel}
+            controls={<SessionControls state={session.controlState} disabled={session.busy} onApply={session.applyOp} />}
+          />
+        </div>
       )}
       {connected && (
         <AcpFooter
           agentName={session.agentLabel}
           branchName={branch.name}
           busy={session.busy}
-          modes={session.modes}
-          configOptions={session.configOptions}
-          commandCount={session.commands.length}
           nativeCliOpen={nativeCliOpen}
         />
       )}

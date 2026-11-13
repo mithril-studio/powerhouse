@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   filterPalette,
   flattenView,
@@ -24,6 +24,7 @@ export function AcpCommandPalette({
   onRestart,
   onClose,
 }: Props) {
+  const listId = useId();
   // A stack of drilled-into views; index 0 is the (live) root.
   const [stack, setStack] = useState<PaletteView[]>([view]);
   const [query, setQuery] = useState("");
@@ -105,13 +106,14 @@ export function AcpCommandPalette({
   return (
     <section
       role="dialog"
-      aria-modal="true"
       aria-label="Agent command palette"
-      className="shrink-0 border-t border-border bg-background px-3 pt-2 font-mono"
+      className="command-popover"
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.preventDefault();
           goBack();
+        } else if (event.target !== inputRef.current) {
+          return;
         } else if (event.key === "ArrowDown") {
           event.preventDefault();
           if (items.length === 0) return;
@@ -133,7 +135,7 @@ export function AcpCommandPalette({
         }
       }}
     >
-      <div className="flex h-9 items-center border border-accent-brand/70 bg-card px-2 text-sm">
+      <div className="flex h-11 shrink-0 items-center border-b border-border px-3 text-sm">
         {stack.length > 1 && (
           <button
             type="button"
@@ -155,6 +157,10 @@ export function AcpCommandPalette({
             setActiveIndex(0);
           }}
           aria-label="Filter commands"
+          role="combobox"
+          aria-expanded="true"
+          aria-controls={listId}
+          aria-activedescendant={items[activeIndex] ? `${listId}-${activeIndex}` : undefined}
           placeholder={
             current.title
               ? `Search ${current.title.toLowerCase()}…`
@@ -162,9 +168,9 @@ export function AcpCommandPalette({
           }
           className="h-full flex-1 bg-transparent text-foreground outline-none placeholder:text-muted-foreground/60"
         />
-        <kbd className="text-[10px] text-muted-foreground">esc</kbd>
+        <button type="button" onClick={onClose} aria-label="Close commands" className="ml-2 text-xs text-muted-foreground">Esc</button>
       </div>
-      <div role="listbox" className="max-h-64 overflow-y-auto py-1.5">
+      <div role="listbox" id={listId} aria-label="Commands" className="min-h-0 overflow-y-auto p-1.5">
         {filtered.groups.map((group) =>
           group.items.map((item) => {
             const index = items.indexOf(item);
@@ -182,10 +188,11 @@ export function AcpCommandPalette({
                   ref={index === activeIndex ? activeOptionRef : undefined}
                   type="button"
                   role="option"
+                  id={`${listId}-${index}`}
                   aria-selected={index === activeIndex}
                   onMouseMove={(event) => hoverIndex(index, event)}
                   onClick={() => choose(item)}
-                  className={`flex w-full items-center gap-3 px-2 py-1.5 text-left text-xs ${
+                  className={`flex w-full items-center gap-3 rounded-md px-2 py-2 text-left text-xs ${
                     index === activeIndex
                       ? "bg-muted text-foreground"
                       : "text-muted-foreground"

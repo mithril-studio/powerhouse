@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 
 interface Props {
   active: boolean;
@@ -10,9 +10,10 @@ interface Props {
   onOpenCommands: () => void;
   onCancel: () => void;
   thinkingLevel?: string;
+  controls?: ReactNode;
 }
 
-export function AcpComposer({ active, busy, agentName, draft, onDraftChange, onSubmit, onOpenCommands, onCancel, thinkingLevel }: Props) {
+export function AcpComposer({ active, busy, agentName, draft, onDraftChange, onSubmit, onOpenCommands, onCancel, thinkingLevel, controls }: Props) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -36,7 +37,7 @@ export function AcpComposer({ active, busy, agentName, draft, onDraftChange, onS
         <textarea
           ref={inputRef}
           value={draft}
-          rows={3}
+          rows={2}
           aria-label="Message agent"
           placeholder={busy ? "Draft a follow-up while the agent works…" : "Ask a question or describe a task…"}
           onChange={(event) => onDraftChange(event.target.value)}
@@ -50,22 +51,23 @@ export function AcpComposer({ active, busy, agentName, draft, onDraftChange, onS
               event.currentTarget.form?.requestSubmit();
             }
           }}
-          className="block max-h-60 min-h-20 w-full resize-none bg-transparent text-sm leading-6 outline-none placeholder:text-muted-foreground"
+          className="block max-h-60 min-h-16 w-full resize-none bg-transparent text-sm leading-6 outline-none placeholder:text-muted-foreground"
         />
-        <div className="mt-3 flex items-center gap-3">
+        <div className="composer-toolbar">
           <button type="button" onClick={onOpenCommands} disabled={busy} aria-label="Agent commands" title="Agent commands (⌘⇧P)" className="composer-agent">
-            {agentName} {thinkingLevel && <span className="text-muted-foreground">· {thinkingLevel}</span>} <span aria-hidden>⌄</span>
+            {agentName} {!controls && thinkingLevel && <span className="text-muted-foreground">· {thinkingLevel}</span>} <span aria-hidden>⌄</span>
           </button>
+          {controls}
           <span className="flex-1" />
           {/* Distinct keys prevent Stop becoming a submit button during its click. */}
           {busy ? (
-            <button key="stop" type="button" onClick={onCancel} className="pi-btn h-8 gap-2 px-3" aria-label="Stop agent"><span aria-hidden>■</span> Stop</button>
+            <button key="stop" type="button" onClick={onCancel} className="composer-send" aria-label="Stop agent" title="Stop agent (Esc)"><span aria-hidden>■</span></button>
           ) : (
-            <button key="send" type="submit" disabled={!draft.trim()} className="pi-btn pi-btn-primary h-8 gap-2 px-3" aria-label="Send message">Send <span aria-hidden>↑</span></button>
+            <button key="send" type="submit" disabled={!draft.trim()} className="composer-send composer-send-primary" aria-label="Send message" title="Send message (Enter)"><span aria-hidden>↑</span></button>
           )}
         </div>
       </div>
-      <p className="chat-column mt-2 text-xs text-muted-foreground">{busy ? "Draft your next message while the agent works · Esc to stop" : "Enter to send · Shift+Enter for a new line · / for commands"}</p>
+      <p className="chat-column mt-2 text-center text-[11px] text-muted-foreground">{busy ? "Draft your next message while the agent works · Esc to stop" : "Enter to send · Shift+Enter for a new line · / for commands"}</p>
     </form>
   );
 }
