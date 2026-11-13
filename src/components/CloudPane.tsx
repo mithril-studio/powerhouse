@@ -164,7 +164,7 @@ export function CloudPane({ repo, branch }: { repo: Repo; branch?: Branch | null
         ) : (
           <div className="space-y-2">
             {list.map((r) => (
-              <CloudRunCard key={r.run_id} record={r} />
+              <CloudRunCard key={r.run_id} record={r} onImport={() => importCloudResult(r.run_id)} />
             ))}
           </div>
         )}
@@ -230,8 +230,12 @@ function InventoryFooter({
   );
 }
 
-function CloudRunCard({ record: r }: { record: CloudRunRecord }) {
-  const [expanded, setExpanded] = useState(isRunActive(r));
+export function CloudRunCard({ record: r, onImport, defaultExpanded }: {
+  record: CloudRunRecord;
+  onImport: () => Promise<void>;
+  defaultExpanded?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded ?? isRunActive(r));
   const [tab, setTab] = useState<"activity" | "checks" | "diff">("activity");
   const [busy, setBusy] = useState<string | null>(null);
   const p = presentRun(r);
@@ -365,7 +369,7 @@ function CloudRunCard({ record: r }: { record: CloudRunRecord }) {
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         {canFetch && (
           <button
-            onClick={() => void run("Fetch changes", () => importCloudResult(r.run_id))}
+            onClick={() => void run("Fetch changes", onImport)}
             disabled={!!busy || !!r.imported_worktree}
             title={r.imported_worktree ? `Imported to ${r.imported_worktree}` : `Fetch ${shortSha(r.result?.result_sha)} into a new local worktree`}
             className="h-7 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-all active:translate-y-px disabled:opacity-50"

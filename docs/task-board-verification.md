@@ -16,7 +16,7 @@ The board intentionally uses activity excerpts in Mission Control. It does not c
 
 ## Automated verification
 
-Latest verification: 88 TypeScript tests passed; 78 Rust tests passed with 1 existing ignored test. Type checking, the production frontend build, and SQLite integrity checks passed.
+Latest bug-fix verification: 105 TypeScript tests passed across 23 files, with type checking and the production frontend build passing. The native implementation was unchanged in this fix pass; its preceding verification passed 78 Rust tests with 1 existing ignored test, the native build and SQLite integrity checks.
 
 Run:
 
@@ -51,3 +51,14 @@ The GitHub intake cache is retained for the current app session. A restart refet
 ## Isolated native smoke builds
 
 Debug builds recognize `POWERHOUSE_TEST_DATA_DIR` for test telemetry, transcripts, cloud-run state, task worktrees and merge-check worktrees. With it set, startup skips global handoff-command installation and GitHub account reconciliation. Use a distinct Tauri identifier as well to isolate `powerhouse.json`. Release builds ignore this override. This is test isolation, not a user-facing storage preference.
+
+## Review fixes
+
+The four implementation findings from the independent review are addressed:
+
+- Stop during a pending persistence save prevents prompt dispatch. After dispatch, Stop sends protocol cancellation, and stale completion/cancellation callbacks cannot affect a newer turn.
+- Deleting the primary chat clears task ownership and resolves its running marker. Restart checks whether the chat actually exists, including recovery of previously persisted dangling references.
+- Retry checks uses the same activity and clean-worktree admission checks as initial checks, rechecks activity after Git returns, and preserves the original failure until the new entry is admitted.
+- Cloud task details renders only the linked run. Both project and task imports update the task's local workspace linkage, and repeat imports preserve subsequent local work.
+
+Nine regression tests cover these cases. CodeRabbit was retried during the fix pass and still required authentication. Interactive native and live-provider acceptance remain outstanding as described above.

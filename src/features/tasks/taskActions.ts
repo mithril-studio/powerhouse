@@ -272,25 +272,6 @@ export async function importTaskCloudResult(id: string) {
   const { task } = taskContext(id);
   if (!task.cloudRunId) return;
   await importCloudResult(task.cloudRunId);
-  const s = useAppStore.getState();
-  const run = s.cloudRuns[task.cloudRunId];
-  const branch = s.repos
-    .find((r) => r.id === task.repoId)
-    ?.branches.find((b) => b.worktreePath === run?.imported_worktree);
-  if (branch && s.tasks.some((t) => t.id !== id && t.branchId === branch.id))
-    throw new Error(
-      "The imported worktree already belongs to another task. Open that task to continue.",
-    );
-  if (branch)
-    updateTask(id, {
-      branchId: branch.id,
-      primaryChatId: branch.activeChatId,
-      turn: {
-        outcome: "completed",
-        at: Date.now(),
-        summary: "Cloud result imported",
-      },
-    });
 }
 export async function cancelTaskCloud(id: string) {
   const { task } = taskContext(id);

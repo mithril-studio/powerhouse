@@ -1,4 +1,4 @@
-import { CloudPane } from "../../components/CloudPane";
+import { TaskCloudDetails } from "./TaskCloudDetails";
 import { useTaskFacts } from "./useTaskFacts";
 import { useEffect, useState } from "react";
 import { useAppStore, type Branch } from "../../store/appStore";
@@ -783,7 +783,7 @@ export function TaskBoardPage() {
                   <summary className="cursor-pointer text-sm">
                     Cloud run details and logs
                   </summary>
-                  <CloudPane repo={selected.repo} branch={selected.branch} />
+                  <TaskCloudDetails task={selected.task} />
                 </details>
               )}
               <p className="mt-5 whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">

@@ -228,7 +228,25 @@ export async function importCloudResult(runId: string) {
     chats: [],
     activeChatId: null,
   };
+  const linkedTask = useAppStore.getState().tasks.find((task) => task.cloudRunId === runId && task.repoId === repo.id);
+  if (linkedTask && useAppStore.getState().tasks.some((task) => task.id !== linkedTask.id && task.branchId === branch.id))
+    throw new Error("The imported worktree already belongs to another task. Open that task to continue.");
   if (!existing) s.addBranch(repo.id, branch);
+  // Both project-level and task-level imports must attach the same local lineage.
+  // Repeating an import must not overwrite a subsequent local turn.
+  if (linkedTask && linkedTask.branchId !== branch.id) {
+    const now = Date.now();
+    useAppStore.setState((state) => ({
+      tasks: state.tasks.map((task) => task.id === linkedTask.id ? {
+        ...task,
+        branchId: branch.id,
+        primaryChatId: branch.activeChatId,
+        turn: { outcome: "completed" as const, at: now, summary: "Cloud result imported" },
+        updatedAt: now,
+        lastActivityAt: now,
+      } : task),
+    }));
+  }
   s.select(repo.id, branch.id);
   s.openRightTab("changes");
   // Refresh the record so the card shows the imported worktree.
