@@ -52,8 +52,8 @@ export interface SessionActivity {
 }
 export const TASK_COLUMNS: { id: TaskColumn; label: string }[] = [
   { id: "backlog", label: "Backlog" },
-  { id: "running", label: "In Progress" },
-  { id: "attention", label: "Needs You" },
+  { id: "running", label: "In progress" },
+  { id: "attention", label: "Needs you" },
   { id: "review", label: "Review" },
   { id: "done", label: "Done" },
 ];

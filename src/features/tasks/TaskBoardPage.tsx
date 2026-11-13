@@ -9,7 +9,7 @@ import {
   cancelQueueEntry,
   dismissEntry,
 } from "../../lib/actions";
-import { TASK_COLUMNS, type Task } from "./types";
+import { TASK_COLUMNS, type Task, type TaskColumn, type TaskFacts } from "./types";
 import { taskPresentation } from "./taskState";
 import { adoptBranch, updateTask } from "./taskStore";
 import {
@@ -28,6 +28,31 @@ import {
 } from "./taskActions";
 import { refreshIssues, useIssueCache } from "./githubIssues";
 import { TaskComposer } from "./TaskComposer";
+import {
+  Menu,
+  PageHeader,
+  Segmented,
+  SelectControl,
+  SplitButton,
+  type MenuItem,
+} from "../../components/ui/page";
+import { CloseIcon, MoreIcon, PlusIcon, RefreshIcon, WarningIcon } from "../../components/ui/icons";
+
+/** What an empty column tells you — what will land there, not that it's empty. */
+const EMPTY_COPY: Record<TaskColumn, string> = {
+  backlog: "Nothing queued up.",
+  running: "Start a task and its agent works here.",
+  attention: "Agents will ask here when they're blocked.",
+  review: "Finished work lands here for review.",
+  done: "Nothing merged yet.",
+};
+
+/** Mission Control shows live work only, most urgent first. */
+const MISSION_GROUPS: { id: TaskColumn; label: string }[] = [
+  { id: "attention", label: "Needs you" },
+  { id: "running", label: "Working" },
+  { id: "review", label: "Ready for review" },
+];
 
 function lastReply(branch?: Branch) {
   const chat =
@@ -35,16 +60,20 @@ function lastReply(branch?: Branch) {
   const item = [...(chat?.acpTranscript ?? [])]
     .reverse()
     .find((i) => i.type === "message" && i.role === "assistant");
-  return item?.type === "message"
-    ? item.text.slice(-700)
-    : "Open the workspace to continue this task.";
+  return item?.type === "message" ? item.text.slice(-700) : null;
 }
+
+function changesLabel(facts?: TaskFacts) {
+  if (!facts) return null;
+  if (facts.changed_files === 0) return facts.dirty ? "Uncommitted changes" : "No changes yet";
+  return `${facts.changed_files} file${facts.changed_files === 1 ? "" : "s"} changed${facts.dirty ? " · uncommitted" : ""}`;
+}
+
 export function TaskBoardPage() {
   const state = useAppStore();
   const sessions = useSessions((s) => s.sessions);
   const caches = useIssueCache((s) => s.repos);
   const [scope, setScope] = useState(state.selection.repoId ?? "all");
-  const [query, setQuery] = useState("");
   const [archived, setArchived] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [composer, setComposer] = useState<{
@@ -88,6 +117,9 @@ export function TaskBoardPage() {
       setPending(null);
     }
   }
+  function agentName(task: Task) {
+    return state.settings.agents.find((a) => a.id === task.agentId)?.name ?? task.agentId;
+  }
   function row(task: Task) {
     const repo = state.repos.find((r) => r.id === task.repoId);
     const branch = repo?.branches.find((b) => b.id === task.branchId);
@@ -109,14 +141,12 @@ export function TaskBoardPage() {
       ),
     };
   }
+  type Row = ReturnType<typeof row>;
   const tasks = state.tasks
     .filter(
       (t) =>
         (scope === "all" || t.repoId === scope) &&
-        Boolean(t.archivedAt) === archived &&
-        `${t.title} ${t.description} ${state.repos.find((r) => r.id === t.repoId)?.name}`
-          .toLowerCase()
-          .includes(query.toLowerCase()),
+        Boolean(t.archivedAt) === (archived && !mission),
     )
     .sort(
       (a, b) => b.lastActivityAt - a.lastActivityAt || a.id.localeCompare(b.id),
@@ -133,7 +163,7 @@ export function TaskBoardPage() {
           t.source.repository.toLowerCase() ===
             issueCache.repository.toLowerCase() &&
           !t.archivedAt,
-      ) && `${i.title} ${i.number}`.toLowerCase().includes(query.toLowerCase()),
+      ),
   );
   const unlinkedRuns = Object.values(state.cloudRuns).filter(
     (r) =>
@@ -152,323 +182,233 @@ export function TaskBoardPage() {
     setSelectedId(id);
     updateTask(id, { seenAt: Date.now() });
   }
-  const card = (item: ReturnType<typeof row>) => (
-    <article
-      key={item.task.id}
-      className={`task-card ${selectedId === item.task.id ? "task-card-selected" : ""}`}
-    >
-      <button
-        className="w-full text-left"
-        onClick={() => select(item.task.id)}
-        aria-label={`Open task: ${item.task.title}`}
-      >
-        <div className="mb-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
-          <span>
-            {item.repo?.name ?? "Missing project"} ·{" "}
-            {state.settings.agents.find((a) => a.id === item.task.agentId)
-              ?.name ?? item.task.agentId}
-          </span>
+  function newTask(seed: typeof composer = null) {
+    setComposer(seed);
+    setShowComposer(true);
+  }
+
+  // Attaching existing work is a way of creating a task, so it lives in the
+  // New task menu instead of a strip above the board.
+  const attachItems: (MenuItem | "separator")[] = [
+    ...(unlinkedBranches.length > 1
+      ? [{
+          label: `Attach all ${unlinkedBranches.length} branches`,
+          onSelect: () => unlinkedBranches.forEach(({ repo, branch }) => adoptBranch(repo.id, branch.id)),
+        }]
+      : []),
+    ...unlinkedBranches.map(({ repo, branch }) => ({
+      label: `Attach ${scope === "all" ? `${repo.name} / ` : ""}${branch.name}`,
+      onSelect: () => select(adoptBranch(repo.id, branch.id).id),
+    })),
+    ...(unlinkedBranches.length && unlinkedRuns.length ? ["separator" as const] : []),
+    ...unlinkedRuns.map((r) => ({
+      label: `Link cloud run: ${r.manifest.task.text.slice(0, 60)}`,
+      onSelect: () => void run(r.run_id, () => select(linkCloudTask(r).id)),
+    })),
+  ];
+
+  const card = (item: Row) => {
+    const column = item.status.column;
+    const agent = agentName(item.task);
+    const meta = [
+      scope === "all" ? (item.repo?.name ?? "Missing project") : null,
+      item.branch?.name ?? item.task.launch.branchName,
+      item.task.source ? `#${item.task.source.number}` : null,
+      item.cloud
+        ? item.cloud.last_sync_ms
+          ? `cloud · synced ${new Date(item.cloud.last_sync_ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+          : "cloud · awaiting sync"
+        : null,
+    ].filter(Boolean).join(" · ");
+    const statusLabel =
+      column === "running" && item.status.reason === "Agent working"
+        ? `${agent} working`
+        : item.status.reason;
+    const changes = column === "done" ? null : changesLabel(facts[item.task.id]);
+    const reply = mission ? lastReply(item.branch) : null;
+    const permissions = (item.branch?.chats ?? []).flatMap((chat) => sessions[chat.id]?.permissions ?? []);
+    return (
+      <article key={item.task.id} className="ph-card" data-selected={selectedId === item.task.id}>
+        <button onClick={() => select(item.task.id)} aria-label={`Open task: ${item.task.title}`}>
           {item.task.lastActivityAt > item.task.seenAt && (
-            <span
-              aria-label="Unread activity"
-              className="size-2 rounded-full bg-primary"
-            />
+            <span aria-label="Unread activity" className="ph-card-unread" />
           )}
-        </div>
-        <h3 className="break-words text-sm font-medium">{item.task.title}</h3>
-        <p
-          className={`mt-2 text-xs ${item.status.column === "attention" ? "text-amber-500" : "text-muted-foreground"}`}
-        >
-          {item.status.reason}
-        </p>
-        {facts[item.task.id] && (
-          <p className="mt-2 text-xs text-muted-foreground">
-            {facts[item.task.id].changed_files} changed files
-            {facts[item.task.id].dirty ? " · uncommitted changes" : ""}
-          </p>
-        )}
-        {item.task.source && (
-          <p className="mt-2 text-xs text-muted-foreground">
-            Issue #{item.task.source.number}
-          </p>
-        )}
-        {item.cloud && (
-          <p className="mt-2 text-xs text-muted-foreground">
-            Cloud ·{" "}
-            {item.cloud.last_sync_ms
-              ? `synced ${new Date(item.cloud.last_sync_ms).toLocaleTimeString()}`
-              : "awaiting sync"}
-          </p>
-        )}
-        {mission && (
-          <p className="mt-4 max-h-32 overflow-hidden whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">
-            {lastReply(item.branch)}
-          </p>
-        )}
+          <h3 className="ph-card-title">{item.task.title}</h3>
+          {meta && <p className="ph-card-meta">{meta}</p>}
+          {reply && <p className="ph-card-reply">{reply}</p>}
+          {column === "backlog" ? (
+            <div className="ph-card-foot">
+              <span><span>{agent}</span></span>
+              <span>{item.status.reason}</span>
+            </div>
+          ) : (
+            <div className="ph-card-foot">
+              <span className={`tone-${column}`} title={statusLabel}>
+                <span aria-hidden className="ph-dot bg-current" />
+                <span>{statusLabel}</span>
+              </span>
+              {changes && <span>{changes}</span>}
+            </div>
+          )}
+        </button>
+        {permissions.map((p) => (
+          <AcpPermissionCard key={p.id} permission={p} onResolve={p.resolve} autoFocus={false} />
+        ))}
+      </article>
+    );
+  };
+
+  const issueNotice = project && issueCache?.error && (
+    <div role="status" className="ph-notice" title={issueCache.error}>
+      <WarningIcon className="size-3.5" />
+      <span>
+        GitHub offline
+        {issueCache.at ? " · showing cached issues" : ""}
+      </span>
+      <button
+        aria-label="Retry GitHub sync"
+        disabled={issueCache.loading}
+        onClick={() => void refreshIssues(project.id, project.path)}
+      >
+        <RefreshIcon className="size-3.5" />
       </button>
-      {(item.branch?.chats ?? []).flatMap((chat) =>
-        (sessions[chat.id]?.permissions ?? []).map((p) => (
-          <AcpPermissionCard
-            key={p.id}
-            permission={p}
-            onResolve={p.resolve}
-            autoFocus={false}
-          />
-        )),
-      )}
-    </article>
+    </div>
   );
+
+  const backlogExtras = !archived && (
+    <>
+      <button className="ph-add" disabled={!state.repos.length} onClick={() => newTask()}>
+        <PlusIcon className="size-3.5" />
+        Add task
+      </button>
+      {issueNotice}
+      {issues.map((issue) => (
+        <article key={issue.number} className="ph-card">
+          <button
+            onClick={() =>
+              newTask({
+                title: issue.title,
+                description: issue.body,
+                source: { repository: issueCache.repository, number: issue.number, url: issue.url },
+              })
+            }
+          >
+            <h3 className="ph-card-title">{issue.title}</h3>
+            <p className="ph-card-meta">#{issue.number}</p>
+            <div className="ph-card-foot">
+              <span><span>GitHub issue</span></span>
+              {issue.labels.length > 0 && <span className="truncate">{issue.labels.slice(0, 2).join(", ")}</span>}
+            </div>
+          </button>
+        </article>
+      ))}
+      {project && issueCache?.next_page && (
+        <button
+          className="ph-text-btn"
+          disabled={issueCache.loading}
+          onClick={() => void refreshIssues(project.id, project.path, true)}
+        >
+          {issueCache.loading ? "Loading…" : "Load more issues"}
+        </button>
+      )}
+    </>
+  );
+
+  const live = MISSION_GROUPS.map((g) => ({
+    ...g,
+    items: tasks.filter((t) => t.status.column === g.id),
+  })).filter((g) => g.items.length > 0);
+
   return (
     <>
       <section
         aria-label={mission ? "Mission Control" : "Task board"}
-        className="flex min-w-0 flex-1 flex-col overflow-hidden bg-background"
+        className="ph-page"
         inert={showComposer}
       >
-        <header className="flex flex-wrap items-center gap-3 border-b border-border px-6 py-4">
-          <div className="mr-auto">
-            <h1 className="text-lg font-semibold tracking-tight">
-              {mission ? "Mission Control" : "Task board"}
-            </h1>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {tasks.length} tasks ·{" "}
-              {tasks.filter((t) => t.status.column === "attention").length} need
-              you
-            </p>
-          </div>
-          <select
-            aria-label="Task project"
-            style={{ width: "auto" }}
+        <PageHeader title={mission ? "Mission Control" : "Task board"}>
+          <SelectControl
+            label="Task project"
             value={scope}
-            onChange={(e) => {
-              setScope(e.target.value);
+            onChange={(v) => {
+              setScope(v);
               setSelectedId(null);
             }}
-            className="task-input w-auto"
-          >
-            <option value="all">All projects</option>
-            {state.repos.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.name}
-              </option>
-            ))}
-          </select>
-          <input
-            aria-label="Search tasks"
-            style={{ width: "12rem" }}
-            placeholder="Search tasks…"
-            className="task-input w-48"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            options={[
+              { value: "all", label: "All projects" },
+              ...state.repos.map((r) => ({ value: r.id, label: r.name })),
+            ]}
           />
-          <button
-            className="pi-btn"
-            aria-pressed={archived}
-            onClick={() => setArchived(!archived)}
-          >
-            {archived ? "Show active" : "Archived"}
-          </button>
-          <button
-            className="pi-btn pi-btn-primary"
+          {!mission && (
+            <Segmented
+              label="Task visibility"
+              value={archived ? "archived" : "active"}
+              onChange={(v) => {
+                setArchived(v === "archived");
+                setSelectedId(null);
+              }}
+              options={[
+                { value: "active", label: "Active" },
+                { value: "archived", label: "Archived" },
+              ]}
+            />
+          )}
+          <SplitButton
+            label="New task"
             disabled={!state.repos.length}
-            onClick={() => {
-              setComposer(null);
-              setShowComposer(true);
-            }}
-          >
-            + New task
-          </button>
-        </header>
+            onClick={() => newTask()}
+            menuLabel="More ways to add a task"
+            items={
+              attachItems.length
+                ? attachItems
+                : [{ label: "No branches or cloud runs to attach", disabled: true, onSelect: () => {} }]
+            }
+          />
+        </PageHeader>
         {error && (
-          <div
-            role="alert"
-            className="flex items-center gap-3 border-b border-destructive/30 px-6 py-3 text-sm text-destructive"
-          >
+          <div role="alert" className="mx-8 mt-4 flex items-center gap-3 rounded-lg bg-destructive/10 px-4 py-2.5 text-[13px] text-destructive">
             <span className="flex-1">{error}</span>
-            <button onClick={() => setError(null)} aria-label="Dismiss error">
-              ×
+            <button className="ph-icon-btn text-destructive" onClick={() => setError(null)} aria-label="Dismiss error">
+              <CloseIcon className="size-3.5" />
             </button>
           </div>
         )}
-        {(unlinkedBranches.length > 0 || unlinkedRuns.length > 0) && (
-          <details className="border-b border-border px-6 py-3 text-xs text-muted-foreground">
-            <summary className="cursor-pointer">
-              Add existing work · {unlinkedBranches.length} branches ·{" "}
-              {unlinkedRuns.length} cloud runs
-            </summary>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {unlinkedBranches.length > 1 && (
-                <button
-                  className="pi-btn"
-                  onClick={() =>
-                    unlinkedBranches.forEach(({ repo, branch }) =>
-                      adoptBranch(repo.id, branch.id),
-                    )
-                  }
-                >
-                  Attach all branches
-                </button>
-              )}
-              {unlinkedBranches.map(({ repo, branch }) => (
-                <button
-                  className="pi-btn"
-                  key={branch.id}
-                  onClick={() => {
-                    const t = adoptBranch(repo.id, branch.id);
-                    select(t.id);
-                  }}
-                >
-                  Attach {repo.name} / {branch.name}
-                </button>
-              ))}
-              {unlinkedRuns.map((r) => (
-                <button
-                  className="pi-btn"
-                  key={r.run_id}
-                  onClick={() =>
-                    void run(r.run_id, () => {
-                      const t = linkCloudTask(r);
-                      select(t.id);
-                    })
-                  }
-                >
-                  Link cloud: {r.manifest.task.text.slice(0, 60)}
-                </button>
-              ))}
-            </div>
-          </details>
-        )}
         <div className="flex min-h-0 flex-1 overflow-hidden">
           {mission ? (
-            <div className="grid min-w-0 flex-1 auto-rows-min grid-cols-[repeat(auto-fill,minmax(290px,1fr))] gap-4 overflow-auto p-5">
-              {[...tasks]
-                .sort(
-                  (a, b) =>
-                    Number(b.status.column === "attention") -
-                    Number(a.status.column === "attention"),
-                )
-                .map(card)}
-              {!tasks.length && (
-                <p className="p-6 text-sm text-muted-foreground">
-                  No tasks in this view. Create a task or attach existing work.
-                </p>
+            <div className="ph-mission">
+              {live.map((group) => (
+                <section key={group.id} aria-label={group.label}>
+                  <h2 className="ph-column-head">
+                    {group.label}
+                    <span>{group.items.length}</span>
+                  </h2>
+                  <div className="ph-mission-grid">{group.items.map(card)}</div>
+                </section>
+              ))}
+              {!live.length && (
+                <div className="ph-empty">
+                  <h2>No agents running</h2>
+                  <p>Start a task and you can watch it here, live.</p>
+                </div>
               )}
             </div>
           ) : (
-            <div className="flex min-w-0 flex-1 gap-4 overflow-x-auto p-5">
+            <div className="ph-board">
               {TASK_COLUMNS.map((column) => {
-                const items = tasks.filter(
-                  (t) => t.status.column === column.id,
-                );
+                const items = tasks.filter((t) => t.status.column === column.id);
+                const count = items.length + (column.id === "backlog" && !archived ? issues.length : 0);
                 return (
-                  <section
-                    key={column.id}
-                    aria-label={column.label}
-                    className="flex w-64 min-w-60 flex-1 flex-col"
-                  >
-                    <h2 className="mb-4 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  <section key={column.id} aria-label={column.label} className="ph-column">
+                    <h2 className="ph-column-head">
                       {column.label}
-                      <span className="rounded bg-muted px-1.5 py-0.5">
-                        {items.length +
-                          (column.id === "backlog" && !archived
-                            ? issues.length
-                            : 0)}
-                      </span>
+                      <span>{count}</span>
                     </h2>
-                    <div className="min-h-0 space-y-3 overflow-y-auto pb-4">
+                    <div className="ph-column-body">
                       {items.map(card)}
-                      {column.id === "backlog" && !archived && (
-                        <>
-                          {project ? (
-                            <div className="text-xs text-muted-foreground">
-                              <div className="mb-2 flex items-center justify-between">
-                                <span>GitHub issues</span>
-                                <button
-                                  disabled={issueCache?.loading}
-                                  className="pi-btn"
-                                  onClick={() =>
-                                    void refreshIssues(project.id, project.path)
-                                  }
-                                >
-                                  {issueCache?.loading ? "Syncing…" : "Refresh"}
-                                </button>
-                              </div>
-                              {issueCache?.error && (
-                                <p
-                                  role="status"
-                                  className="mb-2 text-amber-500"
-                                >
-                                  {issueCache.error}
-                                  {issueCache.at
-                                    ? ` Cached ${new Date(issueCache.at).toLocaleString()}.`
-                                    : ""}
-                                </p>
-                              )}
-                              {!issueCache?.error && issueCache?.at ? (
-                                <p className="mb-2">
-                                  Synced{" "}
-                                  {new Date(issueCache.at).toLocaleTimeString()}
-                                </p>
-                              ) : null}
-                            </div>
-                          ) : (
-                            <p className="text-xs text-muted-foreground">
-                              Choose a project to browse its GitHub issues.
-                            </p>
-                          )}
-                          {issues.map((issue) => (
-                            <button
-                              key={issue.number}
-                              className="task-card w-full text-left"
-                              onClick={() => {
-                                setComposer({
-                                  title: issue.title,
-                                  description: issue.body,
-                                  source: {
-                                    repository: issueCache.repository,
-                                    number: issue.number,
-                                    url: issue.url,
-                                  },
-                                });
-                                setShowComposer(true);
-                              }}
-                            >
-                              <span className="text-xs text-muted-foreground">
-                                #{issue.number} · GitHub
-                              </span>
-                              <p className="mt-2 text-sm">{issue.title}</p>
-                              <div className="mt-2 flex flex-wrap gap-1">
-                                {issue.labels.map((l) => (
-                                  <span
-                                    className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
-                                    key={l}
-                                  >
-                                    {l}
-                                  </span>
-                                ))}
-                              </div>
-                            </button>
-                          ))}
-                          {project && issueCache?.next_page && (
-                            <button
-                              className="pi-btn"
-                              disabled={issueCache.loading}
-                              onClick={() =>
-                                void refreshIssues(
-                                  project.id,
-                                  project.path,
-                                  true,
-                                )
-                              }
-                            >
-                              Load more issues
-                            </button>
-                          )}
-                        </>
-                      )}
-                      {!items.length && column.id !== "backlog" && (
-                        <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
-                          No tasks
+                      {column.id === "backlog" && backlogExtras}
+                      {!items.length && (column.id !== "backlog" || archived) && (
+                        <p className="ph-column-empty">
+                          {archived ? "Nothing archived." : EMPTY_COPY[column.id]}
                         </p>
                       )}
                     </div>
@@ -478,330 +418,14 @@ export function TaskBoardPage() {
             </div>
           )}
           {selected && (
-            <aside
-              aria-label="Task details"
-              className="w-80 shrink-0 overflow-y-auto border-l border-border bg-card p-5"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-muted-foreground">
-                  {selected.repo?.name}
-                </span>
-                <button
-                  className="pi-btn"
-                  aria-label="Close task details"
-                  onClick={() => setSelectedId(null)}
-                >
-                  ×
-                </button>
-              </div>
-              <input
-                key={`${selected.task.id}-title`}
-                aria-label="Task title"
-                defaultValue={selected.task.title}
-                className="my-3 w-full bg-transparent text-lg font-semibold outline-none focus:ring-1 focus:ring-ring"
-                onBlur={(e) => {
-                  if (e.target.value.trim())
-                    updateTask(selected.task.id, {
-                      title: e.target.value.trim(),
-                    });
-                }}
-              />
-              <p className="mb-4 text-sm text-muted-foreground">
-                {selected.status.reason}
-              </p>
-              <textarea
-                key={`${selected.task.id}-description`}
-                aria-label="Task description"
-                defaultValue={selected.task.description}
-                className="task-input min-h-28"
-                onBlur={(e) =>
-                  updateTask(selected.task.id, { description: e.target.value })
-                }
-              />
-              {selected.branch && (
-                <p className="my-3 break-all text-xs text-muted-foreground">
-                  {selected.branch.name}
-                </p>
-              )}
-              <label className="task-label">
-                Agent for next conversation
-                <select
-                  className="task-input"
-                  value={selected.task.agentId}
-                  disabled={!!pending || selected.status.column === "running"}
-                  onChange={(e) =>
-                    void run(selected.task.id, () =>
-                      chooseTaskAgent(selected.task.id, e.target.value),
-                    )
-                  }
-                >
-                  {state.settings.agents
-                    .filter((a) => a.acpCommand)
-                    .map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.name}
-                      </option>
-                    ))}
-                </select>
-              </label>
-              <div className="mt-4 flex flex-wrap gap-2">
-                {selected.branch && (
-                  <button
-                    className="pi-btn pi-btn-primary"
-                    onClick={() => openTask(selected.task.id)}
-                  >
-                    Open workspace
-                  </button>
-                )}
-                {(!selected.task.cloudRunId || selected.branch) && (
-                  <button
-                    className="pi-btn"
-                    disabled={!!pending || selected.status.column === "running"}
-                    onClick={() =>
-                      void run(selected.task.id, () =>
-                        selected.task.primaryChatId &&
-                        sessions[selected.task.primaryChatId]?.connection ===
-                          "ready"
-                          ? openTask(selected.task.id)
-                          : startTask(selected.task.id),
-                      )
-                    }
-                  >
-                    {selected.task.primaryChatId &&
-                    sessions[selected.task.primaryChatId]?.connection ===
-                      "ready"
-                      ? "Continue in chat"
-                      : selected.task.primaryChatId
-                        ? "Resume agent"
-                        : "Start task"}
-                  </button>
-                )}
-                {(selected.branch?.chats ?? [])
-                  .filter((c) => sessions[c.id]?.busy)
-                  .map((c) => (
-                    <button
-                      key={c.id}
-                      className="pi-btn"
-                      disabled={sessions[c.id]?.canceling}
-                      onClick={() => cancelSession(c.id)}
-                    >
-                      Stop {c.title}
-                    </button>
-                  ))}
-                {selected.branch && (
-                  <button
-                    className="pi-btn"
-                    onClick={() => {
-                      openTask(selected.task.id);
-                      useAppStore.getState().openRightTab("changes");
-                    }}
-                  >
-                    Review changes
-                  </button>
-                )}
-                {selected.branch && (
-                  <button
-                    className="pi-btn"
-                    disabled={
-                      !!pending ||
-                      selected.status.column === "running" ||
-                      selected.status.column === "attention"
-                    }
-                    onClick={() =>
-                      void run(selected.task.id, () =>
-                        enqueueTask(selected.task.id),
-                      )
-                    }
-                  >
-                    Run checks & merge
-                    {selected.repo?.pushOnMerge ? " + push" : ""}
-                  </button>
-                )}
-                {(state.queues[selected.task.repoId] ?? [])
-                  .filter(
-                    (q) =>
-                      q.branch === selected.branch?.name &&
-                      [
-                        "queued",
-                        "validating",
-                        "merging",
-                        "failed",
-                        "interrupted",
-                      ].includes(q.state),
-                  )
-                  .slice(0, 1)
-                  .map((q) => (
-                    <button
-                      className="pi-btn"
-                      key={q.id}
-                      disabled={
-                        !!pending ||
-                        Boolean(
-                          selected.branch?.chats.some(
-                            (c) =>
-                              sessions[c.id]?.busy ||
-                              sessions[c.id]?.permissionCount,
-                          ),
-                        )
-                      }
-                      onClick={() =>
-                        void run(q.id, () =>
-                          ["failed", "interrupted"].includes(q.state)
-                            ? retryTaskChecks(selected.task.id, q.id)
-                            : cancelQueueEntry(selected.task.repoId, q),
-                        )
-                      }
-                    >
-                      {["failed", "interrupted"].includes(q.state)
-                        ? "Retry checks"
-                        : "Cancel checks"}
-                    </button>
-                  ))}
-                {(state.queues[selected.task.repoId] ?? [])
-                  .filter(
-                    (q) =>
-                      q.branch === selected.branch?.name &&
-                      ["failed", "interrupted"].includes(q.state),
-                  )
-                  .slice(0, 1)
-                  .map((q) => (
-                    <button
-                      className="pi-btn"
-                      key={`dismiss-${q.id}`}
-                      disabled={!!pending}
-                      onClick={() =>
-                        void run(q.id, () =>
-                          dismissEntry(selected.task.repoId, q.id),
-                        )
-                      }
-                    >
-                      Dismiss failed checks
-                    </button>
-                  ))}
-                {selected.cloud && (
-                  <>
-                    <button
-                      className="pi-btn"
-                      disabled={
-                        !!pending ||
-                        selected.cloud.snapshot?.state !== "completed"
-                      }
-                      onClick={() =>
-                        void run(selected.task.id, () =>
-                          importTaskCloudResult(selected.task.id),
-                        )
-                      }
-                    >
-                      Import cloud result
-                    </button>
-                    <button
-                      className="pi-btn"
-                      disabled={
-                        !!pending || selected.status.column !== "running"
-                      }
-                      onClick={() =>
-                        void run(selected.task.id, () =>
-                          cancelTaskCloud(selected.task.id),
-                        )
-                      }
-                    >
-                      Cancel cloud run
-                    </button>
-                  </>
-                )}
-                {selected.status.column === "attention" &&
-                  !selected.task.cloudRunId && (
-                    <button
-                      className="pi-btn"
-                      disabled={!!pending}
-                      onClick={() =>
-                        void run(selected.task.id, () =>
-                          acknowledgeTask(selected.task.id),
-                        )
-                      }
-                    >
-                      Acknowledge interruption
-                    </button>
-                  )}
-                <button
-                  className="pi-btn"
-                  disabled={
-                    !!pending ||
-                    ["running", "attention", "done"].includes(
-                      selected.status.column,
-                    )
-                  }
-                  onClick={() =>
-                    void run(selected.task.id, () =>
-                      completeTask(selected.task.id),
-                    )
-                  }
-                >
-                  Complete non-code task
-                </button>
-                <button
-                  className="pi-btn"
-                  disabled={
-                    !!pending ||
-                    ["running", "attention", "backlog"].includes(
-                      selected.status.column,
-                    )
-                  }
-                  onClick={() =>
-                    void run(selected.task.id, () => parkTask(selected.task.id))
-                  }
-                >
-                  Return to backlog
-                </button>
-                <button
-                  className="pi-btn"
-                  disabled={!!pending}
-                  onClick={() =>
-                    void run(selected.task.id, () =>
-                      archiveTask(selected.task.id, !selected.task.archivedAt),
-                    )
-                  }
-                >
-                  {selected.task.archivedAt ? "Restore" : "Archive"}
-                </button>
-                {selected.branch && selected.task.archivedAt && (
-                  <button
-                    className="pi-btn text-destructive"
-                    disabled={!!pending}
-                    onClick={() =>
-                      void run(selected.task.id, () =>
-                        deleteBranch(selected.task.repoId, selected.branch!.id),
-                      )
-                    }
-                  >
-                    Remove worktree…
-                  </button>
-                )}
-              </div>
-              {selected.cloud && selected.repo && (
-                <details className="mt-5">
-                  <summary className="cursor-pointer text-sm">
-                    Cloud run details and logs
-                  </summary>
-                  <TaskCloudDetails task={selected.task} />
-                </details>
-              )}
-              <p className="mt-5 whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">
-                {lastReply(selected.branch)}
-              </p>
-              {selected.branch?.chats.map((c) => (
-                <div className="mt-4" key={c.id}>
-                  <p className="text-xs font-medium">{c.title}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {sessions[c.id]
-                      ? sessions[c.id].busy
-                        ? "Working"
-                        : sessions[c.id].connection
-                      : "Not connected"}
-                  </p>
-                </div>
-              ))}
-            </aside>
+            <TaskDetail
+              item={selected}
+              agent={agentName(selected.task)}
+              facts={facts[selected.task.id]}
+              pending={pending}
+              run={run}
+              onClose={() => setSelectedId(null)}
+            />
           )}
         </div>
       </section>
@@ -815,5 +439,256 @@ export function TaskBoardPage() {
         />
       )}
     </>
+  );
+}
+
+type DetailRow = {
+  task: Task;
+  repo?: ReturnType<typeof useAppStore.getState>["repos"][number];
+  branch?: Branch;
+  cloud?: ReturnType<typeof useAppStore.getState>["cloudRuns"][string];
+  status: { column: TaskColumn; reason: string };
+};
+
+/**
+ * Task inspector: identity, state, properties, then actions. One primary
+ * action for the task's current state; rare or destructive actions live in ⋯.
+ */
+function TaskDetail({
+  item,
+  agent,
+  facts,
+  pending,
+  run,
+  onClose,
+}: {
+  item: DetailRow;
+  agent: string;
+  facts?: TaskFacts;
+  pending: string | null;
+  run: (key: string, action: () => unknown | Promise<unknown>) => Promise<void>;
+  onClose: () => void;
+}) {
+  const state = useAppStore();
+  const sessions = useSessions((s) => s.sessions);
+  const { task, branch, repo, cloud, status } = item;
+  const column = status.column;
+  const busy = !!pending;
+  const ready = !!task.primaryChatId && sessions[task.primaryChatId]?.connection === "ready";
+  const canStart = !task.cloudRunId || !!branch;
+  const queue = (state.queues[task.repoId] ?? []).filter((q) => q.branch === branch?.name);
+  const activeQueue = queue.find((q) => ["queued", "validating", "merging", "failed", "interrupted"].includes(q.state));
+  const failedQueue = queue.find((q) => ["failed", "interrupted"].includes(q.state));
+  const chatsBusy = Boolean(branch?.chats.some((c) => sessions[c.id]?.busy || sessions[c.id]?.permissionCount));
+  const reply = lastReply(branch);
+
+  const primary =
+    branch && (ready || !canStart)
+      ? { label: "Open workspace", onClick: () => openTask(task.id), disabled: false }
+      : canStart
+        ? {
+            label: task.primaryChatId ? "Resume agent" : "Start task",
+            onClick: () => void run(task.id, () => startTask(task.id)),
+            disabled: busy || column === "running",
+          }
+        : null;
+
+  const moreItems: (MenuItem | "separator")[] = [
+    {
+      label: "Complete non-code task",
+      disabled: busy || ["running", "attention", "done"].includes(column),
+      onSelect: () => void run(task.id, () => completeTask(task.id)),
+    },
+    {
+      label: "Return to backlog",
+      disabled: busy || ["running", "attention", "backlog"].includes(column),
+      onSelect: () => void run(task.id, () => parkTask(task.id)),
+    },
+    ...(cloud
+      ? [{
+          label: "Cancel cloud run",
+          disabled: busy || column !== "running",
+          onSelect: () => void run(task.id, () => cancelTaskCloud(task.id)),
+        }]
+      : []),
+    ...(failedQueue
+      ? [{
+          label: "Dismiss failed checks",
+          disabled: busy,
+          onSelect: () => void run(failedQueue.id, () => dismissEntry(task.repoId, failedQueue.id)),
+        }]
+      : []),
+    "separator",
+    {
+      label: task.archivedAt ? "Restore" : "Archive",
+      disabled: busy,
+      onSelect: () => void run(task.id, () => archiveTask(task.id, !task.archivedAt)),
+    },
+    ...(branch && task.archivedAt
+      ? [{
+          label: "Remove worktree…",
+          destructive: true,
+          disabled: busy,
+          onSelect: () => void run(task.id, () => deleteBranch(task.repoId, branch.id)),
+        }]
+      : []),
+  ];
+
+  return (
+    <aside aria-label="Task details" className="ph-detail">
+      <div className="flex items-center gap-1">
+        <span className="mr-auto truncate font-mono text-xs text-muted-foreground">{repo?.name}</span>
+        <Menu label="More task actions" items={moreItems} triggerClassName="ph-icon-btn" trigger={<MoreIcon />} />
+        <button className="ph-icon-btn" aria-label="Close task details" onClick={onClose}>
+          <CloseIcon className="size-3.5" />
+        </button>
+      </div>
+      <input
+        key={`${task.id}-title`}
+        aria-label="Task title"
+        defaultValue={task.title}
+        className="mt-3 w-full rounded-sm bg-transparent text-[18px] font-semibold tracking-tight outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        onBlur={(e) => {
+          if (e.target.value.trim()) updateTask(task.id, { title: e.target.value.trim() });
+        }}
+      />
+      <p className={`mt-1.5 flex items-center gap-2 text-[13px] tone-${column}`}>
+        <span aria-hidden className="ph-dot bg-current" />
+        <span className="min-w-0 break-words">
+          {column === "running" && status.reason === "Agent working" ? `${agent} working` : status.reason}
+        </span>
+      </p>
+
+      <dl className="ph-props mt-5">
+        {branch && (<><dt>Branch</dt><dd className="font-mono text-xs leading-5" title={branch.name}>{branch.name}</dd></>)}
+        <dt>Agent</dt>
+        <dd>
+          <select
+            aria-label="Agent for next conversation"
+            className="-ml-1 max-w-full rounded-sm bg-transparent px-1 hover:bg-accent disabled:opacity-60"
+            value={task.agentId}
+            disabled={busy || column === "running"}
+            onChange={(e) => void run(task.id, () => chooseTaskAgent(task.id, e.target.value))}
+          >
+            {state.settings.agents
+              .filter((a) => a.acpCommand)
+              .map((a) => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+          </select>
+        </dd>
+        {facts && (<><dt>Changes</dt><dd>{changesLabel(facts)}</dd></>)}
+        {task.source && (<><dt>Issue</dt><dd className="font-mono text-xs leading-5">#{task.source.number}</dd></>)}
+        {cloud && (<><dt>Cloud</dt><dd>{cloud.last_sync_ms ? `Synced ${new Date(cloud.last_sync_ms).toLocaleTimeString()}` : "Awaiting sync"}</dd></>)}
+      </dl>
+
+      <textarea
+        key={`${task.id}-description`}
+        aria-label="Task description"
+        placeholder="Add a description…"
+        defaultValue={task.description}
+        className="task-input mt-5 min-h-28 resize-y"
+        onBlur={(e) => updateTask(task.id, { description: e.target.value })}
+      />
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        {primary && (
+          <button className="ph-btn ph-btn-primary" disabled={primary.disabled} onClick={primary.onClick}>
+            {primary.label}
+          </button>
+        )}
+        {branch && primary?.label !== "Open workspace" && (
+          <button className="ph-btn" onClick={() => openTask(task.id)}>Open workspace</button>
+        )}
+        {(branch?.chats ?? [])
+          .filter((c) => sessions[c.id]?.busy)
+          .map((c) => (
+            <button key={c.id} className="ph-btn" disabled={sessions[c.id]?.canceling} onClick={() => cancelSession(c.id)}>
+              Stop {c.title}
+            </button>
+          ))}
+        {branch && (
+          <button
+            className="ph-btn"
+            onClick={() => {
+              openTask(task.id);
+              useAppStore.getState().openRightTab("changes");
+            }}
+          >
+            Review changes
+          </button>
+        )}
+        {/* Merging only makes sense once the agent has stopped and nothing is blocked. */}
+        {branch && !activeQueue && column !== "running" && column !== "attention" && (
+          <button
+            className="ph-btn"
+            disabled={busy}
+            onClick={() => void run(task.id, () => enqueueTask(task.id))}
+          >
+            Run checks & merge{repo?.pushOnMerge ? " + push" : ""}
+          </button>
+        )}
+        {activeQueue && (
+          <button
+            className="ph-btn"
+            disabled={busy || chatsBusy}
+            onClick={() =>
+              void run(activeQueue.id, () =>
+                ["failed", "interrupted"].includes(activeQueue.state)
+                  ? retryTaskChecks(task.id, activeQueue.id)
+                  : cancelQueueEntry(task.repoId, activeQueue),
+              )
+            }
+          >
+            {["failed", "interrupted"].includes(activeQueue.state) ? "Retry checks" : "Cancel checks"}
+          </button>
+        )}
+        {cloud && (
+          <button
+            className="ph-btn"
+            disabled={busy || cloud.snapshot?.state !== "completed"}
+            onClick={() => void run(task.id, () => importTaskCloudResult(task.id))}
+          >
+            Import cloud result
+          </button>
+        )}
+        {column === "attention" && !task.cloudRunId && (
+          <button className="ph-btn" disabled={busy} onClick={() => void run(task.id, () => acknowledgeTask(task.id))}>
+            Acknowledge interruption
+          </button>
+        )}
+      </div>
+
+      {reply && (
+        <section className="mt-7">
+          <h3 className="ph-section-label">Latest reply</h3>
+          <p className="mt-2 select-text whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">{reply}</p>
+        </section>
+      )}
+      {(branch?.chats.length ?? 0) > 0 && (
+        <section className="mt-7">
+          <h3 className="ph-section-label">Chats</h3>
+          <ul className="mt-2 space-y-1.5 text-[13px]">
+            {branch!.chats.map((c) => {
+              const s = sessions[c.id];
+              return (
+                <li key={c.id} className="flex items-center justify-between gap-3">
+                  <span className="truncate">{c.title}</span>
+                  <span className={`shrink-0 text-xs ${s?.busy ? "tone-running" : "text-muted-foreground"}`}>
+                    {s ? (s.busy ? "Working" : s.connection) : "Not connected"}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
+      {cloud && repo && (
+        <details className="mt-7">
+          <summary className="ph-section-label cursor-pointer">Cloud run details and logs</summary>
+          <TaskCloudDetails task={task} />
+        </details>
+      )}
+    </aside>
   );
 }

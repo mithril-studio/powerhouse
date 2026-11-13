@@ -68,6 +68,6 @@ it("board navigation keeps chats mounted and disables the project workspace", ()
   expect(html).toContain('aria-label="Task board"');
   expect(html).toContain('aria-label="Project workspace" inert=""');
   expect(html).toContain('data-chat-active="false">Mounted chat');
-  for (const label of ["Backlog", "In Progress", "Needs You", "Review", "Done"]) expect(html).toContain(label);
+  for (const label of ["Backlog", "In progress", "Needs you", "Review", "Done"]) expect(html).toContain(label);
   expect(html).not.toContain("Project inspector");
 });

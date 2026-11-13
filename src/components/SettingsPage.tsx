@@ -24,6 +24,8 @@ import {
 } from "../lib/ipc";
 
 import { TelemetryPage } from "./telemetry/TelemetryPage";
+import { PageHeader } from "./ui/page";
+import { ArrowLeftIcon } from "./ui/icons";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -553,14 +555,14 @@ function CloudSection() {
   );
 }
 
-const SETTINGS_SECTIONS: { id: SettingsSection; label: string; description: string }[] = [
-  { id: "general", label: "General", description: "Your Powerhouse account and workspace." },
-  { id: "appearance", label: "Appearance", description: "Make Powerhouse feel like home." },
-  { id: "connections", label: "Connections", description: "Connect the services you work with." },
-  { id: "cloud", label: "Cloud", description: "Credentials and defaults for cloud runs." },
-  { id: "agents", label: "Agents", description: "Manage your coding agents and CLI access." },
-  { id: "memory", label: "Memory", description: "Context and learnings across your projects." },
-  { id: "telemetry", label: "Telemetry", description: "Understand what your agents are doing." },
+const SETTINGS_SECTIONS: { id: SettingsSection; label: string }[] = [
+  { id: "general", label: "General" },
+  { id: "appearance", label: "Appearance" },
+  { id: "connections", label: "Connections" },
+  { id: "cloud", label: "Cloud" },
+  { id: "agents", label: "Agents" },
+  { id: "memory", label: "Memory" },
+  { id: "telemetry", label: "Telemetry" },
 ];
 
 function MemorySection() {
@@ -619,38 +621,33 @@ export function SettingsPage() {
 
   return (
     <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Settings" className="fixed inset-0 z-50 flex bg-background">
-      <aside className="flex w-48 shrink-0 flex-col border-r border-sidebar-border bg-sidebar sm:w-60">
+      <aside className="flex w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar">
         <div data-tauri-drag-region className="h-11 shrink-0" />
         <div className="px-3 pb-4">
-          <button onClick={() => closeSettings()} className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground">
-            <span aria-hidden="true">←</span> Back to workspace
+          <button onClick={() => closeSettings()} title="Back (Esc)" className="ph-nav-row">
+            <ArrowLeftIcon />
+            Back to workspace
           </button>
         </div>
-        <h1 className="px-5 pb-3 text-sm font-semibold">Settings</h1>
-        <nav ref={navRef} aria-label="Settings sections" className="flex flex-col gap-1 px-3">
+        <p className="pb-1.5 pl-5 text-xs font-medium text-muted-foreground">Settings</p>
+        <nav ref={navRef} aria-label="Settings sections" className="space-y-0.5 px-3">
           {SETTINGS_SECTIONS.map((item) => (
             <button
               key={item.id}
               onClick={() => openSettings(item.id)}
               aria-current={section === item.id ? "page" : undefined}
-              className={`flex h-9 items-center rounded-md px-3 text-left text-sm transition-colors ${section === item.id ? "bg-sidebar-selected text-foreground font-medium" : "text-muted-foreground hover:bg-sidebar-hover hover:text-foreground"}`}
+              className="ph-nav-row"
             >
               {item.label}
             </button>
           ))}
         </nav>
-        <p className="mt-auto px-5 py-4 text-xs text-muted-foreground">Powerhouse</p>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        <div data-tauri-drag-region className="flex h-11 shrink-0 items-center justify-end border-b border-border px-3">
-          <button onClick={() => closeSettings()} title="Close settings (Esc)" aria-label="Close settings" className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground">✕</button>
-        </div>
+        <div data-tauri-drag-region className="h-11 shrink-0" />
         <div key={section} className="flex-1 overflow-y-auto">
-          <div className={`mx-auto w-full px-6 py-8 lg:px-10 ${section === "telemetry" ? "max-w-6xl" : "max-w-3xl"}`}>
-            <header className="mb-8">
-              <h2 className="text-xl font-semibold tracking-tight">{current.label}</h2>
-              <p className="mt-1 text-sm text-muted-foreground">{current.description}</p>
-            </header>
+          <div className={`mx-auto w-full px-8 pb-10 ${section === "telemetry" ? "max-w-6xl" : "max-w-3xl"}`}>
+            <PageHeader title={current.label} className="mx-0 mb-8 pt-0" />
             {section === "general" && <AccountSection />}
             {section === "appearance" && <Section title="Color theme" description="T3's neutral palette, in light or dark."><AppearanceSection /></Section>}
             {section === "connections" && <ConnectionsSection />}

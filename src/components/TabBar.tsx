@@ -29,7 +29,7 @@ export function TabBar({ repo, branch }: Props) {
     >
       {repo && branch && (
         <>
-          <span className="mr-2 max-w-48 truncate pl-1 text-xs text-muted-foreground">
+          <span className="mr-2 max-w-56 truncate pl-1 font-mono text-xs text-muted-foreground">
             {repo.name}/{branch.name}
           </span>
           {branch.chats.map((chat) => {

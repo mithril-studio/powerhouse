@@ -27,7 +27,13 @@ export function BranchItem({ repo, branch }: Props) {
   );
   const quickStage = useAppStore((s) => s.cloudQuickStages[`${repo.id}:${branch.name}`]);
   const selected = useAppStore(
-    (s) => s.selection.repoId === repo.id && s.selection.branchId === branch.id,
+    (s) =>
+      s.workspaceView === "workspace" &&
+      s.selection.repoId === repo.id &&
+      s.selection.branchId === branch.id,
+  );
+  const working = useAppStore((s) =>
+    branch.chats.some((c) => s.chatStatus[c.id] === "running"),
   );
   const queued = useAppStore((s) =>
     (s.queues[repo.id] ?? []).some(
@@ -47,25 +53,26 @@ export function BranchItem({ repo, branch }: Props) {
   return (
     <div
       onClick={onSelect}
-      className={`group flex h-8 cursor-default items-center gap-2 rounded-md pl-8 pr-2 ${
+      title={working ? "Agent working" : queued ? "Queued for merge" : branch.merged ? "Merged" : undefined}
+      className={`group flex h-8 cursor-default items-center gap-2.5 rounded-md pl-2.5 pr-2 ${
         selected
           ? "bg-sidebar-selected text-foreground"
           : "text-muted-foreground hover:bg-sidebar-hover hover:text-foreground"
       }`}
     >
       <span
-        className={`size-1.5 shrink-0 rounded-full ${
-          branch.merged
+        className={`ph-dot ${
+          working
             ? "bg-success"
             : queued
               ? "animate-pulse bg-accent-brand"
-              : selected
-                ? "bg-accent-brand"
-                : "bg-muted-foreground/40"
+              : branch.merged
+                ? "ph-dot-ring text-success"
+                : "ph-dot-ring text-muted-foreground/60"
         }`}
         aria-hidden
       />
-      <span className="min-w-0 flex-1 truncate text-xs">{branch.name}</span>
+      <span className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{branch.name}</span>
       {quickStage ? (
         <span
           title={`Sending to cloud: ${QUICK_STAGE_LABEL[quickStage] ?? quickStage}`}

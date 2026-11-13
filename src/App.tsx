@@ -103,7 +103,6 @@ export default function App() {
       <div className="flex shrink-0" inert={settingsOpen}><Sidebar /></div>
       {/* Keep chats and terminals mounted while Settings owns focus. */}
       <main aria-label="Project workspace" inert={settingsOpen || boardOpen} className={`flex min-w-0 flex-1 flex-col ${boardOpen ? "hidden" : ""}`}>
-        <button className="self-start px-4 py-2 text-xs text-muted-foreground hover:text-foreground" onClick={() => useAppStore.setState({ workspaceView: "board" })}>← Task board</button>
         <TabBar repo={repo} branch={branch} />
         <div className="relative flex-1 overflow-hidden">
           {hydrated &&
