@@ -18,7 +18,7 @@ let writes: Promise<void> = Promise.resolve();
  *  overwrite a newer one (task launches flush before and after each step). */
 export function flushPersistence(): Promise<void> {
   clearTimeout(timer);
-  const { repos, selection, settings, queues, recentRepos, workflowDrafts, tasks } =
+  const { repos, selection, settings, queues, recentRepos, tasks } =
     useAppStore.getState();
   const tree: PersistedTree = {
     schemaVersion: 1,
@@ -27,7 +27,6 @@ export function flushPersistence(): Promise<void> {
     settings,
     queues,
     recentRepos,
-    workflowDrafts,
     tasks,
   };
   const next = writes
@@ -53,7 +52,6 @@ export function startPersistence() {
       s.settings === prev.settings &&
       s.queues === prev.queues &&
       s.recentRepos === prev.recentRepos &&
-      s.workflowDrafts === prev.workflowDrafts &&
       s.tasks === prev.tasks
     ) {
       return;

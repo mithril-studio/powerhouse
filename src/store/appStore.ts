@@ -1,7 +1,6 @@
 import { create } from "zustand";
 import type { Task } from "../features/tasks/types";
 import { hydrateTasks } from "../features/tasks/taskState";
-import type { WorkflowDraft } from "../features/workflows/workflowDrafts";
 import { DEFAULT_MEMORY_SETTINGS, type MemorySettings } from "../lib/memory";
 import type { AcpTranscriptItem } from "../lib/acpTranscript";
 
@@ -204,7 +203,6 @@ export interface PersistedTree {
   queues: Record<string, QueueEntry[]>;
   /** MRU of opened projects, for the Add-project menu's Recents. */
   recentRepos: RecentRepo[];
-  workflowDrafts: WorkflowDraft[];
 }
 
 /** Prepend a project to the MRU, dedupe by path, cap the length. */
@@ -223,8 +221,6 @@ interface AppState extends PersistedTree {
   tasks: Task[];
   workspaceView: WorkspaceView;
   setWorkspaceView: (view: WorkspaceView) => void;
-  saveWorkflowDraft: (draft: WorkflowDraft) => void;
-  deleteWorkflowDraft: (id: string) => void;
   hydrated: boolean;
   chatStatus: Record<string, ChatStatus>;
   /** chatId → agent turn state; absent means idle or already seen. */
@@ -550,16 +546,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   selection: { repoId: null, branchId: null },
   settings: seedSettings(),
   queues: {},
-  workflowDrafts: [],
   tasks: [],
   workspaceView: "home",
   setWorkspaceView: (workspaceView) => set({ workspaceView, settingsOpen: false, telemetryOpen: false, memoryOpen: false, projectSettingsRepoId: null }),
-  saveWorkflowDraft: (draft) => set((s) => ({
-    workflowDrafts: s.workflowDrafts.some((d) => d.id === draft.id)
-      ? s.workflowDrafts.map((d) => d.id === draft.id ? draft : d)
-      : [...s.workflowDrafts, draft],
-  })),
-  deleteWorkflowDraft: (id) => set((s) => ({ workflowDrafts: s.workflowDrafts.filter((draft) => draft.id !== id) })),
   hydrated: false,
   chatStatus: {},
   chatActivity: {},
@@ -581,7 +570,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   hydrate: (tree) =>
     set({
       tasks: hydrateTasks(tree?.tasks),
-      workflowDrafts: tree?.workflowDrafts ?? [],
       // Migration: default the queue-config fields for repos persisted before
       // they existed.
       repos: (tree?.repos ?? []).map((r) => ({
