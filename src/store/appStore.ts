@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import type { WorkflowDraft } from "../features/workflows/workflowDrafts";
+import type { Task } from "../features/tasks/types";
+import { hydrateTasks } from "../features/tasks/taskState";
 import { DEFAULT_MEMORY_SETTINGS, type MemorySettings } from "../lib/memory";
 import type { AcpTranscriptItem } from "../lib/acpTranscript";
 
@@ -27,6 +28,8 @@ export interface Chat {
   agentId?: string;
   /** When set, the agent is launched via its promptTemplate instead of bare command. */
   initialPrompt?: string;
+  /** Last agent turn, recorded for chats that belong to a task. */
+  taskTurn?: Task["turn"];
   /**
    * Present once the chat has launched a resumable agent session; value is the
    * id passed to the agent's `--session-id` (initially `chat.id`). Its presence
@@ -147,6 +150,7 @@ export interface QueueEntry {
   steps: StepState[];
   error: string | null;
   merge_commit: string | null;
+  source_sha?: string | null;
   created_at: number;
   finished_at: number | null;
 }
@@ -191,13 +195,14 @@ export type ChatStatus = "idle" | "running" | "exited";
 export type ChatActivity = "working" | "done" | "error";
 
 export interface PersistedTree {
+  schemaVersion?: number;
+  tasks?: Task[];
   repos: Repo[];
   selection: Selection;
   settings: Settings;
   queues: Record<string, QueueEntry[]>;
   /** MRU of opened projects, for the Add-project menu's Recents. */
   recentRepos: RecentRepo[];
-  workflowDrafts: WorkflowDraft[];
 }
 
 /** Prepend a project to the MRU, dedupe by path, cap the length. */
@@ -210,11 +215,12 @@ interface LegacyTree {
   agentCmd?: string;
 }
 
+export type WorkspaceView = "home" | "board" | "mission";
+
 interface AppState extends PersistedTree {
-  workspaceView: "home" | "workflows";
-  setWorkspaceView: (view: "home" | "workflows") => void;
-  saveWorkflowDraft: (draft: WorkflowDraft) => void;
-  deleteWorkflowDraft: (id: string) => void;
+  tasks: Task[];
+  workspaceView: WorkspaceView;
+  setWorkspaceView: (view: WorkspaceView) => void;
   hydrated: boolean;
   chatStatus: Record<string, ChatStatus>;
   /** chatId → agent turn state; absent means idle or already seen. */
@@ -540,15 +546,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   selection: { repoId: null, branchId: null },
   settings: seedSettings(),
   queues: {},
-  workflowDrafts: [],
+  tasks: [],
   workspaceView: "home",
   setWorkspaceView: (workspaceView) => set({ workspaceView, settingsOpen: false, telemetryOpen: false, memoryOpen: false, projectSettingsRepoId: null }),
-  saveWorkflowDraft: (draft) => set((s) => ({
-    workflowDrafts: s.workflowDrafts.some((d) => d.id === draft.id)
-      ? s.workflowDrafts.map((d) => d.id === draft.id ? draft : d)
-      : [...s.workflowDrafts, draft],
-  })),
-  deleteWorkflowDraft: (id) => set((s) => ({ workflowDrafts: s.workflowDrafts.filter((draft) => draft.id !== id) })),
   hydrated: false,
   chatStatus: {},
   chatActivity: {},
@@ -569,14 +569,22 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   hydrate: (tree) =>
     set({
-      workflowDrafts: tree?.workflowDrafts ?? [],
+      tasks: hydrateTasks(tree?.tasks),
       // Migration: default the queue-config fields for repos persisted before
       // they existed.
       repos: (tree?.repos ?? []).map((r) => ({
         ...r,
         workflow: r.workflow ?? [],
         pushOnMerge: r.pushOnMerge ?? true,
-        branches: r.branches.map(dropLegacyCloudItems),
+        // A turn can't still be running after a restart.
+        branches: r.branches.map(dropLegacyCloudItems).map((b) => ({
+          ...b,
+          chats: b.chats.map((c) =>
+            c.taskTurn?.outcome === "running"
+              ? { ...c, taskTurn: { ...c.taskTurn, outcome: "interrupted" as const } }
+              : c,
+          ),
+        })),
       })),
       selection: tree?.selection ?? { repoId: null, branchId: null },
       recentRepos: tree?.recentRepos ?? [],
@@ -668,6 +676,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       const { [repoId]: _dropped, ...queues } = s.queues;
       return {
         repos: s.repos.filter((r) => r.id !== repoId),
+        // Tasks can't outlive their project: nothing could open or archive them.
+        tasks: s.tasks.filter((t) => t.repoId !== repoId),
         queues,
         selection:
           s.selection.repoId === repoId
@@ -701,6 +711,12 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   removeBranch: (repoId, branchId) =>
     set((s) => ({
+      // A task loses its workspace with the branch; archive it, keep the record.
+      tasks: s.tasks.map((t) =>
+        t.branchId === branchId
+          ? { ...t, branchId: null, primaryChatId: null, archivedAt: Date.now(), launch: { stage: "not_started" as const } }
+          : t,
+      ),
       repos: updateRepo(s.repos, repoId, (r) => ({
         ...r,
         branches: r.branches.filter((b) => b.id !== branchId),
@@ -723,6 +739,20 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   removeChat: (repoId, branchId, chatId) =>
     set((s) => ({
+      tasks: s.tasks.map((task) => {
+        if (task.repoId !== repoId || task.branchId !== branchId || task.primaryChatId !== chatId) return task;
+        const now = Date.now();
+        return {
+          ...task,
+          primaryChatId: null,
+          launch: { ...task.launch, stage: "ready" as const, error: undefined },
+          turn: task.turn?.outcome === "running"
+            ? { outcome: "cancelled" as const, at: now, summary: "Primary conversation removed" }
+            : task.turn,
+          updatedAt: now,
+          lastActivityAt: now,
+        };
+      }),
       repos: updateBranch(s.repos, repoId, branchId, (b) => {
         const chats = b.chats.filter((c) => c.id !== chatId);
         let activeChatId = b.activeChatId;
@@ -844,7 +874,20 @@ export const useAppStore = create<AppState>((set, get) => ({
           }))
         : s.repos;
 
-      return { queues: { ...s.queues, [repoId]: merged }, repos };
+      // A merge the queue verified completes the task that owns the branch.
+      const tasks = s.tasks.map((task) => {
+        if (task.repoId !== repoId) return task;
+        const branch = repos.find((r) => r.id === repoId)?.branches.find((b) => b.id === task.branchId);
+        const entry = merged.find((e) => e.branch === branch?.name && e.created_at >= task.lastWorkAt);
+        if (entry?.state !== "merged" || !entry.merge_commit || task.completion?.queueId === entry.id) return task;
+        const at = entry.finished_at ?? Date.now();
+        return {
+          ...task,
+          completion: { kind: "merged" as const, at, queueId: entry.id, commit: entry.merge_commit, sourceSha: entry.source_sha ?? undefined },
+          lastActivityAt: at,
+        };
+      });
+      return { queues: { ...s.queues, [repoId]: merged }, repos, tasks };
     }),
 
   dismissQueueEntry: (repoId, entryId) =>

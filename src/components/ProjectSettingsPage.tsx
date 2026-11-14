@@ -114,9 +114,11 @@ export function ProjectSettingsPage() {
 
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-4xl px-8 pb-16 pt-2">
-          <h1 className="mb-6 text-lg font-semibold text-foreground">
-            {repo.name} <span className="font-normal text-muted-foreground">· Project settings</span>
-          </h1>
+          <header className="ph-page-header mx-0 mb-2 border-b-0 pt-0">
+            <h1 className="ph-page-title">
+              {repo.name} <span className="font-normal text-muted-foreground">· Project settings</span>
+            </h1>
+          </header>
 
           <Section title="General" description="Where new worktrees branch from and where merges land.">
             <div className="space-y-3 text-xs">

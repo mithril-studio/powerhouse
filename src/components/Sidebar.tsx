@@ -3,13 +3,11 @@ import { useAppStore } from "../store/appStore";
 import { openRecentRepo, pickAndAddRepo } from "../lib/actions";
 import { RepoItem } from "./RepoItem";
 import { AddProjectModal, type AddProjectMode } from "./AddProjectModal";
+import { BoardIcon, BoltIcon, ClockIcon, GearIcon } from "./ui/icons";
 
-const NAV_ITEMS = [
-  { label: "Home", soon: false },
-  { label: "Workflows", soon: false },
-  { label: "Memory", soon: false },
-  { label: "Telemetry", soon: false },
-] as const;
+// Tools (memory, telemetry) live in Settings; the sidebar is for work.
+const NAV_ITEMS = ["Task board", "Mission Control"] as const;
+type NavItem = (typeof NAV_ITEMS)[number];
 
 const iconProps = {
   viewBox: "0 0 24 24",
@@ -38,6 +36,11 @@ const PlusBoxIcon = ({ size = "size-[18px]" }: { size?: string }) => (
     <path d="M12 8v8M8 12h8" />
   </svg>
 );
+const NAV_ICONS: Record<NavItem, () => ReactNode> = {
+  "Task board": () => <BoardIcon />,
+  "Mission Control": () => <ClockIcon />,
+};
+
 const FilterIcon = () => (
   <svg {...iconProps} className="size-4 shrink-0" aria-hidden>
     <path d="M3 5h18M6 12h12M9 19h6" />
@@ -49,13 +52,7 @@ export function Sidebar() {
   const recentRepos = useAppStore((s) => s.recentRepos);
   const openSettings = useAppStore((s) => s.openSettings);
   const settingsOpen = useAppStore((s) => s.settingsOpen);
-  const openTelemetry = useAppStore((s) => s.openTelemetry);
-  const closeTelemetry = useAppStore((s) => s.closeTelemetry);
   const closeSettings = useAppStore((s) => s.closeSettings);
-  const telemetryOpen = useAppStore((s) => s.telemetryOpen);
-  const openMemory = useAppStore((s) => s.openMemory);
-  const closeMemory = useAppStore((s) => s.closeMemory);
-  const memoryOpen = useAppStore((s) => s.memoryOpen);
   const workspaceView = useAppStore((s) => s.workspaceView);
   const setWorkspaceView = useAppStore((s) => s.setWorkspaceView);
 
@@ -73,24 +70,11 @@ export function Sidebar() {
     return () => window.removeEventListener("keydown", onKey);
   }, [menuOpen]);
 
-  // Home leaves the overlays and the workflows view; Workflows switches the
-  // workspace view; Telemetry and Memory each toggle their own overlay.
-  const navAction = (label: (typeof NAV_ITEMS)[number]["label"]) => {
-    if (label === "Telemetry") {
-      closeSettings();
-      closeMemory();
-      return telemetryOpen ? closeTelemetry() : openTelemetry();
-    }
-    if (label === "Memory") {
-      closeSettings();
-      closeTelemetry();
-      return memoryOpen ? closeMemory() : openMemory();
-    }
-    closeTelemetry();
-    closeMemory();
-    closeSettings();
-    setWorkspaceView(label === "Workflows" ? "workflows" : "home");
-  };
+  // Board, Mission Control and Workflows switch the main view; Telemetry and
+  // Memory each toggle their own overlay. A project or branch opens its workspace.
+  const view = (label: NavItem) => (label === "Mission Control" ? "mission" : "board");
+  const navAction = (label: NavItem) => setWorkspaceView(view(label));
+  const isActive = (label: NavItem) => !settingsOpen && workspaceView === view(label);
 
   const openPaths = new Set(repos.map((r) => r.path));
   const recents = recentRepos.filter((r) => !openPaths.has(r.path));
@@ -105,53 +89,34 @@ export function Sidebar() {
   };
 
   return (
-    <aside aria-label="Main sidebar" className="flex w-60 shrink-0 flex-col border-r border-border bg-card">
+    <aside aria-label="Main sidebar" className="flex w-60 shrink-0 flex-col border-r border-sidebar-border bg-sidebar">
       {/* Traffic-light strip (titleBarStyle: Overlay) — draggable. */}
       <div data-tauri-drag-region className="h-11 shrink-0" />
-      <nav aria-label="Main navigation" className="flex flex-col gap-0.5 px-2 pb-2">
-        {NAV_ITEMS.map((item) => {
-          if (item.soon) {
-            return (
-              <button
-                key={item.label}
-                type="button"
-                disabled
-                aria-disabled="true"
-                title="Coming soon"
-                className="flex cursor-not-allowed items-center rounded-md px-2 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/40"
-              >
-                {item.label}
-              </button>
-            );
-          }
-          const active =
-            item.label === "Telemetry"
-              ? telemetryOpen
-              : item.label === "Memory"
-                ? memoryOpen
-                : !telemetryOpen && !memoryOpen && item.label.toLowerCase() === workspaceView;
+      <div data-tauri-drag-region className="flex items-center gap-2 px-5 pb-4">
+        <BoltIcon className="size-[18px]" />
+        <span className="text-[15px] font-semibold tracking-tight">Powerhouse</span>
+      </div>
+      <nav aria-label="Main navigation" className="space-y-0.5 px-3">
+        {NAV_ITEMS.map((label) => {
+          const Icon = NAV_ICONS[label];
           return (
             <button
-              key={item.label}
+              key={label}
               type="button"
-              onClick={() => navAction(item.label)}
-              aria-current={active ? "page" : undefined}
-              className={`flex h-9 items-center rounded-md px-3 text-left text-sm hover:bg-muted hover:text-foreground ${
-                active ? "bg-muted text-foreground" : "text-muted-foreground"
-              }`}
+              onClick={() => navAction(label)}
+              aria-current={isActive(label) ? "page" : undefined}
+              className="ph-nav-row"
             >
-              {item.label}
+              <Icon />
+              {label}
             </button>
           );
         })}
       </nav>
-      <div className="mx-2 mb-1 border-t border-border" />
 
       <div className="relative">
-        <div className="flex items-center justify-between px-3 pb-1">
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Projects
-          </span>
+        <div className="mt-6 flex items-center justify-between pb-1.5 pl-5 pr-3">
+          <span className="text-xs font-medium text-muted-foreground">Projects</span>
           <div className="flex items-center gap-0.5">
             <button
               onClick={() => setFilterOpen((v) => !v)}
@@ -222,7 +187,7 @@ export function Sidebar() {
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto px-2 pb-2">
+      <div className="flex-1 overflow-y-auto px-3 pb-2">
         {repos.length === 0 ? (
           <p className="px-1.5 py-2 text-xs text-muted-foreground">
             Add a git repository to get started.
@@ -246,30 +211,17 @@ export function Sidebar() {
         )}
       </div>
 
-      {/* Bottom-left corner: settings entry point. Fixed height so its bar
-          lines up with the chat's status bar across the divider. */}
-      <div className="mt-auto flex h-12 shrink-0 items-center border-t border-border px-2">
+      {/* Bottom-left corner: settings entry point. Fixed height so it lines up
+          with the chat's status bar across the divider. */}
+      <div className="mt-auto flex h-12 shrink-0 items-center px-3">
         <button
           onClick={() => (settingsOpen ? closeSettings() : openSettings())}
           title="Settings"
           aria-label="Settings"
-          aria-pressed={settingsOpen}
-          className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium hover:bg-muted hover:text-foreground ${
-            settingsOpen ? "bg-muted text-foreground" : "text-muted-foreground"
-          }`}
+          aria-current={settingsOpen ? "page" : undefined}
+          className="ph-nav-row"
         >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.75"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="size-4 shrink-0"
-          >
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-          </svg>
+          <GearIcon />
           Settings
         </button>
       </div>

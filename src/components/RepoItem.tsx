@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useAppStore, type Repo } from "../store/appStore";
 import { deleteRepo } from "../lib/actions";
 import { BranchItem } from "./BranchItem";
+import { ChevronDownIcon, ChevronRightIcon, PlusIcon } from "./ui/icons";
 
 export function RepoItem({ repo }: { repo: Repo }) {
   const select = useAppStore((s) => s.select);
@@ -9,8 +10,10 @@ export function RepoItem({ repo }: { repo: Repo }) {
   const setRepoHidden = useAppStore((s) => s.setRepoHidden);
   const openProjectSettings = useAppStore((s) => s.openProjectSettings);
   const selected = useAppStore(
-    (s) => s.selection.repoId === repo.id && s.selection.branchId === null,
+    (s) => s.workspaceView === "home" && s.selection.repoId === repo.id && s.selection.branchId === null,
   );
+  const [open, setOpen] = useState(true);
+  const Chevron = open ? ChevronDownIcon : ChevronRightIcon;
 
   // Anchor for the right-click context menu (viewport coords), or null when closed.
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -30,11 +33,22 @@ export function RepoItem({ repo }: { repo: Repo }) {
           e.preventDefault();
           setMenu({ x: e.clientX, y: e.clientY });
         }}
-        className={`group flex h-7 items-center gap-1.5 rounded-md px-1.5 ${
-          selected ? "bg-muted" : "hover:bg-muted/50"
+        className={`group flex h-8 items-center gap-1.5 rounded-md pl-1 pr-1.5 ${
+          selected ? "bg-sidebar-selected" : "hover:bg-sidebar-hover"
         } ${repo.hidden ? "opacity-50" : ""}`}
       >
-        <span className="min-w-0 flex-1 truncate font-medium">{repo.name}</span>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen(!open);
+          }}
+          aria-label={`${open ? "Collapse" : "Expand"} ${repo.name}`}
+          aria-expanded={open}
+          className="grid size-5 shrink-0 place-items-center rounded-sm text-muted-foreground hover:text-foreground"
+        >
+          <Chevron className="size-3.5" />
+        </button>
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{repo.name}</span>
         <span className="hidden shrink-0 font-mono text-[11px] text-muted-foreground group-hover:inline">
           {repo.defaultBranch}
         </span>
@@ -45,14 +59,18 @@ export function RepoItem({ repo }: { repo: Repo }) {
           }}
           title="New branch (⌘D)"
           aria-label={`New branch in ${repo.name}`}
-          className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-input hover:text-foreground"
+          className="hidden size-5 shrink-0 place-items-center rounded-sm text-muted-foreground hover:bg-input hover:text-foreground group-hover:grid"
         >
-          +
+          <PlusIcon className="size-3.5" />
         </button>
       </div>
-      {repo.branches.map((branch) => (
-        <BranchItem key={branch.id} repo={repo} branch={branch} />
-      ))}
+      {open && repo.branches.length > 0 && (
+        <div className="ml-[13px] border-l border-input/70 pl-1.5">
+          {repo.branches.map((branch) => (
+            <BranchItem key={branch.id} repo={repo} branch={branch} />
+          ))}
+        </div>
+      )}
 
       {menu && (
         <>

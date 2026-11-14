@@ -1,4 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { PageHeader, Segmented } from "./ui/page";
+import { TelemetryPage } from "./telemetry/TelemetryPage";
+import { MemoryPage } from "./memory/MemoryPage";
 import { getVersion } from "@tauri-apps/api/app";
 import { homeDir } from "@tauri-apps/api/path";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -616,7 +619,7 @@ function CloudSection() {
   );
 }
 
-const TABS = ["Main", "Agents", "Memory", "Cloud"] as const;
+const TABS = ["Main", "Agents", "Memory", "Cloud", "Telemetry"] as const;
 type Tab = (typeof TABS)[number];
 
 export function SettingsPage() {
@@ -645,25 +648,15 @@ export function SettingsPage() {
       <div data-tauri-drag-region className="h-11 shrink-0 px-3" />
 
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-4xl px-8 pb-16 pt-2">
-          <h1 className="mb-4 text-lg font-semibold text-foreground">Settings</h1>
-
-          <div className="mb-6 flex gap-4 border-b border-border">
-            {TABS.map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => setTab(t)}
-                className={`-mb-px border-b pb-1.5 text-[11px] font-semibold uppercase tracking-wider ${
-                  tab === t
-                    ? "border-accent-brand text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
+        <div className={`mx-auto w-full px-8 pb-16 pt-2 ${tab === "Telemetry" || tab === "Memory" ? "max-w-6xl" : "max-w-4xl"}`}>
+          <PageHeader title="Settings" className="mx-0 mb-2 border-b-0 pt-0">
+            <Segmented
+              label="Settings section"
+              value={tab}
+              onChange={setTab}
+              options={TABS.map((t) => ({ value: t, label: t }))}
+            />
+          </PageHeader>
 
           {tab === "Main" ? (
             <>
@@ -696,14 +689,17 @@ export function SettingsPage() {
             >
               <MemorySection />
             </Section>
-          ) : (
+          ) : tab === "Cloud" ? (
             <Section
               title="Cloud"
               description="Credentials and defaults for one-click cloud runs."
             >
               <CloudSection />
             </Section>
+          ) : (
+            <TelemetryPage embedded />
           )}
+          {tab === "Memory" && <MemoryPage embedded />}
         </div>
       </div>
     </div>

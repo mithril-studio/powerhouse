@@ -101,8 +101,9 @@ function StatTile({
   );
 }
 
-export function TelemetryPage() {
-  const open = useAppStore((s) => s.telemetryOpen);
+/** Telemetry lives in Settings (`embedded`); the overlay form is kept for tests/legacy callers. */
+export function TelemetryPage({ embedded = false }: { embedded?: boolean } = {}) {
+  const open = useAppStore((s) => s.telemetryOpen) || embedded;
   const closeTelemetry = useAppStore((s) => s.closeTelemetry);
 
   const [tab, setTab] = useState<Tab>("Runs");
@@ -143,7 +144,7 @@ export function TelemetryPage() {
   }, [open, refetch]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || embedded) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation();
@@ -152,7 +153,7 @@ export function TelemetryPage() {
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [open, closeTelemetry]);
+  }, [open, embedded, closeTelemetry]);
 
   if (!open) return null;
 
@@ -165,15 +166,13 @@ export function TelemetryPage() {
   };
 
   return (
-    <div className="fixed inset-y-0 right-0 left-60 z-40 flex flex-col border-l border-border bg-background">
-      {/* Draggable title strip (traffic-light overlay). The sidebar Telemetry
-          toggle opens and closes this panel, so there is no close button here. */}
-      <div data-tauri-drag-region className="h-11 shrink-0 px-3" />
+    <div className={embedded ? "contents" : "fixed inset-y-0 right-0 left-60 z-40 flex flex-col border-l border-border bg-background"}>
+      {!embedded && <div data-tauri-drag-region className="h-11 shrink-0 px-3" />}
 
-      <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-5xl px-8 pb-16 pt-2">
-          <div className="mb-4 flex items-center justify-between">
-            <h1 className="text-lg font-semibold text-foreground">Telemetry</h1>
+      <div className={embedded ? "contents" : "flex-1 overflow-y-auto"}>
+        <div className={embedded ? "pt-6" : "mx-auto w-full max-w-5xl px-8 pb-16 pt-2"}>
+          <div className={embedded ? "mb-4 flex justify-end" : "ph-page-header mx-0 mb-6 pt-0"}>
+            {!embedded && <h1 className="ph-page-title">Telemetry</h1>}
             <button
               type="button"
               disabled={(stats?.activeRuns ?? 0) > 0}

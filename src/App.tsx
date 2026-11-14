@@ -1,3 +1,4 @@
+import { TaskBoardPage } from "./features/tasks/TaskBoardPage";
 import { useEffect } from "react";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -21,10 +22,7 @@ import { RightSidebar } from "./components/RightSidebar";
 import { NewChatPicker } from "./components/NewChatPicker";
 import { SettingsPage } from "./components/SettingsPage";
 import { ProjectSettingsPage } from "./components/ProjectSettingsPage";
-import { TelemetryPage } from "./components/telemetry/TelemetryPage";
 import { PowerConfirmationDialog } from "./components/PowerConfirmationDialog";
-import { WorkflowsPage } from "./features/workflows/WorkflowsPage";
-import { MemoryPage } from "./components/memory/MemoryPage";
 
 let booted = false;
 
@@ -152,15 +150,13 @@ export default function App() {
         </div>
         <BottomPanel />
       </main>
-      {!homeVisible && <WorkflowsPage />}
+      {hydrated && (workspaceView === "board" || workspaceView === "mission") && <TaskBoardPage />}
       {homeVisible && hydrated && rightSidebarOpen && <RightSidebar repo={repo} branch={branch} />}
       <NewBranchModal />
       <NewChatPicker />
       <SettingsPage />
       <ProjectSettingsPage />
-      <TelemetryPage />
       <PowerConfirmationDialog />
-      <MemoryPage />
     </div>
   );
 }
