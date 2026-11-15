@@ -76,3 +76,32 @@ describe("cloud chats", () => {
     expect(useAppStore.getState().vmCreating).toEqual({});
   });
 });
+
+describe("merging a cloud chat", () => {
+  const chat = (title: string, firstPrompt?: string) => ({
+    id: "c",
+    title,
+    acpTranscript: firstPrompt
+      ? [{ id: "u1", type: "message" as const, role: "user" as const, text: firstPrompt }]
+      : [],
+  });
+
+  it("names the commit after a renamed chat, else its first prompt, else the branch", async () => {
+    const { mergeCommitMessage } = await import("./vmChats");
+    expect(mergeCommitMessage("swift-comet", chat("Fix login redirect"))).toBe("Fix login redirect");
+    expect(mergeCommitMessage("swift-comet", chat("Chat 1", "Add a dark mode toggle\nwith tests"))).toBe(
+      "Add a dark mode toggle",
+    );
+    const long = "x".repeat(100);
+    expect(mergeCommitMessage("b", chat("Chat 2", long))).toHaveLength(72);
+    expect(mergeCommitMessage("swift-comet", chat("Chat 1"))).toBe("swift-comet");
+    expect(mergeCommitMessage("swift-comet", undefined)).toBe("swift-comet");
+  });
+
+  it("opens the branch shell in the repo on the VM", async () => {
+    const { vmShellCommand } = await import("./vmChats");
+    expect(vmShellCommand("ph-c-x-1a2b")).toBe(
+      "boxd machine exec --tty ph-c-x-1a2b -- bash -lc 'cd ~/repo && exec bash -l'",
+    );
+  });
+});

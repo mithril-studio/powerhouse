@@ -3,7 +3,7 @@
 // its agent runs there under ph-agentd, so it keeps working while the app is
 // closed. See docs/vm-chats-plan.md.
 import { invoke } from "@tauri-apps/api/core";
-import type { Branch } from "../store/appStore";
+import type { Branch, Chat } from "../store/appStore";
 
 export interface VmChatCreateRequest {
   repoId: string;
@@ -18,6 +18,30 @@ export const vmChatEnsureRunning = (vm: string) => invoke<void>("vm_chat_ensure_
 export const vmChatRemove = (vm: string) => invoke<void>("vm_chat_remove", { vm });
 export const vmAgentCommand = (vm: string, chatId: string, env?: Record<string, string>) =>
   invoke<string>("vm_agent_command", { vm, chatId, env });
+
+export const vmChatMirror = (vm: string, worktree: string, branch: string) =>
+  invoke<string>("vm_chat_mirror", { vm, worktree, branch });
+export const vmChatCommitPush = (vm: string, worktree: string, branch: string, message: string) =>
+  invoke<string>("vm_chat_commit_push", { vm, worktree, branch, message });
+export const vmChatDropMirror = (repoPath: string, branch: string) =>
+  invoke<void>("vm_chat_drop_mirror", { repoPath, branch });
+
+/** The branch shell of a cloud branch: a login shell in the repo on its VM. */
+export const vmShellCommand = (vm: string) =>
+  `boxd machine exec --tty ${vm} -- bash -lc 'cd ~/repo && exec bash -l'`;
+
+/**
+ * The commit message for the work a cloud chat leaves uncommitted when it is
+ * merged: the chat's title if it was renamed, else the first line of its first
+ * prompt, else the branch name.
+ */
+export function mergeCommitMessage(branchName: string, chat: Chat | undefined): string {
+  if (chat && !/^Chat \d+$/.test(chat.title)) return chat.title;
+  const first = chat?.acpTranscript?.find((i) => i.type === "message" && i.role === "user");
+  const line = first && "text" in first ? String(first.text).split("\n")[0].trim() : "";
+  if (line) return line.length > 72 ? `${line.slice(0, 71)}…` : line;
+  return branchName;
+}
 
 /** Where the repo lives on every chat VM; the ACP session's cwd. */
 export const VM_REPO_DIR = "/home/boxd/repo";

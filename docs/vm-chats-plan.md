@@ -147,8 +147,16 @@ Target for steps 2–5: under 10 s to the first prompt.
    follow the VM. Chats re-attach on mount, reconnect with backoff when the link drops (a dropped turn is
    not a failure), and start in bypass-permissions mode. One chat per cloud branch. Known gap: builds and
    VM creation run over a single `exec`, so closing the laptop mid-build fails the build.
-4. **Workspace backend:** Files, Changes, Diff and terminal for VM branches.
-5. **Merge queue** via push and fetch.
+4–5. **Done, as one slice:** the local worktree mirrors the VM (`src-tauri/src/vm/sync.rs`). Instead of
+   reading every file over `exec`, the VM snapshots its working tree when a turn ends (new files included,
+   ignored files not, branch and index untouched) and pushes it to `refs/ph/wip/<branch>`. The local
+   worktree then takes the VM's HEAD as its tip and the snapshot as its working tree, so Files, Changes and
+   Diff work unchanged. The worktree is a read-only mirror: syncing discards local edits there. Changes →
+   ↻ pulls a fresh snapshot. **Merge** first commits everything left on the VM (message: the chat's title
+   if renamed, else its first prompt line, else the branch name), pushes the branch, resets the local branch
+   to it, then runs the normal queue. The Shell tab opens `bash -l` in `~/repo` on the VM; the Agent CLI tab
+   is unavailable on cloud branches. Deleting the branch also deletes its mirror ref. Diff follows the VM at
+   the end of each turn, not live mid-turn.
 6. **Delete** handoff (`handoff.rs`, `handoff.ts`, `/handoff` seeding, `pendingHandoff`), the cloud
    workspace flow (`cloud/commands.rs` start/send/poll/pull, `cloud.ts`, `cloudStream.ts`,
    `CloudBanner`, `CloudResultCard`, `Chat.cloudRecap`, the TabBar buttons), `server/`, `cloud/`,

@@ -26,7 +26,14 @@ import {
 import { disposeTerminal, markAutoSpawn } from "./terminalRegistry";
 import { disposeAcp } from "./acpRegistry";
 import { deleteCloudWorkspace, workspaceForBranch } from "./cloud";
-import { vmChatCreate, vmChatRemove } from "./vmChats";
+import {
+  mergeCommitMessage,
+  vmChatCommitPush,
+  vmChatCreate,
+  vmChatDropMirror,
+  vmChatMirror,
+  vmChatRemove,
+} from "./vmChats";
 
 export async function pickAndAddRepo() {
   const dir = await open({ directory: true, multiple: false, title: "Open project" });
@@ -167,6 +174,40 @@ export async function createBranch(
   }
 }
 
+const mirroring = new Map<string, Promise<void>>();
+const mirrorAgain = new Set<string>();
+
+/**
+ * Makes a cloud branch's local worktree mirror its VM, so Files, Changes and
+ * Diff show the agent's work. One run per branch; a request during a run
+ * queues exactly one more.
+ */
+export function mirrorCloudBranch(repoId: string, branchId: string): Promise<void> {
+  const running = mirroring.get(branchId);
+  if (running) {
+    mirrorAgain.add(branchId);
+    return running;
+  }
+  const run = (async () => {
+    do {
+      mirrorAgain.delete(branchId);
+      const branch = useAppStore
+        .getState()
+        .repos.find((r) => r.id === repoId)
+        ?.branches.find((b) => b.id === branchId);
+      if (!branch?.vm) return;
+      try {
+        await vmChatMirror(branch.vm, branch.worktreePath, branch.name);
+        useAppStore.getState().setVmMirror(branchId);
+      } catch (err) {
+        useAppStore.getState().setVmMirror(branchId, String(err));
+      }
+    } while (mirrorAgain.has(branchId));
+  })().finally(() => mirroring.delete(branchId));
+  mirroring.set(branchId, run);
+  return run;
+}
+
 /** Creates a cloud branch's VM, then its one chat. Safe to call again after a failure. */
 export async function provisionCloudBranch(repoId: string, branchId: string, base?: string) {
   const s = useAppStore.getState();
@@ -239,7 +280,10 @@ export async function deleteBranch(repoId: string, branchId: string) {
 
   disposeBranch(branch);
   if (cloud) void deleteCloudWorkspace(cloud.id).catch(() => {});
-  if (branch.vm) void vmChatRemove(branch.vm).catch(() => {});
+  if (branch.vm) {
+    void vmChatRemove(branch.vm).catch(() => {});
+    void vmChatDropMirror(repo.path, branch.name).catch(() => {});
+  }
   try {
     await gitRemoveWorktree(repo.path, branch.worktreePath);
   } catch (err) {
@@ -313,6 +357,22 @@ export async function enqueueBranch(repoId: string, branchId: string) {
   const repo = s.repos.find((r) => r.id === repoId);
   const branch = repo?.branches.find((b) => b.id === branchId);
   if (!repo || !branch) return;
+  if (branch.vm) {
+    // The work lives on the VM: commit whatever is left, push the branch, and
+    // point the local branch at it. The queue then merges as usual.
+    try {
+      await vmChatCommitPush(
+        branch.vm,
+        branch.worktreePath,
+        branch.name,
+        mergeCommitMessage(branch.name, branch.chats[0]),
+      );
+      useAppStore.getState().setVmMirror(branch.id);
+    } catch (err) {
+      await message(String(err), { title: "Could not push the VM's work", kind: "error" });
+      return;
+    }
+  }
   try {
     await queueEnqueue(
       repo.id,

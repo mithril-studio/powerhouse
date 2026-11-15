@@ -19,6 +19,14 @@ pub struct VmManager {
     pub secrets: Arc<dyn SecretStore>,
     /// Absolute path of the boxd CLI, for commands the chat pane spawns.
     pub boxd_bin: String,
+    /// One mirror or commit-and-push at a time per worktree.
+    sync_locks: Arc<Mutex<std::collections::HashMap<String, Arc<Mutex<()>>>>>,
+}
+
+impl VmManager {
+    fn sync_lock(&self, worktree: &str) -> Arc<Mutex<()>> {
+        self.sync_locks.lock().unwrap().entry(worktree.to_string()).or_default().clone()
+    }
 }
 
 impl Default for VmManager {
@@ -29,6 +37,7 @@ impl Default for VmManager {
             boxd_bin: cli.binary.clone(),
             boxd: Arc::new(cli),
             secrets: Arc::new(Keychain),
+            sync_locks: Default::default(),
         }
     }
 }
@@ -147,4 +156,44 @@ pub fn vm_build_start(app: AppHandle, state: State<VmManager>, req: BuildRequest
         builds::run(&deps, &req, build);
     });
     Ok(first)
+}
+
+/// Makes the cloud branch's local worktree mirror its VM (after each turn).
+/// Returns the snapshot commit.
+#[tauri::command]
+pub async fn vm_chat_mirror(state: State<'_, VmManager>, vm: String, worktree: String, branch: String) -> Result<String, String> {
+    let (boxd, lock) = (state.boxd.clone(), state.sync_lock(&worktree));
+    blocking(move || {
+        let _held = lock.lock().unwrap();
+        super::sync::mirror(boxd.as_ref(), &vm, Path::new(&worktree), &branch)
+    })
+    .await
+}
+
+/// Commits everything on the VM, pushes the branch, and resets the local
+/// branch to it (before a merge). Returns the pushed commit.
+#[tauri::command]
+pub async fn vm_chat_commit_push(
+    state: State<'_, VmManager>,
+    vm: String,
+    worktree: String,
+    branch: String,
+    message: String,
+) -> Result<String, String> {
+    let (boxd, lock) = (state.boxd.clone(), state.sync_lock(&worktree));
+    blocking(move || {
+        let _held = lock.lock().unwrap();
+        super::sync::commit_and_push(boxd.as_ref(), &vm, Path::new(&worktree), &branch, &message)
+    })
+    .await
+}
+
+/// Deletes a cloud branch's mirror ref from the remote (cleanup, best effort).
+#[tauri::command]
+pub async fn vm_chat_drop_mirror(repo_path: String, branch: String) -> Result<(), String> {
+    blocking(move || {
+        super::sync::drop_wip_ref(Path::new(&repo_path), &branch);
+        Ok(())
+    })
+    .await
 }

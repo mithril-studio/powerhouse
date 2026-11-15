@@ -4,3 +4,4 @@ pub mod chats;
 pub mod commands;
 pub mod config;
 pub mod remote;
+pub mod sync;

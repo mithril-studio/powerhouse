@@ -506,7 +506,7 @@ fn record_run(app: &AppHandle, repo_id: &str, job: &Job, outcome: &Outcome, fini
 /// without ambient credentials. No-op for SSH remotes or when disconnected
 /// (falls back to whatever git is already configured with). Always
 /// non-interactive — never blocks the worker on a credential prompt.
-fn git_origin(repo: &Path, origin_https: bool, args: &[&str]) -> Result<(), String> {
+pub(crate) fn git_origin(repo: &Path, origin_https: bool, args: &[&str]) -> Result<(), String> {
     let auth = if origin_https {
         crate::github::token().map(|t| {
             format!("http.extraheader=AUTHORIZATION: {}", crate::github::basic_auth_header(&t))

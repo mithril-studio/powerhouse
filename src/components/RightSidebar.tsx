@@ -12,6 +12,7 @@ import {
   type ChangedFile,
 } from "../lib/ipc";
 import { DiffView } from "./DiffView";
+import { mirrorCloudBranch } from "../lib/actions";
 import { QueuePane } from "./QueuePane";
 import { MachinesPane } from "./MachinesPane";
 
@@ -164,12 +165,14 @@ function FilesTab({ repo, branch }: { repo: Repo; branch: Branch }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
 
+  // A cloud branch's worktree changes when it mirrors its VM.
+  const mirroredAt = useAppStore((s) => s.vmMirror[branch.id]?.at);
   useEffect(() => {
     setError(null);
     void gitListFiles(branch.worktreePath)
       .then(setFiles)
       .catch((e) => setError(String(e)));
-  }, [branch.worktreePath]);
+  }, [branch.worktreePath, mirroredAt]);
 
   const tree = useMemo(() => buildTree(files), [files]);
   const toggle = (path: string) =>
@@ -211,6 +214,7 @@ function ChangesTab({
   const [files, setFiles] = useState<ChangedFile[]>([]);
   const [error, setError] = useState<string | null>(null);
 
+  const mirror = useAppStore((s) => s.vmMirror[branch.id]);
   const load = useCallback(() => {
     setError(null);
     gitChangedFiles(branch.worktreePath, repo.defaultBranch)
@@ -218,7 +222,13 @@ function ChangesTab({
       .catch((e) => setError(String(e)));
   }, [branch.worktreePath, repo.defaultBranch]);
 
-  useEffect(() => load(), [load]);
+  useEffect(() => load(), [load, mirror?.at]);
+
+  /** Cloud branches: refresh pulls the VM's latest state first. */
+  const refresh = useCallback(() => {
+    if (branch.vm) void mirrorCloudBranch(repo.id, branch.id);
+    else load();
+  }, [branch.vm, branch.id, repo.id, load]);
 
   return (
     <div className="flex h-full flex-col">
@@ -227,14 +237,28 @@ function ChangesTab({
           {files.length} changed
         </span>
         <button
-          onClick={load}
-          title="Refresh"
+          onClick={refresh}
+          title={branch.vm ? "Refresh from the VM" : "Refresh"}
           className="flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           ↻
         </button>
       </div>
       <div className="flex-1 overflow-y-auto px-1.5 pb-2">
+        {branch.vm && (
+          <p className="px-1.5 pb-1 text-[11px] text-muted-foreground">
+            {mirror?.error
+              ? null
+              : mirror
+                ? `From ${branch.vm}, as of ${new Date(mirror.at).toLocaleTimeString()}`
+                : `From ${branch.vm} after the next turn`}
+          </p>
+        )}
+        {mirror?.error && (
+          <p className="select-text px-1.5 py-1 font-mono text-xs text-destructive">
+            Could not mirror the VM: {mirror.error}
+          </p>
+        )}
         {error && (
           <p className="select-text px-1.5 py-2 font-mono text-xs text-destructive">{error}</p>
         )}

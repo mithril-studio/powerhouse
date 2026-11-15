@@ -46,6 +46,7 @@ import type { AgentControlState, ApplyOp } from "../lib/agentControls";
 import type { AcpConnectionState } from "../components/acp/AcpConnectionPanel";
 import type { PendingPermission } from "../components/acp/AcpPermissionCard";
 import { promptBlocks, toRef, type Attachment } from "../lib/attachments";
+import { mirrorCloudBranch } from "../lib/actions";
 import {
   isCloudBranch,
   MAX_RECONNECTS,
@@ -215,6 +216,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
           response.stopReason === "end_turn" || response.stopReason === "cancelled" ? undefined : `Agent stopped: ${response.stopReason}`,
         );
         checkpoint();
+        if (cloud) void mirrorCloudBranch(repoId, branch.id);
       } catch (cause) {
         // A cloud agent keeps working when the connection drops; the reconnect
         // reports how the turn went (ph-agentd's `_ph/turn`).
@@ -299,6 +301,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
                 return;
               }
               finishTurn(activityFromStopReason((turn.stopReason ?? "end_turn") as StopReason));
+              void mirrorCloudBranch(repoId, branch.id);
               recordTurn(turn.stopReason === "cancelled" ? "cancelled" : turn.stopReason === "end_turn" ? "completed" : "failed");
             },
             onUpdate: (update) =>
@@ -408,6 +411,8 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
         setConnection("ready");
         setChatStatus(chat.id, "running");
         if (!cloud) void handoffWatchStart(branch.id, branch.worktreePath).catch(() => {});
+        // Catch up on whatever the agent did while this app was away.
+        if (cloud) void mirrorCloudBranch(repoId, branch.id);
 
         if (!result.resumed && chat.initialPrompt) {
           await submitPrompt(chat.initialPrompt);

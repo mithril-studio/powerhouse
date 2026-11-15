@@ -237,6 +237,8 @@ interface AppState extends PersistedTree {
   chatActivity: Record<string, ChatActivity>;
   /** Cloud branches whose VM is being created right now (not persisted). */
   vmCreating: Record<string, true>;
+  /** Cloud branches: when the local worktree last mirrored the VM, or why it failed (not persisted). */
+  vmMirror: Record<string, { at: number; error?: string }>;
   branchModalRepoId: string | null;
   rightSidebarOpen: boolean;
   rightTab: RightTab;
@@ -307,6 +309,7 @@ interface AppState extends PersistedTree {
   setChatStatus: (chatId: string, status: ChatStatus) => void;
   setChatActivity: (chatId: string, activity: ChatActivity | null) => void;
   setVmCreating: (branchId: string, creating: boolean) => void;
+  setVmMirror: (branchId: string, error?: string) => void;
   openBranchModal: (repoId: string) => void;
   closeBranchModal: () => void;
 
@@ -568,6 +571,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   chatStatus: {},
   chatActivity: {},
   vmCreating: {},
+  vmMirror: {},
   branchModalRepoId: null,
   rightSidebarOpen: false,
   rightTab: "changes",
@@ -879,6 +883,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       const { [branchId]: _was, ...rest } = s.vmCreating;
       return { vmCreating: creating ? { ...rest, [branchId]: true } : rest };
     }),
+
+  setVmMirror: (branchId, error) =>
+    set((s) => ({ vmMirror: { ...s.vmMirror, [branchId]: { at: Date.now(), ...(error ? { error } : {}) } } })),
 
   setChatActivity: (chatId, activity) =>
     set((s) => ({
