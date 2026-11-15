@@ -1,5 +1,6 @@
 import { useAppStore, type Branch, type Repo } from "../store/appStore";
 import { provisionCloudBranch } from "../lib/actions";
+import { RefreshIcon } from "./ui/icons";
 
 /**
  * Shown in place of a cloud branch's chat until its VM exists: creating,
@@ -12,35 +13,46 @@ export function VmProvisioningPanel({ repo, branch }: { repo: Repo; branch: Bran
   const needsImage = branch.vmError?.includes("no VM image");
 
   return (
-    <div className="absolute inset-0 flex items-center justify-center p-8">
-      <div className="max-w-md space-y-3 text-center text-sm">
+    <div className="absolute inset-0 flex p-8">
+      <div className="ph-empty space-y-4">
         {creating ? (
-          <>
-            <p className="font-medium">Creating the VM for {branch.name}…</p>
-            <p className="text-muted-foreground">
-              Restoring {repo.name}'s VM image, checking out the branch and running setup. Usually under a minute.
+          <div>
+            <h2 className="flex items-center justify-center gap-2">
+              <RefreshIcon className="size-3.5 animate-spin text-muted-foreground" />
+              Creating the VM
+            </h2>
+            <p>
+              Restoring {repo.name}'s VM image, checking out{" "}
+              <span className="whitespace-nowrap font-mono text-xs">{branch.name}</span> and running setup. Usually under a
+              minute.
             </p>
-          </>
+          </div>
         ) : branch.vmError ? (
           <>
-            <p className="font-medium">The VM could not be created</p>
-            <p className="select-text whitespace-pre-wrap text-xs text-destructive">{branch.vmError}</p>
+            <div>
+              <h2>The VM could not be created</h2>
+              <p className="max-h-40 select-text overflow-y-auto whitespace-pre-wrap font-mono text-xs text-destructive [overflow-wrap:anywhere]">
+                {branch.vmError}
+              </p>
+            </div>
             <div className="flex justify-center gap-2">
               {needsImage && (
-                <button onClick={() => openProjectSettings(repo.id)} className="pi-btn h-8 px-3">
-                  Open Project settings
+                <button onClick={() => openProjectSettings(repo.id)} className="ph-btn">
+                  Open project settings
                 </button>
               )}
-              <button onClick={retry} className="pi-btn pi-btn-primary h-8 px-3">
+              <button onClick={retry} className="ph-btn ph-btn-primary">
                 Retry
               </button>
             </div>
           </>
         ) : (
           <>
-            <p className="font-medium">This cloud branch has no VM yet</p>
-            <p className="text-muted-foreground">Creating it was interrupted.</p>
-            <button onClick={retry} className="pi-btn pi-btn-primary h-8 px-3">
+            <div>
+              <h2>This branch has no VM yet</h2>
+              <p>Creating it was interrupted.</p>
+            </div>
+            <button onClick={retry} className="ph-btn ph-btn-primary">
               Create VM
             </button>
           </>

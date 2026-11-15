@@ -91,11 +91,11 @@ export function VmBuildsSection({ repo }: { repo: Repo }) {
           <p className="text-destructive">{configError}</p>
         ) : config ? (
           <dl className="grid grid-cols-[5rem_1fr] gap-x-3 gap-y-1">
-            <dt className="text-muted-foreground">install</dt>
+            <dt className="text-muted-foreground">Install</dt>
             <dd className="truncate font-mono">{config.install ?? "—"}</dd>
-            <dt className="text-muted-foreground">setup</dt>
+            <dt className="text-muted-foreground">Setup</dt>
             <dd className="truncate font-mono">{config.setup ?? "from the lockfile"}</dd>
-            <dt className="text-muted-foreground">size</dt>
+            <dt className="text-muted-foreground">Size</dt>
             <dd>{config.vcpu ? `${config.vcpu} vCPU / ${config.vcpu * 4} GB` : "org default"}</dd>
           </dl>
         ) : (
@@ -125,21 +125,22 @@ export function VmBuildsSection({ repo }: { repo: Repo }) {
               <div className="flex items-center gap-2">
                 <span className="font-medium">Build {b.number}</span>
                 <span
-                  className={
+                  className={`flex items-center gap-1.5 ${
                     b.status === "failed"
                       ? "text-destructive"
-                      : b.status === "running"
-                        ? "text-accent-brand"
-                        : "text-muted-foreground"
-                  }
+                      : b.number === active
+                        ? "tone-running"
+                        : b.status === "running"
+                          ? "tone-review"
+                          : "text-muted-foreground"
+                  }`}
                 >
-                  {b.status === "running" ? b.step : b.status}
+                  <span className="ph-dot bg-current" aria-hidden="true" />
+                  {b.status === "running" ? b.step : b.number === active ? "Active" : b.status.charAt(0).toUpperCase() + b.status.slice(1)}
                 </span>
-                {b.number === active && (
-                  <span className="rounded bg-input px-1.5 py-0.5 text-[10px] uppercase tracking-wide">active</span>
-                )}
-                <span className="text-muted-foreground">
-                  {b.commit ? b.commit.slice(0, 7) : ""} · {buildDuration(b)}
+                <span className="font-mono text-muted-foreground">
+                  {b.commit ? `${b.commit.slice(0, 7)} · ` : ""}
+                  {buildDuration(b)}
                 </span>
                 <span className="flex-1" />
                 {b.status === "ready" && b.number !== active && (
@@ -156,7 +157,7 @@ export function VmBuildsSection({ repo }: { repo: Repo }) {
               </div>
               {b.error && <p className="mt-1 text-destructive">{b.error.split("\n")[0]}</p>}
               {openLog === b.number && (
-                <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-input/50 p-2 font-mono text-[11px]">
+                <pre className="mt-2 max-h-64 select-text overflow-auto whitespace-pre-wrap rounded-md border border-border bg-background p-2.5 font-mono text-[11px] leading-relaxed">
                   {b.log.trim() || "…"}
                 </pre>
               )}

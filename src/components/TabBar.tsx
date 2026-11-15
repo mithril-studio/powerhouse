@@ -96,7 +96,7 @@ export function TabBar({ repo, branch }: Props) {
       {branch?.vm && (
         <span
           title="This branch's agent runs on its own VM and keeps working while this Mac sleeps."
-          className="mr-1 truncate font-mono text-[11px] text-muted-foreground"
+          className="mr-2 min-w-0 truncate font-mono text-xs text-muted-foreground"
         >
           {branch.vm}
         </span>

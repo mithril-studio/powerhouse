@@ -332,7 +332,6 @@
 .ph-btn-ghost:hover:not(:disabled) { color: var(--foreground); }
 .ph-btn-danger { border-color: color-mix(in srgb, var(--destructive) 55%, transparent); color: var(--destructive); }
 .ph-btn-danger:hover:not(:disabled) { background: color-mix(in srgb, var(--destructive) 10%, transparent); }
-.ph-btn-sm { height: 1.75rem; padding: 0 0.625rem; font-size: 12px; }
 
 .ph-field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 500; color: var(--muted-foreground); }
 .ph-field + .ph-field { margin-top: 1rem; }
