@@ -9,9 +9,7 @@ import { selectedBranch, selectedRepo, useAppStore } from "./store/appStore";
 import { hydrateFromDisk, startPersistence } from "./store/persist";
 import { startQueueSync } from "./lib/queueSync";
 import { acpKillAll, githubAccount, ptyKillAll } from "./lib/ipc";
-import { initHandoff } from "./lib/handoff";
 import { startDockBadge } from "./lib/attention";
-import { startCloudSync } from "./lib/cloud";
 import { startArchivedBranchSweep } from "./lib/actions";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { Sidebar } from "./components/Sidebar";
@@ -94,10 +92,7 @@ export default function App() {
       startQueueSync();
       startDockBadge();
       startArchivedBranchSweep();
-      void initHandoff();
       void reconcileGithub();
-      // Cloud turns run on their VMs; this streams them into their chats.
-      void startCloudSync();
       void checkForUpdates();
     })();
   }, []);

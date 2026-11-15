@@ -4,7 +4,7 @@ import { deleteBranch, deleteChat, deleteRepo } from "./actions";
 import { disposeAcp } from "./acpRegistry";
 import { disposeTerminal } from "./terminalRegistry";
 import { requestPowerConfirmation } from "./powerConfirm";
-import { gitArchiveBranch, gitRemoveWorktree, handoffWatchStop, ptyDeleteTranscript } from "./ipc";
+import { gitArchiveBranch, gitRemoveWorktree, ptyDeleteTranscript } from "./ipc";
 import { useAppStore, type Branch, type Repo } from "../store/appStore";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn(), message: vi.fn() }));
@@ -14,7 +14,6 @@ vi.mock("./terminalRegistry", () => ({ disposeTerminal: vi.fn() }));
 vi.mock("./ipc", () => ({
   gitArchiveBranch: vi.fn(),
   gitRemoveWorktree: vi.fn(),
-  handoffWatchStop: vi.fn(),
   ptyDeleteTranscript: vi.fn(),
 }));
 
@@ -35,20 +34,16 @@ beforeEach(() => {
   vi.mocked(requestPowerConfirmation).mockResolvedValue(true);
   vi.mocked(disposeAcp).mockResolvedValue(undefined);
   vi.mocked(gitRemoveWorktree).mockResolvedValue(undefined);
-  vi.mocked(handoffWatchStop).mockResolvedValue(undefined);
   vi.mocked(ptyDeleteTranscript).mockResolvedValue(undefined);
   useAppStore.setState({
-    repos: structuredClone([repo]), pendingHandoff: { one: 1, two: 2 },
+    repos: structuredClone([repo]),
     selection: { repoId: "repo", branchId: "one" },
   });
 });
 
 afterEach(() => vi.unstubAllGlobals());
 
-function expectBranchDisposed(id: string, timer: number) {
-  expect(handoffWatchStop).toHaveBeenCalledWith(id);
-  expect(clearTimeout).toHaveBeenCalledWith(timer);
-  expect(useAppStore.getState().pendingHandoff).not.toHaveProperty(id);
+function expectBranchDisposed(id: string) {
   expect(disposeAcp).toHaveBeenCalledWith(`${id}-chat`);
   for (const surface of [`${id}-chat`, `shell-${id}`, `agentcli-${id}`]) {
     expect(disposeTerminal).toHaveBeenCalledWith(surface);
@@ -63,25 +58,23 @@ describe("deletion cleanup", () => {
     expect(disposeAcp).toHaveBeenCalledExactlyOnceWith("one-chat");
     expect(ptyDeleteTranscript).toHaveBeenCalledExactlyOnceWith("one-chat");
     expect(useAppStore.getState().repos[0].branches[0].chats).toEqual([]);
-    expect(handoffWatchStop).not.toHaveBeenCalled();
     expect(gitRemoveWorktree).not.toHaveBeenCalled();
   });
 
   it("disposes and archives only the selected branch", async () => {
     await deleteBranch("repo", "one");
-    expectBranchDisposed("one", 1);
+    expectBranchDisposed("one");
     expect(disposeTerminal).toHaveBeenCalledTimes(3);
     expect(disposeAcp).toHaveBeenCalledTimes(1);
     expect(gitRemoveWorktree).toHaveBeenCalledExactlyOnceWith("/repo", "/repo/one");
     expect(gitArchiveBranch).toHaveBeenCalledExactlyOnceWith("/repo", "one", "test");
     expect(useAppStore.getState().repos[0].branches.map((b) => b.id)).toEqual(["two"]);
-    expect(useAppStore.getState().pendingHandoff).toEqual({ two: 2 });
   });
 
   it("keeps the branch and skips archival when worktree removal fails", async () => {
     vi.mocked(gitRemoveWorktree).mockRejectedValue(new Error("busy"));
     await deleteBranch("repo", "one");
-    expectBranchDisposed("one", 1);
+    expectBranchDisposed("one");
     expect(useAppStore.getState().repos[0].branches).toHaveLength(2);
     expect(gitArchiveBranch).not.toHaveBeenCalled();
     expect(message).toHaveBeenCalledWith("Error: busy", expect.anything());
@@ -90,8 +83,8 @@ describe("deletion cleanup", () => {
   it("continues project cleanup after a worktree removal fails", async () => {
     vi.mocked(gitRemoveWorktree).mockRejectedValueOnce(new Error("busy"));
     await deleteRepo("repo");
-    expectBranchDisposed("one", 1);
-    expectBranchDisposed("two", 2);
+    expectBranchDisposed("one");
+    expectBranchDisposed("two");
     expect(gitRemoveWorktree).toHaveBeenNthCalledWith(2, "/repo", "/repo/two");
     expect(useAppStore.getState().repos).toEqual([]);
     expect(gitArchiveBranch).not.toHaveBeenCalled();
@@ -106,7 +99,6 @@ describe("deletion cleanup", () => {
     expect(disposeTerminal).not.toHaveBeenCalled();
     expect(disposeAcp).not.toHaveBeenCalled();
     expect(ptyDeleteTranscript).not.toHaveBeenCalled();
-    expect(handoffWatchStop).not.toHaveBeenCalled();
     expect(clearTimeout).not.toHaveBeenCalled();
     expect(gitRemoveWorktree).not.toHaveBeenCalled();
     expect(useAppStore.getState().repos).toEqual([repo]);

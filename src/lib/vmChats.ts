@@ -11,6 +11,8 @@ export interface VmChatCreateRequest {
   branch: string;
   base: string;
   envNames: string[];
+  /** Also write the project env vars to `~/repo/.env` (only if git ignores it). */
+  writeEnvFile: boolean;
 }
 
 export const vmChatCreate = (req: VmChatCreateRequest) => invoke<string>("vm_chat_create", { req });

@@ -20,12 +20,10 @@ import {
   queueCancel,
   queueDismiss,
   queueEnqueue,
-  handoffWatchStop,
   ptyDeleteTranscript,
 } from "./ipc";
 import { disposeTerminal, markAutoSpawn } from "./terminalRegistry";
 import { disposeAcp } from "./acpRegistry";
-import { deleteCloudWorkspace, workspaceForBranch } from "./cloud";
 import {
   mergeCommitMessage,
   vmChatCommitPush,
@@ -106,36 +104,6 @@ export function createChat(
   markAutoSpawn(chat.id);
   s.addChat(repoId, branchId, chat);
   s.select(repoId, branchId);
-  return chat;
-}
-
-/**
- * Spawns a fresh chat that boots the source chat's agent pointed at the handoff
- * doc. Never steals the view: selection is left untouched.
- */
-export function createHandoffChat(
-  repoId: string,
-  branchId: string,
-  relPath: string,
-): Chat | null {
-  const s = useAppStore.getState();
-  const branch = s.repos
-    .find((r) => r.id === repoId)
-    ?.branches.find((b) => b.id === branchId);
-  if (!branch) return null;
-  const source = branch.chats.find((c) => c.id === branch.activeChatId);
-  const numbers = branch.chats.map((c) =>
-    Number(/^Handoff (\d+)$/.exec(c.title)?.[1] ?? 0),
-  );
-  const chat: Chat = {
-    id: crypto.randomUUID(),
-    title: `Handoff ${Math.max(0, ...numbers) + 1}`,
-    agentId: source?.agentId,
-    transport: source?.transport,
-    initialPrompt: `Read ${relPath} and continue the work described in it.`,
-  };
-  markAutoSpawn(chat.id);
-  s.addChat(repoId, branchId, chat); // sets this branch's activeChatId; no selection change
   return chat;
 }
 
@@ -223,6 +191,7 @@ export async function provisionCloudBranch(repoId: string, branchId: string, bas
       branch: branch.name,
       base: base ?? repo.defaultBranch,
       envNames: repo.cloudEnvNames ?? [],
+      writeEnvFile: repo.cloudWriteEnvFile ?? false,
     });
     const now = useAppStore.getState();
     now.setBranchVm(repoId, branchId, vm);
@@ -242,14 +211,6 @@ function disposeChat(chatId: string) {
 }
 
 function disposeBranch(branch: Branch) {
-  const s = useAppStore.getState();
-  void handoffWatchStop(branch.id).catch(() => {});
-  const pendingTimer = s.pendingHandoff[branch.id];
-  if (pendingTimer !== undefined) {
-    window.clearTimeout(pendingTimer);
-    s.clearPendingHandoff(branch.id);
-  }
-
   for (const chat of branch.chats) disposeChat(chat.id);
   // Bottom-panel surfaces (ids mirror BottomPanel's shellId/agentCliId).
   for (const id of [`shell-${branch.id}`, `agentcli-${branch.id}`]) {
@@ -268,18 +229,16 @@ export async function deleteBranch(repoId: string, branchId: string) {
   const repo = s.repos.find((r) => r.id === repoId);
   const branch = repo?.branches.find((b) => b.id === branchId);
   if (!repo || !branch) return;
-  const cloud = workspaceForBranch(s.cloudWorkspaces, branchId);
 
   const confirmed = await requestPowerConfirmation({
     title: "Hey, are you sure?",
-    message: `Delete branch “${branch.name}”?\n\nIts worktree and any uncommitted changes will be removed. The git branch is archived for 3 days, then deleted.${cloud ? ` Its cloud machine ${cloud.vmName} is deleted too.` : ""}${branch.vm ? ` Its VM ${branch.vm} is deleted too, with any work not pushed from it.` : ""}`,
+    message: `Delete branch “${branch.name}”?\n\nIts worktree and any uncommitted changes will be removed. The git branch is archived for 3 days, then deleted.${branch.vm ? ` Its VM ${branch.vm} is deleted too, with any work not pushed from it.` : ""}`,
     confirmLabel: "Delete",
     shortcutLabel: "⌘W",
   });
   if (!confirmed) return;
 
   disposeBranch(branch);
-  if (cloud) void deleteCloudWorkspace(cloud.id).catch(() => {});
   if (branch.vm) {
     void vmChatRemove(branch.vm).catch(() => {});
     void vmChatDropMirror(repo.path, branch.name).catch(() => {});

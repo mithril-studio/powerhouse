@@ -19,7 +19,6 @@ export type BottomTab = "shell" | "agent" | `vm:${string}`;
  *   (only after real round-trip resume is verified for that runtime).
  */
 export type HandoffMode = "unsupported" | "workspace-only" | "resumable";
-import type { CloudWorkspace } from "../lib/cloud";
 
 export interface Chat {
   id: string;
@@ -40,9 +39,6 @@ export interface Chat {
   transport?: AgentTransport;
   /** Structured ACP history. PTY chats continue to use raw transcript files. */
   acpTranscript?: AcpTranscriptItem[];
-  /** What happened in the cloud since the local session last saw this chat;
-   *  prefixed to the next local prompt, then cleared. */
-  cloudRecap?: string;
   /** Cloud chats: the last `ph/seq` rendered, so a reconnect replays only what was missed. */
   agentSeq?: number;
 }
@@ -248,10 +244,6 @@ interface AppState extends PersistedTree {
   /** VMs with a `boxd connect` terminal in the bottom panel, in tab order (not persisted). */
   machineTerminals: string[];
   shellStatus: Record<string, ChatStatus>;
-  /** branchId → setTimeout id of the in-flight handoff (presence = pending). */
-  pendingHandoff: Record<string, number>;
-  /** Runtime mirror of the Rust-owned cloud workspace store, by id (never persisted here). */
-  cloudWorkspaces: Record<string, CloudWorkspace>;
 
   settingsOpen: boolean;
   telemetryOpen: boolean;
@@ -284,7 +276,6 @@ interface AppState extends PersistedTree {
   /** Open `path` as a tab (or focus it if already open). */
   openFile: (repoId: string, branchId: string, path: string) => void;
   closeFile: (repoId: string, branchId: string, path: string) => void;
-  setChatCloudRecap: (repoId: string, branchId: string, chatId: string, recap: string | null) => void;
   setBranchVm: (repoId: string, branchId: string, vm: string | null, error?: string) => void;
   setChatAgentSeq: (repoId: string, branchId: string, chatId: string, seq: number) => void;
   setChatAgentSession: (
@@ -333,12 +324,6 @@ interface AppState extends PersistedTree {
   openMachineTerminal: (vm: string) => void;
   closeMachineTerminal: (vm: string) => void;
   setShellStatus: (branchId: string, status: ChatStatus) => void;
-  setPendingHandoff: (branchId: string, timerId: number) => void;
-  clearPendingHandoff: (branchId: string) => void;
-
-  setCloudWorkspaces: (items: CloudWorkspace[]) => void;
-  setCloudWorkspace: (workspace: CloudWorkspace) => void;
-  removeCloudWorkspace: (id: string) => void;
   setMemorySettings: (memory: MemorySettings) => void;
 }
 
@@ -426,16 +411,21 @@ function migrateGithub(raw: unknown): GithubConnection {
 }
 
 /** Migrates the old `agentCmd` string into agent profiles, or passes settings through. */
-/** Chats saved before cloud workspaces hold `cloud-result` cards for runs
- *  that no longer exist; nothing renders them now. */
+/** Chats saved by the retired cloud flows hold result cards and recaps for
+ *  runs that no longer exist; nothing renders them now. */
 function dropLegacyCloudItems(branch: Branch): Branch {
-  const legacy = (item: { type: string }) => item.type === "cloud-result";
-  if (!branch.chats.some((c) => c.acpTranscript?.some(legacy))) return branch;
+  // Result cards from the retired cloud flows, and the recap the old cloud
+  // workspaces left for the next local prompt.
+  const legacy = (item: { type: string }) =>
+    item.type === "cloud-result" || item.type === "cloud-workspace-result";
+  const stale = (c: Chat) => "cloudRecap" in c || c.acpTranscript?.some(legacy);
+  if (!branch.chats.some(stale)) return branch;
   return {
     ...branch,
-    chats: branch.chats.map((c) =>
-      c.acpTranscript ? { ...c, acpTranscript: c.acpTranscript.filter((i) => !legacy(i)) } : c,
-    ),
+    chats: branch.chats.map((c) => {
+      const { cloudRecap: _recap, ...rest } = c as Chat & { cloudRecap?: string };
+      return rest.acpTranscript ? { ...rest, acpTranscript: rest.acpTranscript.filter((i) => !legacy(i)) } : rest;
+    }),
   };
 }
 
@@ -580,12 +570,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   bottomTab: "shell",
   machineTerminals: [],
   shellStatus: {},
-  pendingHandoff: {},
   settingsOpen: false,
   telemetryOpen: false,
   memoryOpen: false,
   projectSettingsRepoId: null,
-  cloudWorkspaces: {},
 
   hydrate: (tree) =>
     set({
@@ -821,13 +809,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       }),
     })),
 
-  setChatCloudRecap: (repoId, branchId, chatId, recap) =>
-    set((s) => ({
-      repos: updateChat(s.repos, repoId, branchId, chatId, ({ cloudRecap: _old, ...c }) =>
-        recap ? { ...c, cloudRecap: recap } : c,
-      ),
-    })),
-
   setBranchVm: (repoId, branchId, vm, error) =>
     set((s) => ({
       repos: updateBranch(s.repos, repoId, branchId, ({ vm: _vm, vmError: _err, ...b }) => ({
@@ -999,27 +980,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   setShellStatus: (branchId, status) =>
     set((s) => ({ shellStatus: { ...s.shellStatus, [branchId]: status } })),
 
-  setPendingHandoff: (branchId, timerId) =>
-    set((s) => ({ pendingHandoff: { ...s.pendingHandoff, [branchId]: timerId } })),
-  clearPendingHandoff: (branchId) =>
-    set((s) => {
-      if (!(branchId in s.pendingHandoff)) return s;
-      const next = { ...s.pendingHandoff };
-      delete next[branchId];
-      return { pendingHandoff: next };
-    }),
-
-  setCloudWorkspaces: (items) =>
-    set({ cloudWorkspaces: Object.fromEntries(items.map((w) => [w.id, w])) }),
-  setCloudWorkspace: (workspace) =>
-    set((s) => ({ cloudWorkspaces: { ...s.cloudWorkspaces, [workspace.id]: workspace } })),
-  removeCloudWorkspace: (id) =>
-    set((s) => {
-      if (!(id in s.cloudWorkspaces)) return s;
-      const next = { ...s.cloudWorkspaces };
-      delete next[id];
-      return { cloudWorkspaces: next };
-    }),
   setMemorySettings: (memory) => set((s) => ({ settings: { ...s.settings, memory } })),
 }));
 

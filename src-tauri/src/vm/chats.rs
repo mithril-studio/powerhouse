@@ -29,6 +29,9 @@ pub struct CreateRequest {
     /// What it starts from (the project's target branch).
     pub base: String,
     pub env_names: Vec<String>,
+    /// Also write the project env vars to `~/repo/.env` (only if git ignores it).
+    #[serde(default)]
+    pub write_env_file: bool,
 }
 
 pub struct Deps<'a> {
@@ -96,6 +99,9 @@ fn prepare(deps: &Deps, req: &CreateRequest, vm: &str) -> Result<(), String> {
         &req.env_names,
     )?;
     exec_ok(deps.boxd, vm, &checkout_script(&req.branch, &req.base, &deps.git_user), STEP_TIMEOUT)?;
+    if req.write_env_file {
+        write_dotenv(deps, req, vm)?;
+    }
 
     let toml = exec_ok(deps.boxd, vm, &format!("cat {REPO_DIR}/{} 2>/dev/null || true", config::FILE), STEP_TIMEOUT)?;
     let cfg = config::parse(&toml)?;
@@ -106,6 +112,22 @@ fn prepare(deps: &Deps, req: &CreateRequest, vm: &str) -> Result<(), String> {
             .map_err(|e| format!("setup failed: {e}"))?;
     }
     Ok(())
+}
+
+/// Writes the project env vars (never the tokens) to `~/repo/.env`, staged
+/// through an upload so values never appear in argv, and only when git
+/// ignores `.env` in the clone.
+fn write_dotenv(deps: &Deps, req: &CreateRequest, vm: &str) -> Result<(), String> {
+    use crate::cloud::{secrets, workspace};
+    let vars = secrets::project_env_values(deps.secrets, &req.repo_id, &req.env_names)?;
+    remote::upload(deps.boxd, vm, "/home/boxd/.ph/dotenv", secrets::render_dotenv(&vars)?.as_bytes())?;
+    exec_ok(deps.boxd, vm, workspace::WRITE_DOTENV_COMMAND, STEP_TIMEOUT).map(|_| ()).map_err(|e| {
+        if e.contains(workspace::DOTENV_NOT_IGNORED) {
+            "`.env` is not gitignored in this repo; not writing it (the agent could commit it).".to_string()
+        } else {
+            format!("writing .env failed: {e}")
+        }
+    })
 }
 
 /// Fetches and checks out a fresh branch from `origin/<base>`, without
@@ -260,6 +282,7 @@ mod tests {
                 branch: "swift-comet".into(),
                 base: "test".into(),
                 env_names: vec![],
+                write_env_file: false,
             },
         )
     }
@@ -364,6 +387,7 @@ mod tests {
                 branch: "e2e-chat".into(),
                 base: "master".into(),
                 env_names: vec![],
+                write_env_file: false,
             },
         );
         let outcome = created.and_then(|vm| {

@@ -40,7 +40,6 @@ export type AcpTranscriptItem =
       type: "plan";
       entries: PlanEntry[];
     }
-  | CloudResultItem
   | AcpUsageItem;
 
 /** Context-window snapshot reported by the agent after a model call. */
@@ -55,36 +54,7 @@ export interface AcpUsageItem {
   cost?: Cost | null;
 }
 
-/** What a finished cloud turn posts back into its chat. Self-contained, so the
- *  card still reads right after the workspace is archived. */
-export interface CloudResultItem {
-  /** `cloud-result-<workspaceId>-<turn>`: the dedupe key across polls and restarts. */
-  id: string;
-  type: "cloud-workspace-result";
-  workspaceId: string;
-  vmName: string;
-  branch: string;
-  turn: number;
-  ok: boolean;
-  status: string;
-  summary: string;
-  pushedCommit: string | null;
-  unpushedCommits: number;
-  dirtyFiles: number;
-  local: string;
-  costUsd: number | null;
-}
-
 const newId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
-
-/** Append a cloud result card once; its id keys the dedupe. */
-export function appendCloudResult(
-  transcript: AcpTranscriptItem[],
-  card: CloudResultItem,
-): AcpTranscriptItem[] {
-  if (transcript.some((item) => item.id === card.id)) return transcript;
-  return [...transcript, card];
-}
 
 export function appendUserMessage(
   transcript: AcpTranscriptItem[],

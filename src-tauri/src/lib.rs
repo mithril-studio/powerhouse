@@ -3,7 +3,6 @@ mod cloud;
 mod files;
 mod git;
 mod github;
-mod handoff;
 mod memory;
 mod pty;
 mod queue;
@@ -12,8 +11,6 @@ mod vm;
 mod workflow;
 
 use acp::AcpManager;
-use cloud::commands::CloudManager;
-use handoff::HandoffWatchers;
 use memory::MemoryState;
 use pty::PtyManager;
 use queue::QueueManager;
@@ -38,8 +35,6 @@ pub fn run() {
         .manage(AcpManager::default())
         .manage(PtyManager::default())
         .manage(QueueManager::default())
-        .manage(HandoffWatchers::default())
-        .manage(CloudManager::default())
         .manage(vm::commands::VmManager::default())
         .manage(MemoryState::default())
         .setup(|app| {
@@ -82,27 +77,16 @@ pub fn run() {
             queue::queue_state,
             queue::queue_step_log,
             queue::queue_dismiss,
-            handoff::handoff_ensure_commands,
-            handoff::handoff_watch_start,
-            handoff::handoff_watch_stop,
             github::github_device_start,
             github::github_poll,
             github::github_account,
             github::github_board_issues,
             github::github_list_repos,
             github::github_disconnect,
-            cloud::commands::cloud_workspace_list,
-            cloud::commands::cloud_workspace_start,
-            cloud::commands::cloud_workspace_send,
-            cloud::commands::cloud_workspace_poll,
-            cloud::commands::cloud_workspace_stop,
-            cloud::commands::cloud_workspace_archive,
-            cloud::commands::cloud_workspace_pull,
-            cloud::commands::cloud_secret_status,
-            cloud::commands::cloud_set_secret,
-            cloud::commands::cloud_project_env_status,
-            cloud::commands::cloud_import_env_file,
-            cloud::commands::cloud_readiness,
+            vm::settings::cloud_secret_status,
+            vm::settings::cloud_set_secret,
+            vm::settings::cloud_project_env_status,
+            vm::settings::cloud_import_env_file,
             cloud::machines::machines_list,
             cloud::machines::machine_suggest_name,
             cloud::machines::machine_create,

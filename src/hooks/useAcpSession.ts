@@ -29,10 +29,9 @@ import {
   applyAcpUpdate,
 } from "../lib/acpTranscript";
 import { notifyTurnFinished } from "../lib/attention";
-import { workspaceForChat } from "../lib/cloud";
 import { activityFromStopReason } from "../lib/chatActivity";
 import { consumeAutoSpawn } from "../lib/terminalRegistry";
-import { handoffWatchStart, telemetryAnnotateRun } from "../lib/ipc";
+import { telemetryAnnotateRun } from "../lib/ipc";
 import {
   composeBriefedPrompt,
   fetchBrief,
@@ -80,9 +79,6 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
   const activity = useAppStore((state) => state.chatActivity[chat.id]);
   const setChatAgentSession = useAppStore((state) => state.setChatAgentSession);
   const updateTranscript = useAppStore((state) => state.updateChatAcpTranscript);
-  const setChatCloudRecap = useAppStore((state) => state.setChatCloudRecap);
-  /** The cloud workspace that owns this conversation right now, if any. */
-  const cloudWorkspace = useAppStore((state) => workspaceForChat(state.cloudWorkspaces, chat.id));
   const profile = resolveAgent(settings, chat.agentId);
   const memory = useMemo(() => memorySettingsOf(settings), [settings.memory]);
 
@@ -178,16 +174,6 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
         appendUserMessage(items, prompt, attachments.map(toRef)),
       );
       let outbound = prompt;
-      // Back from the cloud: the local session never saw those turns.
-      const recap = useAppStore
-        .getState()
-        .repos.find((r) => r.id === repoId)
-        ?.branches.find((b) => b.id === branch.id)
-        ?.chats.find((c) => c.id === chat.id)?.cloudRecap;
-      if (recap) {
-        outbound = `[While this chat ran on a cloud machine, the agent there worked on this branch and pushed its commits:\n${recap}\nPull or inspect the branch as needed.]\n\n${outbound}`;
-        setChatCloudRecap(repoId, branch.id, chat.id, null);
-      }
       if (memory.enabled && !cloud && !briefedRef.current) {
         briefedRef.current = true;
         const repoName = useAppStore.getState().repos.find((r) => r.id === repoId)?.name ?? "";
@@ -228,7 +214,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
         );
       }
     },
-    [chat.id, branch.id, cloud, mutateTranscript, finishTurn, recordTurn, checkpoint, memory, repoId, setChatCloudRecap],
+    [chat.id, branch.id, cloud, mutateTranscript, finishTurn, recordTurn, checkpoint, memory, repoId],
   );
 
   const start = useCallback(
@@ -326,16 +312,6 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
             onSessionReplayChange: (replaying) => {
               replayingRef.current = replaying;
             },
-            onDetached: () => {
-              closingRef.current = true;
-              setPermission((pending) => {
-                pending?.resolve({ outcome: { outcome: "cancelled" } });
-                return null;
-              });
-              setBusy(false);
-              setConnection("idle");
-              setChatStatus(chat.id, "exited");
-            },
             onBusyChange: (working) => {
               setBusy(working);
               if (working) setChatActivity(chat.id, "working");
@@ -410,7 +386,6 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
         readyRef.current = true;
         setConnection("ready");
         setChatStatus(chat.id, "running");
-        if (!cloud) void handoffWatchStart(branch.id, branch.worktreePath).catch(() => {});
         // Catch up on whatever the agent did while this app was away.
         if (cloud) void mirrorCloudBranch(repoId, branch.id);
 
@@ -611,7 +586,6 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
     supportsImages,
     controlState,
     thinkingLevel,
-    cloudWorkspace,
     start,
     submitPrompt,
     cancel,

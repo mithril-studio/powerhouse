@@ -9,7 +9,6 @@ import {
   type ToolGroup,
   type ToolTranscriptItem,
 } from "../../lib/toolDisplay";
-import { CloudResultCard } from "./CloudResultCard";
 import { attachmentData, formatBytes, type AttachmentRef } from "../../lib/attachments";
 import { ChatImage } from "./ChatImage";
 import { AcpMarkdown } from "./AcpMarkdown";
@@ -212,7 +211,6 @@ const TranscriptItem = memo(function TranscriptItem({ item }: { item: AcpTranscr
     <ToolRow item={item} />
     {item.content?.filter((content) => content.type === "content" && content.content.type === "image").map((content, index) => <ToolContent key={index} item={content} />)}
   </>;
-  if (item.type === "cloud-workspace-result") return <CloudResultCard item={item} />;
   if (item.type === "usage") return <UsageItem item={item} />;
   if (item.type === "plan") {
     return (

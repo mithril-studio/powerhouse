@@ -157,10 +157,13 @@ Target for steps 2–5: under 10 s to the first prompt.
    to it, then runs the normal queue. The Shell tab opens `bash -l` in `~/repo` on the VM; the Agent CLI tab
    is unavailable on cloud branches. Deleting the branch also deletes its mirror ref. Diff follows the VM at
    the end of each turn, not live mid-turn.
-6. **Delete** handoff (`handoff.rs`, `handoff.ts`, `/handoff` seeding, `pendingHandoff`), the cloud
-   workspace flow (`cloud/commands.rs` start/send/poll/pull, `cloud.ts`, `cloudStream.ts`,
-   `CloudBanner`, `CloudResultCard`, `Chat.cloudRecap`, the TabBar buttons), `server/`, `cloud/`,
-   `scripts/cloud-base-setup.sh`, `docs/cloud-workspaces.md` and `docs/cloud-env-plan.md`.
+6. **Done:** removed handoff (Rust watcher, `/handoff` command seeding, button, store state), the cloud
+   workspace flow (`claude -p` turns, polling, result cards, banner, recap, "bring back local", the Cloud
+   button and its readiness check), `server/`, the `cloud/` runner crates, `scripts/cloud-base-setup.sh`,
+   and their docs. About 14k lines. Kept and moved: Settings → Cloud tokens and project env vars
+   (`src-tauri/src/vm/settings.rs`), the boxd transport, secrets and VM git helpers (`src-tauri/src/cloud/`),
+   the Machines tab. "Also write `.env`" now applies to cloud chat VMs. Saved chats lose their old cloud
+   result cards and recaps when loaded.
 7. **Lifecycle:** idle pause and hibernate, archive on merge, cleanup of old VMs.
 
 ## Open questions

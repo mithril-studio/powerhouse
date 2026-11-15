@@ -16,8 +16,6 @@ vi.mock("./store/persist", () => ({ hydrateFromDisk: vi.fn(), startPersistence: 
 vi.mock("./lib/actions", () => ({ pickAndAddRepo: vi.fn() }));
 vi.mock("./lib/queueSync", () => ({ startQueueSync: vi.fn() }));
 vi.mock("./lib/ipc", () => ({ acpKillAll: vi.fn(), githubAccount: vi.fn(), ptyKillAll: vi.fn() }));
-vi.mock("./lib/handoff", () => ({ initHandoff: vi.fn() }));
-vi.mock("./lib/cloud", () => ({ startCloudSync: vi.fn() }));
 vi.mock("./hooks/useShortcuts", () => ({ useShortcuts: vi.fn() }));
 vi.mock("./components/RepoItem", () => ({ RepoItem: () => <div>Project shortcut</div> }));
 vi.mock("./components/TabBar", () => ({ TabBar: () => null }));

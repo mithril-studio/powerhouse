@@ -63,20 +63,6 @@ pub fn is_project_env_slot(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Configured names without a stored value. An invalid name is an error.
-pub fn missing_project_env(store: &dyn SecretStore, repo_id: &str, names: &[String]) -> Result<Vec<String>, String> {
-    let mut missing = vec![];
-    for name in names {
-        if !is_env_var_name(name) {
-            return Err(format!("`{name}` is not a valid environment variable name"));
-        }
-        if store.get(&project_env_slot(repo_id, name))?.filter(|v| !v.trim().is_empty()).is_none() {
-            missing.push(name.clone());
-        }
-    }
-    Ok(missing)
-}
-
 /// Resolve a repo's configured env names to `(name, value)` pairs. Every
 /// configured name must have a stored value: a silent skip would send a run
 /// out with a half-configured environment.
@@ -168,11 +154,6 @@ pub fn status_for(store: &dyn SecretStore, remote_url: Option<&str>) -> Result<S
         None => (false, None),
     };
     Ok(SecretStatus { claude, github, github_slot })
-}
-
-/// The GitHub token stored for a remote, most specific Keychain slot first.
-pub fn github_token_for(store: &dyn SecretStore, remote_url: &str) -> Option<String> {
-    resolve_github(store, remote_url).ok().flatten().map(|(_, v)| v)
 }
 
 fn resolve_github(store: &dyn SecretStore, remote_url: &str) -> Result<Option<(String, String)>, String> {

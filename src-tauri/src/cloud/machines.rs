@@ -6,7 +6,7 @@
 
 use tauri::State;
 
-use super::commands::CloudManager;
+use crate::vm::commands::VmManager;
 use super::transport::{ensure_owned, Boxd, MachineInfo, OWNED_PREFIX};
 use super::workspace as ws;
 
@@ -89,7 +89,7 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Sen
 }
 
 #[tauri::command]
-pub async fn machines_list(state: State<'_, CloudManager>) -> Result<Vec<MachineRow>, String> {
+pub async fn machines_list(state: State<'_, VmManager>) -> Result<Vec<MachineRow>, String> {
     let boxd = state.boxd.clone();
     blocking(move || list(boxd.as_ref())).await
 }
@@ -101,25 +101,25 @@ pub fn machine_suggest_name(branch: String) -> String {
 }
 
 #[tauri::command]
-pub async fn machine_create(state: State<'_, CloudManager>, name: String) -> Result<MachineRow, String> {
+pub async fn machine_create(state: State<'_, VmManager>, name: String) -> Result<MachineRow, String> {
     let boxd = state.boxd.clone();
     blocking(move || create(boxd.as_ref(), &name)).await
 }
 
 #[tauri::command]
-pub async fn machine_start(state: State<'_, CloudManager>, vm: String) -> Result<(), String> {
+pub async fn machine_start(state: State<'_, VmManager>, vm: String) -> Result<(), String> {
     let boxd = state.boxd.clone();
     blocking(move || start(boxd.as_ref(), &vm)).await
 }
 
 #[tauri::command]
-pub async fn machine_stop(state: State<'_, CloudManager>, vm: String) -> Result<(), String> {
+pub async fn machine_stop(state: State<'_, VmManager>, vm: String) -> Result<(), String> {
     let boxd = state.boxd.clone();
     blocking(move || stop(boxd.as_ref(), &vm)).await
 }
 
 #[tauri::command]
-pub async fn machine_remove(state: State<'_, CloudManager>, vm: String, confirm: String) -> Result<(), String> {
+pub async fn machine_remove(state: State<'_, VmManager>, vm: String, confirm: String) -> Result<(), String> {
     let boxd = state.boxd.clone();
     blocking(move || remove(boxd.as_ref(), &vm, &confirm)).await
 }

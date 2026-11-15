@@ -38,8 +38,6 @@ export interface AcpCallbacks {
   /** Cloud chats: ph-agentd's `_ph/turn` — the state of a turn this
    *  connection did not send (it was sent before a reconnect). */
   onRemoteTurn?: (turn: RemoteTurn) => void;
-  /** The connection was handed over (the chat went to the cloud). */
-  onDetached?: () => void;
   onStderr?: (chunk: string) => void;
   onExit: (code: number | null) => void;
 }
@@ -56,7 +54,7 @@ interface Entry {
   unlisten: UnlistenFn[];
   closeInput: () => void;
   busy: boolean;
-  /** Latest config options, for callers outside the chat (cloud send). */
+  /** Latest config options, for callers outside the chat. */
   configOptions: SessionConfigOption[];
 }
 
@@ -314,33 +312,4 @@ export async function setAcpConfigOption(
   )) as SetSessionConfigOptionResponse;
   entry.configOptions = response.configOptions;
   return response.configOptions;
-}
-
-/** The chat's current model choice as the agent reports it, if connected. */
-export function acpModel(chatId: string): string | null {
-  const option = registry
-    .get(chatId)
-    ?.configOptions.find((o) => o.category === "model");
-  return typeof option?.currentValue === "string" ? option.currentValue : null;
-}
-
-/**
- * Hand the chat's session over (to the cloud): stop any turn in flight, wait
- * for it to settle so the transcript on disk is complete, then close the
- * agent. The chat learns about it through `onDetached`.
- */
-export async function detachAcp(chatId: string, timeoutMs = 20_000): Promise<void> {
-  const entry = registry.get(chatId);
-  if (!entry) return;
-  if (entry.busy && entry.sessionId) {
-    await entry.connection.agent
-      .notify("session/cancel", { sessionId: entry.sessionId })
-      .catch(() => {});
-    const deadline = Date.now() + timeoutMs;
-    while (entry.busy && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-  }
-  entry.callbacks.onDetached?.();
-  await disposeAcp(chatId);
 }
