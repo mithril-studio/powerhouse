@@ -1,0 +1,6 @@
+# How this repo's cloud chat VMs are set up. See docs/vm-chats-plan.md.
+[vm]
+# Rust + Tauri's Linux libraries, and a warm cargo build. Once per image build.
+install = "scripts/vm-install.sh"
+# Every new chat VM. Dependencies are already in the image, so this is quick.
+setup = "pnpm install --frozen-lockfile"
