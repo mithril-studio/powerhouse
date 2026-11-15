@@ -242,6 +242,30 @@ describe("ph-agentd", () => {
     expect(sessionId).toBe("s1");
   });
 
+  it("stamps every update with the serve process's epoch", async () => {
+    const a = connect();
+    await init(a);
+    const { sessionId } = await a.request("session/new", { cwd: "/", mcpServers: [] });
+    await a.request("session/prompt", { sessionId, prompt: text("count 2") });
+    const epochs = a.inbox.filter((m) => m.method === "session/update").map((m) => m.params._meta["ph/epoch"]);
+    expect(epochs).toHaveLength(2);
+    expect(new Set(epochs).size).toBe(1);
+    expect(epochs[0]).toMatch(/^[a-z0-9]+-\d+$/);
+  });
+
+  it("does not drop the attached client for a connection that sends nothing", async () => {
+    const net = await import("node:net");
+    const a = connect();
+    await init(a);
+    const probe = net.connect(path.join(root, "c1", "sock"));
+    await new Promise((r) => probe.once("connect", r));
+    probe.destroy();
+    await new Promise((r) => setTimeout(r, 100));
+    const { sessionId } = await a.request("session/new", { cwd: "/", mcpServers: [] });
+    expect(sessionId).toBe("s1");
+    expect(a.exitCode).toBeUndefined();
+  });
+
   it("forwards resume for a session it does not hold to the agent", async () => {
     const a = connect();
     await init(a);

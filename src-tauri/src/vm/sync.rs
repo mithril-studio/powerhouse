@@ -76,6 +76,21 @@ fn is_sha(s: &str) -> bool {
     s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// Refuses unless `worktree` is a linked worktree with `branch` checked out:
+/// mirroring resets and cleans, which must never hit another checkout.
+fn ensure_mirror_target(worktree: &Path, branch: &str) -> Result<(), String> {
+    let git = |args: &[&str]| crate::git::git(worktree, args);
+    let head = git(&["symbolic-ref", "-q", "HEAD"]).unwrap_or_default();
+    if head != format!("refs/heads/{branch}") {
+        return Err(format!("{} is not on {branch} (HEAD is {head:?}); not mirroring into it", worktree.display()));
+    }
+    let (git_dir, common) = (git(&["rev-parse", "--git-dir"])?, git(&["rev-parse", "--git-common-dir"])?);
+    if git_dir == common {
+        return Err(format!("{} is a main checkout, not a branch worktree; not mirroring into it", worktree.display()));
+    }
+    Ok(())
+}
+
 /// Makes `worktree` show `snapshot` on top of `head`: the branch at `head`,
 /// the working tree at `snapshot`, nothing staged. Both must be fetched.
 pub fn apply_locally(worktree: &Path, head: &str, snapshot: &str) -> Result<(), String> {
@@ -89,6 +104,7 @@ pub fn apply_locally(worktree: &Path, head: &str, snapshot: &str) -> Result<(), 
 
 /// Mirrors the VM into the local worktree. Returns the snapshot commit.
 pub fn mirror(boxd: &dyn Boxd, vm: &str, worktree: &Path, branch: &str) -> Result<String, String> {
+    ensure_mirror_target(worktree, branch)?;
     let out = exec_ok(boxd, vm, &snapshot_script(branch), SYNC_TIMEOUT)?;
     let mut parts = last_line(&out).split_whitespace();
     let (snapshot, head) = match (parts.next(), parts.next()) {
@@ -104,6 +120,7 @@ pub fn mirror(boxd: &dyn Boxd, vm: &str, worktree: &Path, branch: &str) -> Resul
 /// Commits and pushes everything on the VM, then points the local branch at
 /// it. Returns the pushed commit.
 pub fn commit_and_push(boxd: &dyn Boxd, vm: &str, worktree: &Path, branch: &str, message: &str) -> Result<String, String> {
+    ensure_mirror_target(worktree, branch)?;
     let out = exec_ok(boxd, vm, &commit_push_script(branch, message), SYNC_TIMEOUT)?;
     let head = last_line(&out).to_string();
     if !is_sha(&head) {
@@ -234,6 +251,18 @@ mod tests {
         })();
         let _ = boxd.machine_remove(&vm);
         result.unwrap();
+    }
+
+    #[test]
+    fn mirrors_only_into_a_linked_worktree_on_its_branch() {
+        let w = world();
+        // `local` is a main checkout (a plain clone): refused even on the right branch.
+        assert!(ensure_mirror_target(&w.local, "feat").unwrap_err().contains("main checkout"));
+        let wt = w.local.parent().unwrap().join("wt");
+        sh(&w.local, &format!("git worktree add -q -b other {} origin/main", wt.display()));
+        assert!(ensure_mirror_target(&wt, "feat").unwrap_err().contains("not on feat"));
+        sh(&wt, "git checkout -q -b feat2");
+        assert!(ensure_mirror_target(&wt, "feat2").is_ok());
     }
 
     #[test]

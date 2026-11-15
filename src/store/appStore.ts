@@ -41,6 +41,8 @@ export interface Chat {
   acpTranscript?: AcpTranscriptItem[];
   /** Cloud chats: the last `ph/seq` rendered, so a reconnect replays only what was missed. */
   agentSeq?: number;
+  /** Cloud chats: which ph-agentd process `agentSeq` counts in (seq restarts with it). */
+  agentEpoch?: string;
 }
 
 export interface AgentProfile {
@@ -114,6 +116,9 @@ export interface Branch {
   vm?: string;
   /** Cloud branches: why creating the VM failed. */
   vmError?: string;
+  /** Cloud branches: the commit pushed from the VM for the pending merge. Its VM
+   *  is deleted only once the queue merges exactly this commit. */
+  mergeSha?: string;
 }
 
 export type BranchLocation = "cloud" | "local";
@@ -277,7 +282,8 @@ interface AppState extends PersistedTree {
   openFile: (repoId: string, branchId: string, path: string) => void;
   closeFile: (repoId: string, branchId: string, path: string) => void;
   setBranchVm: (repoId: string, branchId: string, vm: string | null, error?: string) => void;
-  setChatAgentSeq: (repoId: string, branchId: string, chatId: string, seq: number) => void;
+  setChatAgentSeq: (repoId: string, branchId: string, chatId: string, seq: number, epoch?: string) => void;
+  setBranchMergeSha: (repoId: string, branchId: string, sha: string | null) => void;
   setChatAgentSession: (
     repoId: string,
     branchId: string,
@@ -818,11 +824,19 @@ export const useAppStore = create<AppState>((set, get) => ({
       })),
     })),
 
-  setChatAgentSeq: (repoId, branchId, chatId, seq) =>
+  // Seq only moves forward within one ph-agentd process; a new epoch (serve
+  // restarted on the VM) starts the count over.
+  setChatAgentSeq: (repoId, branchId, chatId, seq, epoch) =>
     set((s) => ({
-      repos: updateChat(s.repos, repoId, branchId, chatId, (c) =>
-        (c.agentSeq ?? 0) >= seq ? c : { ...c, agentSeq: seq },
-      ),
+      repos: updateChat(s.repos, repoId, branchId, chatId, (c) => {
+        if (epoch !== undefined && c.agentEpoch !== epoch) return { ...c, agentSeq: seq, agentEpoch: epoch };
+        return (c.agentSeq ?? 0) >= seq ? c : { ...c, agentSeq: seq };
+      }),
+    })),
+
+  setBranchMergeSha: (repoId, branchId, sha) =>
+    set((s) => ({
+      repos: updateBranch(s.repos, repoId, branchId, ({ mergeSha: _old, ...b }) => (sha ? { ...b, mergeSha: sha } : b)),
     })),
 
   setChatAgentSession: (repoId, branchId, chatId, sessionId) =>

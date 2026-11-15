@@ -14,7 +14,9 @@
 // disconnect at any point and pick up exactly where it left off:
 //
 // - Every `session/update` sent to a client carries `_meta["ph/seq"]`, a
-//   number that increases by one per update. Updates are kept in memory.
+//   number that increases by one per update, and `_meta["ph/epoch"]`, which
+//   changes whenever serve restarts (and seq starts over). Updates are kept
+//   in memory.
 // - `initialize` reaches the agent once. Later clients get the cached result.
 // - `session/resume` for a session this agent already holds is answered here:
 //   updates with seq > `_meta["ph/fromSeq"]` (default 0, i.e. all) are
@@ -30,7 +32,9 @@
 //   `{running: false, stopReason}` when it ends.
 // - Agent requests (permission prompts) are held until a client answers; a
 //   client that resumes gets every unanswered one again.
-// - One client at a time: a new connection replaces the current one.
+// - One client at a time: a connection becomes the client with its first
+//   message and replaces the current one. A connection that sends nothing (a
+//   liveness probe) never disturbs the attached client.
 // - When the agent exits, serve exits with its code and removes the socket.
 // - While any turn runs, serve makes a small outbound request every minute:
 //   boxd suspends a VM after a stretch of idle network, and a silent build
@@ -45,6 +49,7 @@ import path from "node:path";
 import readline from "node:readline";
 
 const SEQ = "ph/seq";
+const EPOCH = "ph/epoch";
 const FROM_SEQ = "ph/fromSeq";
 const TURN = "_ph/turn";
 const ATTACH_WAIT_MS = 15_000;
@@ -99,6 +104,7 @@ export class Relay {
     this.initSent = false;
     this.updates = []; // { seq, msg }
     this.seq = 0;
+    this.epoch = `${Date.now().toString(36)}-${process.pid}`;
     this.sessions = new Map(); // sessionId -> { modes, configOptions, models, prompt }
     this.held = new Map(); // agent request id -> msg
   }
@@ -216,7 +222,7 @@ export class Relay {
     if (isNotification) {
       if (msg.method === "session/update") {
         const seq = ++this.seq;
-        const stamped = { ...msg, params: withMeta(msg.params, SEQ, seq) };
+        const stamped = { ...msg, params: withMeta(withMeta(msg.params, SEQ, seq), EPOCH, this.epoch) };
         this.updates.push({ seq, msg: stamped });
         this.track(msg.params);
         this.toClient(stamped);
@@ -376,15 +382,20 @@ async function serve(opts) {
 
   let current = null; // the attached socket
   const server = net.createServer((conn) => {
-    if (current) current.destroy();
-    current = conn;
     conn.on("error", () => {});
-    const link = relay.attach((msg) => {
-      if (!conn.destroyed) conn.write(JSON.stringify(msg) + "\n");
+    let link = null;
+    readLines(conn, (msg) => {
+      if (!link) {
+        if (current && current !== conn) current.destroy();
+        current = conn;
+        link = relay.attach((out) => {
+          if (!conn.destroyed) conn.write(JSON.stringify(out) + "\n");
+        });
+      }
+      link.receive(msg);
     });
-    readLines(conn, (msg) => link.receive(msg));
     conn.on("close", () => {
-      link.detach();
+      link?.detach();
       if (current === conn) current = null;
     });
   });

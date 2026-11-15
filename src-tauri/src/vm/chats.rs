@@ -74,8 +74,12 @@ pub fn create(deps: &Deps, req: &CreateRequest) -> Result<String, String> {
         ));
     }
 
-    // A VM with this name is a leftover: git branch names are unique per repo.
-    let _ = deps.boxd.machine_remove(&vm);
+    // Never replace an existing VM: it may hold work nobody has pushed.
+    if deps.boxd.machine_get(&vm).is_ok() {
+        return Err(format!(
+            "A VM named {vm} already exists and may hold unpushed work. Delete it in the Machines tab, or delete this branch."
+        ));
+    }
     let opts = NewOpts { from_snapshot: Some(snapshot), auto_suspend_secs: Some(AUTO_SUSPEND_SECS), ..Default::default() };
     deps.boxd.machine_new_with(&vm, &opts).map_err(|e| e.to_string())?;
     match prepare(deps, req, &vm) {
@@ -189,6 +193,25 @@ pub fn wakes_on_exec(status: &str) -> bool {
     matches!(status, "running" | "standby" | "suspended" | "paused")
 }
 
+/// After a merge: destroys the VM only when its clone is clean and still at
+/// `merged_head`, so work done after the merge push is never lost. Returns
+/// whether it was destroyed.
+pub fn retire(boxd: &dyn Boxd, vm: &str, merged_head: &str) -> Result<bool, String> {
+    let out = exec_ok(
+        boxd,
+        vm,
+        &format!("cd {REPO_DIR} && git rev-parse HEAD && git status --porcelain | wc -l"),
+        STEP_TIMEOUT,
+    )?;
+    let mut lines = out.lines().map(str::trim).filter(|l| !l.is_empty());
+    let (head, dirty) = (lines.next().unwrap_or(""), lines.next().unwrap_or("1"));
+    if head != merged_head.trim() || dirty != "0" {
+        return Ok(false);
+    }
+    remove(boxd, vm)?;
+    Ok(true)
+}
+
 /// Destroys a chat VM. Only `ph-c-…` names.
 pub fn remove(boxd: &dyn Boxd, vm: &str) -> Result<(), String> {
     if !vm.starts_with(CHAT_PREFIX) {
@@ -212,8 +235,11 @@ mod tests {
     #[derive(Default)]
     struct Fake {
         machines: Vec<String>,
+        created: Mutex<Vec<String>>,
         calls: Mutex<Vec<String>>,
         fail_on: Option<&'static str>,
+        /// What `git rev-parse HEAD; git status | wc -l` prints on the VM.
+        clone_state: Option<&'static str>,
     }
 
     impl Boxd for Fake {
@@ -221,6 +247,10 @@ mod tests {
             Ok(self.machines.iter().map(|n| MachineInfo { name: n.clone(), status: "running".into(), ..Default::default() }).collect())
         }
         fn machine_get(&self, vm: &str) -> TResult<MachineInfo> {
+            let known = self.machines.iter().any(|m| m == vm) || self.created.lock().unwrap().iter().any(|m| m == vm);
+            if !known {
+                return Err(crate::cloud::transport::TransportError::NotFound(vm.into()));
+            }
             Ok(MachineInfo { name: vm.into(), status: "running".into(), ..Default::default() })
         }
         fn machine_start(&self, _: &str) -> TResult<()> {
@@ -233,6 +263,7 @@ mod tests {
             self.machine_new_with(vm, &NewOpts::default())
         }
         fn machine_new_with(&self, vm: &str, opts: &NewOpts) -> TResult<MachineInfo> {
+            self.created.lock().unwrap().push(vm.into());
             self.calls.lock().unwrap().push(format!("new {vm} from={:?} suspend={:?}", opts.from_snapshot, opts.auto_suspend_secs));
             Ok(MachineInfo { name: vm.into(), status: "running".into(), ..Default::default() })
         }
@@ -250,7 +281,13 @@ mod tests {
             if self.fail_on.is_some_and(|f| script.contains(f)) {
                 return Ok(ExecOutput { output: "nope".into(), exit_code: 1 });
             }
-            let output = if script.starts_with("ls -1A") { "pnpm-lock.yaml\n" } else { "" };
+            let output = if script.starts_with("ls -1A") {
+                "pnpm-lock.yaml\n"
+            } else if script.contains("git status --porcelain | wc -l") {
+                self.clone_state.unwrap_or("")
+            } else {
+                ""
+            };
             Ok(ExecOutput { output: output.into(), exit_code: 0 })
         }
     }
@@ -341,6 +378,7 @@ mod tests {
         assert!(err.contains("setup failed"), "{err}");
         let calls = fake.calls.lock().unwrap().clone();
         assert!(calls.last().unwrap().starts_with("remove ph-c-"), "{calls:#?}");
+        assert_eq!(calls.iter().filter(|c| c.starts_with("remove ")).count(), 1, "only the VM it created");
     }
 
     /// `PH_VM_E2E=1 cargo test vm_chat_on_a_real_vm -- --ignored --nocapture`
@@ -459,6 +497,30 @@ mod tests {
         assert_eq!(branch.trim(), "e2e-chat");
         assert_eq!(done.pointer("/result/stopReason").and_then(|s| s.as_str()), Some("end_turn"), "{done}");
         assert!(text.contains("PONG"), "{text}");
+    }
+
+    #[test]
+    fn never_replaces_an_existing_vm() {
+        let (repo, dir) = (repo(), tempfile::tempdir().unwrap());
+        let builds = store_with_image(dir.path());
+        let taken = Fake { machines: vec![vm_name("r1", "swift-comet")], ..Default::default() };
+        let err = create_with(&taken, &builds, repo.path()).unwrap_err();
+        assert!(err.contains("already exists"), "{err}");
+        assert!(taken.calls.lock().unwrap().iter().all(|c| !c.starts_with("remove ") && !c.starts_with("new ")));
+    }
+
+    #[test]
+    fn retire_keeps_a_vm_with_work_after_the_merge() {
+        let head = "a".repeat(40);
+        let clean = Fake { clone_state: Some(Box::leak(format!("{head}\n0\n").into_boxed_str())), ..Default::default() };
+        assert!(retire(&clean, "ph-c-x", &head).unwrap());
+        assert!(clean.calls.lock().unwrap().iter().any(|c| c == "remove ph-c-x"));
+
+        for state in [format!("{head}\n3\n"), format!("{}\n0\n", "b".repeat(40))] {
+            let busy = Fake { clone_state: Some(Box::leak(state.into_boxed_str())), ..Default::default() };
+            assert!(!retire(&busy, "ph-c-x", &head).unwrap());
+            assert!(busy.calls.lock().unwrap().iter().all(|c| !c.starts_with("remove ")));
+        }
     }
 
     #[test]

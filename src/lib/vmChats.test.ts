@@ -105,3 +105,44 @@ describe("merging a cloud chat", () => {
     );
   });
 });
+
+describe("fixes from the release review", () => {
+  const base = (over: Record<string, unknown> = {}) => ({
+    id: "r",
+    name: "app",
+    path: "/tmp/app",
+    defaultBranch: "test",
+    workflow: [],
+    pushOnMerge: true,
+    branches: [
+      {
+        id: "b",
+        name: "swift-comet",
+        worktreePath: "/tmp/wt",
+        chats: [{ id: "c", title: "Chat 1" }],
+        activeChatId: "c",
+        location: "cloud" as const,
+        ...over,
+      },
+    ],
+  });
+
+  it("starts the seq count over when ph-agentd restarted (new epoch)", () => {
+    useAppStore.setState({ repos: [base()] });
+    const s = useAppStore.getState();
+    s.setChatAgentSeq("r", "b", "c", 120, "e1");
+    s.setChatAgentSeq("r", "b", "c", 3, "e2");
+    expect(useAppStore.getState().repos[0].branches[0].chats[0]).toMatchObject({ agentSeq: 3, agentEpoch: "e2" });
+    s.setChatAgentSeq("r", "b", "c", 2, "e2"); // a replay within the same epoch
+    expect(useAppStore.getState().repos[0].branches[0].chats[0].agentSeq).toBe(3);
+  });
+
+  it("records and clears the commit a merge is waiting for", () => {
+    useAppStore.setState({ repos: [base()] });
+    const s = useAppStore.getState();
+    s.setBranchMergeSha("r", "b", "abc");
+    expect(useAppStore.getState().repos[0].branches[0].mergeSha).toBe("abc");
+    s.setBranchMergeSha("r", "b", null);
+    expect("mergeSha" in useAppStore.getState().repos[0].branches[0]).toBe(false);
+  });
+});

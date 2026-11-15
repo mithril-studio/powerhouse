@@ -25,6 +25,8 @@ export const vmChatMirror = (vm: string, worktree: string, branch: string) =>
   invoke<string>("vm_chat_mirror", { vm, worktree, branch });
 export const vmChatCommitPush = (vm: string, worktree: string, branch: string, message: string) =>
   invoke<string>("vm_chat_commit_push", { vm, worktree, branch, message });
+export const vmChatRetire = (vm: string, mergedHead: string) =>
+  invoke<boolean>("vm_chat_retire", { vm, mergedHead });
 export const vmChatDropMirror = (repoPath: string, branch: string) =>
   invoke<void>("vm_chat_drop_mirror", { repoPath, branch });
 

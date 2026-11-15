@@ -1,5 +1,5 @@
 import { useAppStore, type Branch, type Repo } from "../store/appStore";
-import { provisionCloudBranch } from "../lib/actions";
+import { createChat, provisionCloudBranch } from "../lib/actions";
 import { RefreshIcon } from "./ui/icons";
 
 /**
@@ -15,7 +15,17 @@ export function VmProvisioningPanel({ repo, branch }: { repo: Repo; branch: Bran
   return (
     <div className="absolute inset-0 flex p-8">
       <div className="ph-empty space-y-4">
-        {creating ? (
+        {branch.vm ? (
+          <>
+            <div>
+              <h2>{branch.vm} is running</h2>
+              <p>This branch has no open chat.</p>
+            </div>
+            <button onClick={() => createChat(repo.id, branch.id)} className="ph-btn ph-btn-primary">
+              Open chat
+            </button>
+          </>
+        ) : creating ? (
           <div>
             <h2 className="flex items-center justify-center gap-2">
               <RefreshIcon className="size-3.5 animate-spin text-muted-foreground" />

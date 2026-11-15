@@ -106,6 +106,10 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
   const readyRef = useRef(false);
   /** Cloud chats: let go of the VM while idle off screen; reattach when shown. */
   const parkedRef = useRef(false);
+  /** One start at a time; effects can fire again before the first settles. */
+  const startingRef = useRef(false);
+  /** Whether this connection heard ph-agentd's turn state (`_ph/turn`). */
+  const remoteTurnSeenRef = useRef(false);
   const activeRef = useRef(active);
   activeRef.current = active;
 
@@ -227,6 +231,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
         setConnection("error");
         return;
       }
+      if (startingRef.current) return;
       window.clearTimeout(retryTimerRef.current);
       if (cloud && profile.id !== "claude") {
         setError("Cloud chats run Claude for now. Start a local branch to use another agent.");
@@ -242,8 +247,11 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
         setConnection("error");
         return;
       }
+      startingRef.current = true;
       readyRef.current = false;
       parkedRef.current = false;
+      remoteTurnSeenRef.current = false;
+      setConnection("starting");
       closingRef.current = true;
       await disposeAcp(chat.id);
       closingRef.current = false;
@@ -288,8 +296,9 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
           mcpServers: cloud ? [] : memoryMcpServers(memory),
           meta: cloud ? resumeMeta(chat.agentSeq) : memorySessionMeta(memory),
           callbacks: {
-            onSeq: cloud ? (seq) => setChatAgentSeq(repoId, branch.id, chat.id, seq) : undefined,
+            onSeq: cloud ? (seq, epoch) => setChatAgentSeq(repoId, branch.id, chat.id, seq, epoch) : undefined,
             onRemoteTurn: (turn) => {
+              remoteTurnSeenRef.current = true;
               if (turn.running) {
                 setChatActivity(chat.id, "working");
                 return;
@@ -391,7 +400,24 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
         setConfigOptions(result.configOptions ?? []);
         setAgentLabel(result.agentInfo?.name ?? profile.name);
         setSupportsImages(result.capabilities.promptCapabilities?.image === true);
+        // Resumed, but ph-agentd knew nothing of a turn this chat still shows as
+        // running: the agent restarted on the VM (reboot, crash) and lost it.
+        if (
+          cloud &&
+          result.resumed &&
+          !remoteTurnSeenRef.current &&
+          useAppStore.getState().chatActivity[chat.id] === "working"
+        ) {
+          finishTurn("error");
+          recordTurn("interrupted", "The agent restarted on its VM");
+          mutateTranscript((items) =>
+            appendSystemMessage(items, "The agent restarted on its VM, so the last turn was interrupted.", "error"),
+          );
+        }
         readyRef.current = true;
+        // Released before the initial prompt, which can run for minutes and
+        // must not block a reconnect.
+        startingRef.current = false;
         setConnection("ready");
         setChatStatus(chat.id, "running");
         // Catch up on whatever the agent did while this app was away.
@@ -401,6 +427,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
           await submitPrompt(chat.initialPrompt);
         }
       } catch (cause) {
+        startingRef.current = false;
         const message = cause instanceof Error ? cause.message : String(cause);
         if (cloud && resume && reconnectsRef.current > 0 && reconnectsRef.current < MAX_RECONNECTS) {
           scheduleReconnect();

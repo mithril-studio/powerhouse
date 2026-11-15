@@ -104,6 +104,7 @@ pub fn run() {
             vm::commands::vm_chat_mirror,
             vm::commands::vm_chat_commit_push,
             vm::commands::vm_chat_drop_mirror,
+            vm::commands::vm_chat_retire,
             telemetry::commands::telemetry_list_runs,
             telemetry::commands::telemetry_run_detail,
             telemetry::commands::telemetry_run_events,

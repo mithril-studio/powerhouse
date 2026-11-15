@@ -24,6 +24,7 @@ import {
 } from "./ipc";
 import { disposeTerminal, markAutoSpawn } from "./terminalRegistry";
 import { disposeAcp } from "./acpRegistry";
+import { appendSystemMessage } from "./acpTranscript";
 import {
   mergeCommitMessage,
   vmChatCommitPush,
@@ -31,6 +32,7 @@ import {
   vmChatDropMirror,
   vmChatMirror,
   vmChatRemove,
+  vmChatRetire,
 } from "./vmChats";
 
 export async function pickAndAddRepo() {
@@ -181,20 +183,42 @@ const retiring = new Set<string>();
 /**
  * A merged cloud branch is done: its work is pushed and landed. Delete its VM
  * and mirror ref so it stops costing anything; the chat keeps its transcript.
+ * Only when the queue merged exactly the commit pushed for this branch (names
+ * get reused), and only when the VM has nothing newer: work done after the
+ * merge push keeps the VM.
  */
 export function retireMergedVms(repoId: string) {
-  const repo = useAppStore.getState().repos.find((r) => r.id === repoId);
+  const s = useAppStore.getState();
+  const repo = s.repos.find((r) => r.id === repoId);
+  const merged = new Set(
+    (s.queues[repoId] ?? []).filter((e) => e.state === "merged" && e.source_sha).map((e) => e.source_sha!),
+  );
   for (const branch of repo?.branches ?? []) {
-    if (!branch.merged || !branch.vm || retiring.has(branch.id)) continue;
+    const sha = branch.mergeSha;
+    if (!branch.vm || !sha || !merged.has(sha) || retiring.has(branch.id)) continue;
     const vm = branch.vm;
     retiring.add(branch.id);
-    for (const chat of branch.chats) void disposeAcp(chat.id);
-    void vmChatRemove(vm)
-      .then(() => {
-        useAppStore.getState().setBranchVm(repoId, branch.id, null);
-        void vmChatDropMirror(repo!.path, branch.name).catch(() => {});
+    void vmChatRetire(vm, sha)
+      .then((removed) => {
+        const now = useAppStore.getState();
+        now.setBranchMergeSha(repoId, branch.id, null);
+        if (removed) {
+          for (const chat of branch.chats) void disposeAcp(chat.id);
+          now.setBranchVm(repoId, branch.id, null);
+          void vmChatDropMirror(repo!.path, branch.name).catch(() => {});
+        } else {
+          const chat = branch.chats[0];
+          if (chat) {
+            now.updateChatAcpTranscript(repoId, branch.id, chat.id, (items) =>
+              appendSystemMessage(
+                items,
+                `Merged. ${vm} has changes made after the merge, so it was kept; merge again or delete the branch when you are done.`,
+              ),
+            );
+          }
+        }
       })
-      .catch(() => {}) // still listed in the Machines tab; retried on the next sync
+      .catch(() => {}) // VM unreachable: retried on the next queue sync
       .finally(() => retiring.delete(branch.id));
   }
 }
@@ -204,7 +228,8 @@ export async function provisionCloudBranch(repoId: string, branchId: string, bas
   const s = useAppStore.getState();
   const repo = s.repos.find((r) => r.id === repoId);
   const branch = repo?.branches.find((b) => b.id === branchId);
-  if (!repo || !branch || s.vmCreating[branchId]) return;
+  // A VM that exists may hold unpushed work: never create over it.
+  if (!repo || !branch || branch.vm || s.vmCreating[branchId]) return;
   s.setVmCreating(branchId, true);
   s.setBranchVm(repoId, branchId, null);
   try {
@@ -243,6 +268,16 @@ function disposeBranch(branch: Branch) {
 }
 
 export function deleteChat(repoId: string, branchId: string, chatId: string) {
+  const branch = useAppStore
+    .getState()
+    .repos.find((r) => r.id === repoId)
+    ?.branches.find((b) => b.id === branchId);
+  // A cloud branch's one chat owns its VM: closing it means deleting the
+  // branch (which asks first), never leaving the VM orphaned.
+  if (branch?.location === "cloud") {
+    void deleteBranch(repoId, branchId);
+    return;
+  }
   disposeChat(chatId);
   useAppStore.getState().removeChat(repoId, branchId, chatId);
 }
@@ -340,15 +375,23 @@ export async function enqueueBranch(repoId: string, branchId: string) {
   const branch = repo?.branches.find((b) => b.id === branchId);
   if (!repo || !branch) return;
   if (branch.vm) {
+    if (branch.chats.some((c) => s.chatActivity[c.id] === "working")) {
+      await message("The agent is still working on this branch. Merge once its turn is done.", {
+        title: "Not yet",
+        kind: "info",
+      });
+      return;
+    }
     // The work lives on the VM: commit whatever is left, push the branch, and
     // point the local branch at it. The queue then merges as usual.
     try {
-      await vmChatCommitPush(
+      const pushed = await vmChatCommitPush(
         branch.vm,
         branch.worktreePath,
         branch.name,
         mergeCommitMessage(branch.name, branch.chats[0]),
       );
+      useAppStore.getState().setBranchMergeSha(repo.id, branch.id, pushed);
       useAppStore.getState().setVmMirror(branch.id);
     } catch (err) {
       await message(String(err), { title: "Could not push the VM's work", kind: "error" });

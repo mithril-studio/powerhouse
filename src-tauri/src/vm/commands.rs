@@ -197,3 +197,11 @@ pub async fn vm_chat_drop_mirror(repo_path: String, branch: String) -> Result<()
     })
     .await
 }
+
+/// After a merge: deletes the chat VM only if it is clean and still at
+/// `merged_head`. Returns whether it was deleted.
+#[tauri::command]
+pub async fn vm_chat_retire(state: State<'_, VmManager>, vm: String, merged_head: String) -> Result<bool, String> {
+    let boxd = state.boxd.clone();
+    blocking(move || chats::retire(boxd.as_ref(), &vm, &merged_head)).await
+}

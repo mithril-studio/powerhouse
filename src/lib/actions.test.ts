@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ask, message } from "@tauri-apps/plugin-dialog";
-import { deleteBranch, deleteChat, deleteRepo } from "./actions";
+import { deleteBranch, deleteChat, deleteRepo, retireMergedVms } from "./actions";
+import { vmChatRetire, vmChatRemove } from "./vmChats";
 import { disposeAcp } from "./acpRegistry";
 import { disposeTerminal } from "./terminalRegistry";
 import { requestPowerConfirmation } from "./powerConfirm";
@@ -11,6 +12,15 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn(), message: vi.fn() }))
 vi.mock("./powerConfirm", () => ({ requestPowerConfirmation: vi.fn() }));
 vi.mock("./acpRegistry", () => ({ disposeAcp: vi.fn() }));
 vi.mock("./terminalRegistry", () => ({ disposeTerminal: vi.fn() }));
+vi.mock("./vmChats", () => ({
+  vmChatCreate: vi.fn(),
+  vmChatRemove: vi.fn(),
+  vmChatRetire: vi.fn(),
+  vmChatDropMirror: vi.fn(),
+  vmChatMirror: vi.fn(),
+  vmChatCommitPush: vi.fn(),
+  mergeCommitMessage: vi.fn(),
+}));
 vi.mock("./ipc", () => ({
   gitArchiveBranch: vi.fn(),
   gitRemoveWorktree: vi.fn(),
@@ -102,5 +112,58 @@ describe("deletion cleanup", () => {
     expect(clearTimeout).not.toHaveBeenCalled();
     expect(gitRemoveWorktree).not.toHaveBeenCalled();
     expect(useAppStore.getState().repos).toEqual([repo]);
+  });
+});
+
+describe("cloud branches", () => {
+  const cloudRepo = (over: Partial<Branch> = {}): Repo => ({
+    ...repo,
+    branches: [{ ...branch("one"), location: "cloud", vm: "ph-c-one-1a2b", ...over }],
+  });
+
+  it("closing the chat of a cloud branch asks to delete the branch instead of orphaning its VM", async () => {
+    vi.mocked(requestPowerConfirmation).mockResolvedValue(false);
+    useAppStore.setState({ repos: [cloudRepo()] });
+    deleteChat("repo", "one", "one-chat");
+    await Promise.resolve();
+    expect(requestPowerConfirmation).toHaveBeenCalledOnce();
+    expect(useAppStore.getState().repos[0].branches[0].chats).toHaveLength(1);
+    expect(vmChatRemove).not.toHaveBeenCalled();
+  });
+
+  it("retires a VM only when the queue merged the exact commit pushed for it", async () => {
+    vi.mocked(vmChatRetire).mockResolvedValue(true);
+    const entry = (sha: string) => ({
+      id: sha, repo_id: "repo", branch: "one", state: "merged" as const, steps: [], error: null,
+      merge_commit: "m", source_sha: sha, created_at: 1, finished_at: 2,
+    });
+    // A merged entry for the same branch name but another commit (a recycled name): untouched.
+    useAppStore.setState({ repos: [cloudRepo({ merged: true })], queues: { repo: [entry("old")] } });
+    retireMergedVms("repo");
+    expect(vmChatRetire).not.toHaveBeenCalled();
+
+    useAppStore.setState({ repos: [cloudRepo({ merged: true, mergeSha: "pushed" })], queues: { repo: [entry("old")] } });
+    retireMergedVms("repo");
+    expect(vmChatRetire).not.toHaveBeenCalled();
+
+    useAppStore.setState({ queues: { repo: [entry("pushed")] } });
+    retireMergedVms("repo");
+    expect(vmChatRetire).toHaveBeenCalledExactlyOnceWith("ph-c-one-1a2b", "pushed");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(useAppStore.getState().repos[0].branches[0].vm).toBeUndefined();
+  });
+
+  it("keeps the VM and says so when it has work newer than the merge", async () => {
+    vi.mocked(vmChatRetire).mockResolvedValue(false);
+    useAppStore.setState({
+      repos: [cloudRepo({ merged: true, mergeSha: "pushed" })],
+      queues: { repo: [{ id: "q", repo_id: "repo", branch: "one", state: "merged", steps: [], error: null, merge_commit: "m", source_sha: "pushed", created_at: 1, finished_at: 2 }] },
+    });
+    retireMergedVms("repo");
+    await new Promise((r) => setTimeout(r, 0));
+    const b = useAppStore.getState().repos[0].branches[0];
+    expect(b.vm).toBe("ph-c-one-1a2b");
+    expect(b.mergeSha).toBeUndefined();
+    expect(JSON.stringify(b.chats[0].acpTranscript)).toContain("was kept");
   });
 });

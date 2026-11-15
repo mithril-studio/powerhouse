@@ -33,8 +33,8 @@ export interface AcpCallbacks {
   onAvailableCommandsChange?: (commands: AvailableCommand[]) => void;
   onSessionReplayChange?: (replaying: boolean) => void;
   onBusyChange?: (busy: boolean) => void;
-  /** Cloud chats: each update's `_meta["ph/seq"]` from ph-agentd. */
-  onSeq?: (seq: number) => void;
+  /** Cloud chats: each update's `_meta["ph/seq"]` and `["ph/epoch"]` from ph-agentd. */
+  onSeq?: (seq: number, epoch?: string) => void;
   /** Cloud chats: ph-agentd's `_ph/turn` — the state of a turn this
    *  connection did not send (it was sent before a reconnect). */
   onRemoteTurn?: (turn: RemoteTurn) => void;
@@ -138,7 +138,8 @@ export async function startAcp(opts: {
     )
     .onNotification(methods.client.session.update, ({ params }) => {
       const seq = params._meta?.["ph/seq"];
-      if (typeof seq === "number") callbacks.onSeq?.(seq);
+      const epoch = params._meta?.["ph/epoch"];
+      if (typeof seq === "number") callbacks.onSeq?.(seq, typeof epoch === "string" ? epoch : undefined);
       callbacks.onUpdate(params.update);
       if (params.update.sessionUpdate === "current_mode_update") {
         callbacks.onModeChange?.(params.update.currentModeId);
