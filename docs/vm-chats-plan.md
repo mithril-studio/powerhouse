@@ -44,29 +44,41 @@ Read first: `AGENTS.md` (branch and release rules), `src-tauri/src/acp.rs`, `src
 ```
 Chat pane (ACP client, unchanged UI)
    │  JSON-RPC lines over stdin/stdout
-acp.rs  spawns  boxd machine exec ph-c-<slug> -- ph-agentd attach --chat <id> --from <seq>
+acp.rs  spawns  boxd machine exec ph-c-<slug> -- node ~/ph-agentd.mjs attach --chat <id> -- <agent argv>
    │
-VM: ph-agentd (systemd --user unit, one per chat)
-   ├─ owns the agent process: claude-agent-acp, cwd ~/repo
-   ├─ appends every agent→client message to ~/.ph/<chat>/log.jsonl with a sequence number
-   └─ unix socket ~/.ph/<chat>/sock; `attach` replays from <seq>, then streams live
+VM: ph-agentd serve (systemd --user unit ph-agent-<id>, one per chat)
+   ├─ owns the agent process (claude-agent-acp, cwd ~/repo)
+   ├─ keeps every session/update in memory, numbered with _meta["ph/seq"]
+   └─ unix socket ~/.ph/agents/<id>/sock; one attached client at a time
 ```
 
-### `ph-agentd` (new, small Rust binary, `agentd/`)
+### `ph-agentd` (**built**: `agentd/ph-agentd.mjs`)
 
-- `ph-agentd serve --chat <id> -- <agent argv>`: started with `systemd-run --user --unit=ph-agent-<id>`.
-  Spawns the agent, logs its output, accepts one attached client at a time on the socket.
-- `ph-agentd attach --chat <id> --from <seq>`: what `exec` runs. It bridges stdin and stdout to the
-  socket. If no `serve` is running for the chat, it starts one, so the first attach and every reconnect
-  are the same call.
-- **`initialize` is cached.** The first response is stored. A reattaching client's `initialize` is
-  answered from the cache, not forwarded, so the agent sees exactly one handshake.
-- **Replay** covers notifications and responses after `<seq>`. The frontend stores the last `seq`
-  it rendered per chat (next to `acpTranscript`) and dedupes on it.
-- **Agent→client requests while detached** (permission requests, should bypass mode miss one) are held
-  until a client attaches. They are not auto-answered.
-- Build: cross-compile `x86_64-unknown-linux-musl` in CI, ship it as a release asset next to the app,
-  and the app uploads it with `boxd machine cp` during a snapshot build.
+A single Node script with no dependencies instead of the Rust binary planned earlier. Node 24 is on
+every boxd VM and the Claude adapter needs it anyway, so there is nothing to cross-compile and nothing
+to add to CI. The app will embed the file and copy it to the VM with `boxd machine cp`. The full
+contract is in the file header. In short:
+
+- `attach` is the only call the app makes. It starts `serve` (via `systemd-run --user`) when none is
+  running, then bridges stdin and stdout to the socket.
+- Each `session/update` carries `_meta["ph/seq"]`. The app stores the last seq it rendered and
+  reconnects with `session/resume` + `_meta["ph/fromSeq"]`. `ph-agentd` answers that call itself:
+  it replays the missed updates, re-sends held permission requests, and returns the current modes and
+  config options.
+- `initialize` reaches the agent once; later clients get the cached result.
+- Client request ids are remapped, and responses for a client that has gone are dropped.
+- `_ph/turn` notifications carry turn state for prompts the current client did not send. Every resume
+  ends with `{running: true}` or `{running: false, stopReason}`.
+- **Gotchas found on real VMs:** systemd user units start with a bare environment, so `attach` passes
+  its own through (`--setenv=NAME`, which keeps values off the command line). Global npm installs sit
+  in nvm's bin, which the exec shell's PATH misses, so `serve` puts node's own directory first. And a
+  client vanishing gives `ECONNRESET` on Linux, which readline re-emits and which would kill `serve`
+  if unhandled.
+- **Tests:** `pnpm test` runs `agentd/test/agentd.test.mjs` against a scripted fake agent, including
+  one test through the real ACP SDK client. `node agentd/test/vm-e2e.mjs` runs the real adapter on a
+  throwaway VM. It drops the connection mid-turn, lets the agent finish one tool call and start
+  another while disconnected, reconnects, and checks that replay is gapless, the work completed, and
+  the mode survived. About 1 minute.
 
 ### Builds (`powerhouse.toml`, committed at the repo root)
 
@@ -79,8 +91,8 @@ run     = "pnpm dev"                # optional Run button, previewed at https://
 archive = ""                        # optional, before the VM is destroyed
 ```
 
-- **Build** = fresh `ph-b-<repo>` VM → clone default branch to `~/repo` → upload `ph-agentd`, install
-  the ACP adapter → `install` → `setup` → stop anything running → `boxd snapshots save` as
+- **Build** = fresh `ph-b-<repo>` VM → clone default branch to `~/repo` → copy `ph-agentd.mjs`, install
+  the ACP adapter (`npm i -g @agentclientprotocol/claude-agent-acp@<pinned>`, about 12 s) → `install` → `setup` → stop anything running → `boxd snapshots save` as
   `ph-<repo>-b<n>` → destroy the build VM. Record the build in `~/.powerhouse/vm-builds.json`.
 - Keep the last 3 successful builds per repo. "Activate" an older one to roll back.
 - New builds trigger from Project settings (**Build VM image**), and automatically, in the background,
@@ -97,7 +109,7 @@ archive = ""                        # optional, before the VM is destroyed
 3. `boxd new ph-c-<slug> --from-snapshot <active build>`.
 4. Upload `~/.ph/env` (existing `secrets::workspace_env` and project env), then `git fetch`,
    `git checkout -b ph/<slug> origin/<target>`, then run `setup`.
-5. `acp_spawn` with the `exec … ph-agentd attach` command. The session starts in bypass-permissions
+5. `acp_spawn` with the `exec … ph-agentd.mjs attach` command. The session starts in bypass-permissions
    mode.
 
 Target for steps 2–5: under 10 s to the first prompt.
@@ -124,8 +136,7 @@ Target for steps 2–5: under 10 s to the first prompt.
 ## Slices (each one: feature branch → PR into `test` → beta → verify)
 
 0. **Done:** the spike above.
-1. **`ph-agentd`:** the binary, CI cross-compile, and an integration test on a throwaway VM:
-   start it, attach, kill the client mid-turn, reattach, and check that replay has no gaps.
+1. **Done:** `ph-agentd` and its tests (see above).
 2. **Builds:** `powerhouse.toml` parsing, the build flow, build history in Project settings.
 3. **Cloud chats:** the new-chat flow, the `acp_spawn` command for VMs, reconnect on app start and
    wake, the cap. Done when a chat survives quitting the app mid-turn and shows the full turn on reopen.
@@ -139,6 +150,4 @@ Target for steps 2–5: under 10 s to the first prompt.
 
 ## Open questions
 
-- Does `session/load` on a *live* claude-agent-acp session replay correctly mid-turn? If so, replay
-  could lean on it instead of the log. Test this in slice 1; the log stays the agent-agnostic default.
-- Non-Claude ACP agents (pi) on VMs: install them in the snapshot too, or limit v1 cloud to Claude?
+- v1 cloud chats are Claude only (decided 2026-11-15). pi and other agents can follow later.

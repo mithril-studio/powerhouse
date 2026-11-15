@@ -9,7 +9,8 @@
     "test": "vitest run",
     "verify": "./scripts/verify.sh",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test:agentd:vm": "node agentd/test/vm-e2e.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.4.0",
