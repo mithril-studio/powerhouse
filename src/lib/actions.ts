@@ -4,6 +4,7 @@ import { requestPowerConfirmation } from "./powerConfirm";
 import {
   useAppStore,
   type Branch,
+  type BranchLocation,
   type Chat,
   type QueueEntry,
 } from "../store/appStore";
@@ -25,6 +26,7 @@ import {
 import { disposeTerminal, markAutoSpawn } from "./terminalRegistry";
 import { disposeAcp } from "./acpRegistry";
 import { deleteCloudWorkspace, workspaceForBranch } from "./cloud";
+import { vmChatCreate, vmChatRemove } from "./vmChats";
 
 export async function pickAndAddRepo() {
   const dir = await open({ directory: true, multiple: false, title: "Open project" });
@@ -130,8 +132,16 @@ export function createHandoffChat(
   return chat;
 }
 
-/** Creates the worktree + branch row + its first chat. Throws with git's stderr. */
-export async function createBranch(repoId: string, name: string, base?: string) {
+/**
+ * Creates the worktree + branch row + its first chat. Throws with git's stderr.
+ * A cloud branch also gets its own VM; its chat appears once the VM is ready.
+ */
+export async function createBranch(
+  repoId: string,
+  name: string,
+  base?: string,
+  location: BranchLocation = "local",
+) {
   const s = useAppStore.getState();
   const repo = s.repos.find((r) => r.id === repoId);
   if (!repo) throw new Error("repository not found");
@@ -146,9 +156,42 @@ export async function createBranch(repoId: string, name: string, base?: string) 
     worktreePath,
     chats: [],
     activeChatId: null,
+    ...(location === "cloud" ? { location } : {}),
   };
   s.addBranch(repoId, branch);
-  createChat(repoId, branch.id);
+  if (location === "cloud") {
+    s.select(repoId, branch.id);
+    void provisionCloudBranch(repoId, branch.id, base?.trim() || repo.defaultBranch);
+  } else {
+    createChat(repoId, branch.id);
+  }
+}
+
+/** Creates a cloud branch's VM, then its one chat. Safe to call again after a failure. */
+export async function provisionCloudBranch(repoId: string, branchId: string, base?: string) {
+  const s = useAppStore.getState();
+  const repo = s.repos.find((r) => r.id === repoId);
+  const branch = repo?.branches.find((b) => b.id === branchId);
+  if (!repo || !branch || s.vmCreating[branchId]) return;
+  s.setVmCreating(branchId, true);
+  s.setBranchVm(repoId, branchId, null);
+  try {
+    const vm = await vmChatCreate({
+      repoId,
+      repoPath: repo.path,
+      branch: branch.name,
+      base: base ?? repo.defaultBranch,
+      envNames: repo.cloudEnvNames ?? [],
+    });
+    const now = useAppStore.getState();
+    now.setBranchVm(repoId, branchId, vm);
+    const current = now.repos.find((r) => r.id === repoId)?.branches.find((b) => b.id === branchId);
+    if (current && current.chats.length === 0) createChat(repoId, branchId);
+  } catch (err) {
+    useAppStore.getState().setBranchVm(repoId, branchId, null, String(err));
+  } finally {
+    useAppStore.getState().setVmCreating(branchId, false);
+  }
 }
 
 function disposeChat(chatId: string) {
@@ -188,7 +231,7 @@ export async function deleteBranch(repoId: string, branchId: string) {
 
   const confirmed = await requestPowerConfirmation({
     title: "Hey, are you sure?",
-    message: `Delete branch “${branch.name}”?\n\nIts worktree and any uncommitted changes will be removed. The git branch is archived for 3 days, then deleted.${cloud ? ` Its cloud machine ${cloud.vmName} is deleted too.` : ""}`,
+    message: `Delete branch “${branch.name}”?\n\nIts worktree and any uncommitted changes will be removed. The git branch is archived for 3 days, then deleted.${cloud ? ` Its cloud machine ${cloud.vmName} is deleted too.` : ""}${branch.vm ? ` Its VM ${branch.vm} is deleted too, with any work not pushed from it.` : ""}`,
     confirmLabel: "Delete",
     shortcutLabel: "⌘W",
   });
@@ -196,6 +239,7 @@ export async function deleteBranch(repoId: string, branchId: string) {
 
   disposeBranch(branch);
   if (cloud) void deleteCloudWorkspace(cloud.id).catch(() => {});
+  if (branch.vm) void vmChatRemove(branch.vm).catch(() => {});
   try {
     await gitRemoveWorktree(repo.path, branch.worktreePath);
   } catch (err) {

@@ -133,20 +133,22 @@ export function TabBar({ repo, branch }: Props) {
               </div>
             );
           })}
-          <button
-            onClick={() => openChatPicker()}
-            title="New chat (⌘T)"
-            aria-label="New chat"
-            className="flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-          >
-            +
-          </button>
+          {branch.location !== "cloud" && (
+            <button
+              onClick={() => openChatPicker()}
+              title="New chat (⌘T)"
+              aria-label="New chat"
+              className="flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              +
+            </button>
+          )}
         </>
       )}
 
       <span className="flex-1" />
 
-      {repo && branch && (
+      {repo && branch && branch.location !== "cloud" && (
         <>
           <button
             onClick={() => void sendChatToCloud(repo, branch)}

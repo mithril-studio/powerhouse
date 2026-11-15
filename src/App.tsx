@@ -1,4 +1,6 @@
 import { TaskBoardPage } from "./features/tasks/TaskBoardPage";
+import { VmProvisioningPanel } from "./components/VmProvisioningPanel";
+import { isCloudBranch } from "./lib/vmChats";
 import { useEffect } from "react";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -134,7 +136,10 @@ export default function App() {
               path={branch.activeFile}
             />
           )}
-          {hydrated && (!branch || (branch.chats.length === 0 && !branch.activeFile)) && (
+          {hydrated && repo && branch && isCloudBranch(branch) && branch.chats.length === 0 && !branch.activeFile && (
+            <VmProvisioningPanel repo={repo} branch={branch} />
+          )}
+          {hydrated && (!branch || (branch.chats.length === 0 && !branch.activeFile && !isCloudBranch(branch))) && (
             <div className="absolute inset-0 flex items-center justify-center">
               <p className="text-muted-foreground">
                 {repos.length === 0

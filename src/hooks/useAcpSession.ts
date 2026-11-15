@@ -5,6 +5,7 @@ import type {
   RequestPermissionResponse,
   SessionConfigOption,
   SessionModeState,
+  StopReason,
 } from "@agentclientprotocol/sdk";
 import {
   agentModelEnv,
@@ -45,6 +46,15 @@ import type { AgentControlState, ApplyOp } from "../lib/agentControls";
 import type { AcpConnectionState } from "../components/acp/AcpConnectionPanel";
 import type { PendingPermission } from "../components/acp/AcpPermissionCard";
 import { promptBlocks, toRef, type Attachment } from "../lib/attachments";
+import {
+  isCloudBranch,
+  MAX_RECONNECTS,
+  reconnectDelayMs,
+  resumeMeta,
+  vmAgentCommand,
+  vmChatEnsureRunning,
+  VM_REPO_DIR,
+} from "../lib/vmChats";
 import { publishSession, registerSession, type SessionHandle } from "../lib/agentSessionService";
 import { recordTaskTurn } from "../features/tasks/taskStore";
 import type { TurnOutcome } from "../features/tasks/types";
@@ -88,6 +98,14 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
   const [canceling, setCanceling] = useState(false);
   const closingRef = useRef(false);
   const replayingRef = useRef(false);
+  const cloud = isCloudBranch(branch);
+  const setChatAgentSeq = useAppStore((state) => state.setChatAgentSeq);
+  /** Cloud chats: failed reconnects in a row, and the pending retry. */
+  const reconnectsRef = useRef(0);
+  const retryTimerRef = useRef<number | undefined>(undefined);
+  const startRef = useRef<(resume: boolean) => Promise<void>>(async () => {});
+  /** True while a connection is established; a failed start is handled by its catch. */
+  const readyRef = useRef(false);
   const activeRef = useRef(active);
   activeRef.current = active;
 
@@ -169,7 +187,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
         outbound = `[While this chat ran on a cloud machine, the agent there worked on this branch and pushed its commits:\n${recap}\nPull or inspect the branch as needed.]\n\n${outbound}`;
         setChatCloudRecap(repoId, branch.id, chat.id, null);
       }
-      if (memory.enabled && !briefedRef.current) {
+      if (memory.enabled && !cloud && !briefedRef.current) {
         briefedRef.current = true;
         const repoName = useAppStore.getState().repos.find((r) => r.id === repoId)?.name ?? "";
         const project = memoryProjectSlug(repoName);
@@ -198,6 +216,9 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
         );
         checkpoint();
       } catch (cause) {
+        // A cloud agent keeps working when the connection drops; the reconnect
+        // reports how the turn went (ph-agentd's `_ph/turn`).
+        if (cloud && /connection closed/i.test(String(cause))) return;
         finishTurn("error");
         recordTurn("failed", String(cause));
         mutateTranscript((items) =>
@@ -205,7 +226,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
         );
       }
     },
-    [chat.id, branch.id, mutateTranscript, finishTurn, recordTurn, checkpoint, memory, repoId, setChatCloudRecap],
+    [chat.id, branch.id, cloud, mutateTranscript, finishTurn, recordTurn, checkpoint, memory, repoId, setChatCloudRecap],
   );
 
   const start = useCallback(
@@ -215,6 +236,18 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
         setConnection("error");
         return;
       }
+      window.clearTimeout(retryTimerRef.current);
+      if (cloud && profile.id !== "claude") {
+        setError("Cloud chats run Claude for now. Start a local branch to use another agent.");
+        setConnection("error");
+        return;
+      }
+      if (cloud && !branch.vm) {
+        setError("This chat's VM is not ready yet.");
+        setConnection("error");
+        return;
+      }
+      readyRef.current = false;
       closingRef.current = true;
       await disposeAcp(chat.id);
       closingRef.current = false;
@@ -232,7 +265,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
       // carries its context. Memory unavailable is not fatal: the agent still
       // runs, just without the brief and with a dead MCP entry it can ignore.
       briefedRef.current = resume;
-      if (memory.enabled) {
+      if (memory.enabled && !cloud) {
         await memoryServerEnsure(memory).catch((cause) =>
           mutateTranscript((items) =>
             appendSystemMessage(items, `memory: server unavailable (${String(cause)})`),
@@ -241,16 +274,33 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
       }
 
       try {
+        // Only fresh chats: the env var outranks a resumed session's model.
+        const modelEnv = resume ? undefined : agentModelEnv(profile);
+        let command = profile.acpCommand;
+        if (cloud && branch.vm) {
+          await vmChatEnsureRunning(branch.vm);
+          command = await vmAgentCommand(branch.vm, chat.id, modelEnv);
+        }
         const result = await startAcp({
           chatId: chat.id,
           cwd: branch.worktreePath,
-          command: profile.acpCommand,
-          // Only fresh chats: the env var outranks a resumed session's model.
-          env: resume ? undefined : agentModelEnv(profile),
+          sessionCwd: cloud ? VM_REPO_DIR : undefined,
+          command,
+          env: cloud ? undefined : modelEnv,
           resumeSessionId: resume ? chat.agentSessionId : undefined,
-          mcpServers: memoryMcpServers(memory),
-          meta: memorySessionMeta(memory),
+          // The memory server is on this Mac; a VM cannot reach it.
+          mcpServers: cloud ? [] : memoryMcpServers(memory),
+          meta: cloud ? resumeMeta(chat.agentSeq) : memorySessionMeta(memory),
           callbacks: {
+            onSeq: cloud ? (seq) => setChatAgentSeq(repoId, branch.id, chat.id, seq) : undefined,
+            onRemoteTurn: (turn) => {
+              if (turn.running) {
+                setChatActivity(chat.id, "working");
+                return;
+              }
+              finishTurn(activityFromStopReason((turn.stopReason ?? "end_turn") as StopReason));
+              recordTurn(turn.stopReason === "cancelled" ? "cancelled" : turn.stopReason === "end_turn" ? "completed" : "failed");
+            },
             onUpdate: (update) =>
               mutateTranscript((items) =>
                 applyAcpUpdate(items, update, {
@@ -291,6 +341,18 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
               setDiagnostics((current) => `${current}${chunk}`.slice(-4_000)),
             onExit: (code) => {
               if (closingRef.current) return;
+              if (cloud) {
+                if (!readyRef.current) return; // start()'s catch retries
+                readyRef.current = false;
+                // The VM keeps the agent; only the link dropped. Reconnect.
+                setPermission((pending) => {
+                  pending?.resolve({ outcome: { outcome: "cancelled" } });
+                  return null;
+                });
+                setConnection("starting");
+                scheduleReconnect();
+                return;
+              }
               setPermission((pending) => {
                 pending?.resolve({ outcome: { outcome: "cancelled" } });
                 return null;
@@ -330,19 +392,32 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
               : undefined,
         }).catch(() => {});
         if (!result.resumed) mutateTranscript(() => []);
-        setModes(result.modes ?? null);
+        let modes = result.modes ?? null;
+        // The VM is the sandbox: a cloud agent must not stall on a permission
+        // prompt while nobody is watching.
+        if (cloud && !result.resumed && modes?.availableModes.some((m) => m.id === "bypassPermissions")) {
+          await setAcpMode(chat.id, "bypassPermissions");
+          modes = { ...modes, currentModeId: "bypassPermissions" };
+        }
+        reconnectsRef.current = 0;
+        setModes(modes);
         setConfigOptions(result.configOptions ?? []);
         setAgentLabel(result.agentInfo?.name ?? profile.name);
         setSupportsImages(result.capabilities.promptCapabilities?.image === true);
+        readyRef.current = true;
         setConnection("ready");
         setChatStatus(chat.id, "running");
-        void handoffWatchStart(branch.id, branch.worktreePath).catch(() => {});
+        if (!cloud) void handoffWatchStart(branch.id, branch.worktreePath).catch(() => {});
 
         if (!result.resumed && chat.initialPrompt) {
           await submitPrompt(chat.initialPrompt);
         }
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : String(cause);
+        if (cloud && resume && reconnectsRef.current > 0 && reconnectsRef.current < MAX_RECONNECTS) {
+          scheduleReconnect();
+          return;
+        }
         setError(message);
         recordTurn("failed", message);
         setConnection("error");
@@ -356,6 +431,10 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
       chat.initialPrompt,
       branch.id,
       branch.worktreePath,
+      branch.vm,
+      cloud,
+      chat.agentSeq,
+      setChatAgentSeq,
       repoId,
       memory,
       mutateTranscript,
@@ -379,6 +458,33 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
     window.addEventListener("focus", clear, { once: true });
     return () => window.removeEventListener("focus", clear);
   }, [active, activity, chat.id, setChatActivity]);
+
+  startRef.current = start;
+
+  /** Cloud chats: try again with backoff; give up after MAX_RECONNECTS. */
+  function scheduleReconnect() {
+    const attempt = reconnectsRef.current++;
+    if (attempt === 0) {
+      mutateTranscript((items) =>
+        appendSystemMessage(items, "Lost the connection to the VM; the agent keeps working there. Reconnecting…"),
+      );
+    }
+    window.clearTimeout(retryTimerRef.current);
+    retryTimerRef.current = window.setTimeout(
+      () => void startRef.current(true),
+      reconnectDelayMs(attempt),
+    );
+  }
+
+  useEffect(() => () => window.clearTimeout(retryTimerRef.current), []);
+
+  // Cloud chats attach as soon as they are mounted: their agent may be
+  // mid-turn on the VM, and finishing should notify even when not on screen.
+  useEffect(() => {
+    if (cloud && branch.vm && chat.agentSessionId && connection === "idle") {
+      void start(true);
+    }
+  }, [cloud, branch.vm, chat.agentSessionId, connection, start]);
 
   // Chats created this session auto-connect; restored ones wait for Resume/Start.
   useEffect(() => {

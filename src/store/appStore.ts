@@ -43,6 +43,8 @@ export interface Chat {
   /** What happened in the cloud since the local session last saw this chat;
    *  prefixed to the next local prompt, then cleared. */
   cloudRecap?: string;
+  /** Cloud chats: the last `ph/seq` rendered, so a reconnect replays only what was missed. */
+  agentSeq?: number;
 }
 
 export interface AgentProfile {
@@ -110,7 +112,15 @@ export interface Branch {
   activeFile?: string | null;
   /** Set true once this branch lands on main via the queue (green dot). */
   merged?: boolean;
+  /** Where its agent runs. Absent = local (branches from before cloud chats). */
+  location?: BranchLocation;
+  /** Cloud branches: the chat's boxd VM, once created. */
+  vm?: string;
+  /** Cloud branches: why creating the VM failed. */
+  vmError?: string;
 }
+
+export type BranchLocation = "cloud" | "local";
 
 /** Tabs of the toggleable right inspector sidebar. */
 export type RightTab = "files" | "changes" | "diff" | "merge" | "machines";
@@ -225,6 +235,8 @@ interface AppState extends PersistedTree {
   chatStatus: Record<string, ChatStatus>;
   /** chatId → agent turn state; absent means idle or already seen. */
   chatActivity: Record<string, ChatActivity>;
+  /** Cloud branches whose VM is being created right now (not persisted). */
+  vmCreating: Record<string, true>;
   branchModalRepoId: string | null;
   rightSidebarOpen: boolean;
   rightTab: RightTab;
@@ -271,6 +283,8 @@ interface AppState extends PersistedTree {
   openFile: (repoId: string, branchId: string, path: string) => void;
   closeFile: (repoId: string, branchId: string, path: string) => void;
   setChatCloudRecap: (repoId: string, branchId: string, chatId: string, recap: string | null) => void;
+  setBranchVm: (repoId: string, branchId: string, vm: string | null, error?: string) => void;
+  setChatAgentSeq: (repoId: string, branchId: string, chatId: string, seq: number) => void;
   setChatAgentSession: (
     repoId: string,
     branchId: string,
@@ -292,6 +306,7 @@ interface AppState extends PersistedTree {
   select: (repoId: string | null, branchId: string | null) => void;
   setChatStatus: (chatId: string, status: ChatStatus) => void;
   setChatActivity: (chatId: string, activity: ChatActivity | null) => void;
+  setVmCreating: (branchId: string, creating: boolean) => void;
   openBranchModal: (repoId: string) => void;
   closeBranchModal: () => void;
 
@@ -552,6 +567,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   hydrated: false,
   chatStatus: {},
   chatActivity: {},
+  vmCreating: {},
   branchModalRepoId: null,
   rightSidebarOpen: false,
   rightTab: "changes",
@@ -808,6 +824,22 @@ export const useAppStore = create<AppState>((set, get) => ({
       ),
     })),
 
+  setBranchVm: (repoId, branchId, vm, error) =>
+    set((s) => ({
+      repos: updateBranch(s.repos, repoId, branchId, ({ vm: _vm, vmError: _err, ...b }) => ({
+        ...b,
+        ...(vm ? { vm } : {}),
+        ...(error ? { vmError: error } : {}),
+      })),
+    })),
+
+  setChatAgentSeq: (repoId, branchId, chatId, seq) =>
+    set((s) => ({
+      repos: updateChat(s.repos, repoId, branchId, chatId, (c) =>
+        (c.agentSeq ?? 0) >= seq ? c : { ...c, agentSeq: seq },
+      ),
+    })),
+
   setChatAgentSession: (repoId, branchId, chatId, sessionId) =>
     set((s) => ({
       repos: updateChat(s.repos, repoId, branchId, chatId, (c) => ({ ...c, agentSessionId: sessionId })),
@@ -841,6 +873,12 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setChatStatus: (chatId, status) =>
     set((s) => ({ chatStatus: { ...s.chatStatus, [chatId]: status } })),
+
+  setVmCreating: (branchId, creating) =>
+    set((s) => {
+      const { [branchId]: _was, ...rest } = s.vmCreating;
+      return { vmCreating: creating ? { ...rest, [branchId]: true } : rest };
+    }),
 
   setChatActivity: (chatId, activity) =>
     set((s) => ({
@@ -921,7 +959,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({ settings: { ...s.settings, rightSidebarWidth: Math.round(width) } })),
   openRightTab: (tab) => set({ rightSidebarOpen: true, rightTab: tab }),
 
-  openChatPicker: () => set({ chatPickerOpen: true }),
+  // A cloud branch has exactly one chat: it owns the branch's VM.
+  openChatPicker: () =>
+    set((s) => {
+      const branch = s.repos
+        .find((r) => r.id === s.selection.repoId)
+        ?.branches.find((b) => b.id === s.selection.branchId);
+      return branch?.location === "cloud" ? {} : { chatPickerOpen: true };
+    }),
   closeChatPicker: () => set({ chatPickerOpen: false }),
 
   toggleBottomPanel: () => set((s) => ({ bottomPanelOpen: !s.bottomPanelOpen })),

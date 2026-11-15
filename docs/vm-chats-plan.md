@@ -137,9 +137,16 @@ Target for steps 2–5: under 10 s to the first prompt.
 
 0. **Done:** the spike above.
 1. **Done:** `ph-agentd` and its tests (see above).
-2. **Builds:** `powerhouse.toml` parsing, the build flow, build history in Project settings.
-3. **Cloud chats:** the new-chat flow, the `acp_spawn` command for VMs, reconnect on app start and
-   wake, the cap. Done when a chat survives quitting the app mid-turn and shows the full turn on reopen.
+2. **Done:** builds. `src-tauri/src/vm/builds.rs` and `config.rs`, plus Project settings → Cloud VM. A real
+   build of a small repo takes about 22 s. The build puts node's real bin directory on `~/.profile`'s PATH,
+   because global npm tools are otherwise missing from login shells. This repo's `powerhouse.toml` installs
+   Rust and the Tauri libraries and warms the cargo build.
+3. **Done:** cloud chats. `vm/chats.rs`, plus the Cloud/Local switch in New branch (Cloud by default).
+   A chat VM is ready about 5 s after restore. Cloud branches keep a local worktree for now, so the Files,
+   Diff and terminal tabs and the merge queue keep working on local state until slices 4 and 5 make them
+   follow the VM. Chats re-attach on mount, reconnect with backoff when the link drops (a dropped turn is
+   not a failure), and start in bypass-permissions mode. One chat per cloud branch. Known gap: builds and
+   VM creation run over a single `exec`, so closing the laptop mid-build fails the build.
 4. **Workspace backend:** Files, Changes, Diff and terminal for VM branches.
 5. **Merge queue** via push and fetch.
 6. **Delete** handoff (`handoff.rs`, `handoff.ts`, `/handoff` seeding, `pendingHandoff`), the cloud

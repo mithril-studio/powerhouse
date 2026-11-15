@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useAppStore } from "../store/appStore";
+import { useAppStore, type BranchLocation } from "../store/appStore";
 import { createBranch } from "../lib/actions";
 import { gitListBranches, gitSweepBranches } from "../lib/ipc";
 
@@ -28,6 +28,8 @@ export function NewBranchModal() {
   const [branches, setBranches] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** Cloud by default: the agent runs on the branch's own VM. */
+  const [location, setLocation] = useState<BranchLocation>("cloud");
 
   useEffect(() => {
     if (repoId) {
@@ -36,6 +38,7 @@ export function NewBranchModal() {
       setBranches([]);
       setError(null);
       setBusy(false);
+      setLocation("cloud");
       requestAnimationFrame(() => {
         inputRef.current?.focus();
         inputRef.current?.select();
@@ -75,7 +78,7 @@ export function NewBranchModal() {
     setBusy(true);
     setError(null);
     try {
-      await createBranch(repoId, branchName, base);
+      await createBranch(repoId, branchName, base, location);
       closeBranchModal();
     } catch (err) {
       setError(String(err));
@@ -93,8 +96,24 @@ export function NewBranchModal() {
         className="pi-card w-96 p-4"
       >
         <p className="mb-1 font-medium">New branch</p>
+        <div role="radiogroup" aria-label="Where the agent runs" className="mb-2 flex gap-1 rounded-lg bg-input/60 p-0.5 text-xs">
+          {(["cloud", "local"] as const).map((l) => (
+            <button
+              key={l}
+              role="radio"
+              aria-checked={location === l}
+              onClick={() => setLocation(l)}
+              disabled={busy}
+              className={`h-7 flex-1 rounded-md ${location === l ? "bg-background font-medium text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              {l === "cloud" ? "Cloud" : "Local"}
+            </button>
+          ))}
+        </div>
         <p className="mb-3 text-xs text-muted-foreground">
-          New worktree in {repo.name}
+          {location === "cloud"
+            ? `Runs on its own VM from ${repo.name}'s VM image, and keeps going while your Mac sleeps.`
+            : `New worktree in ${repo.name}; the agent runs on this Mac.`}
         </p>
         <input
           ref={inputRef}

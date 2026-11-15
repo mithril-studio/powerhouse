@@ -1,4 +1,4 @@
-//! Tauri commands for VM image builds.
+//! Tauri commands for VM image builds and cloud chat VMs.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
 
 use super::builds::{self, BuildRequest, BuildStore, RepoBuilds, VmBuild};
+use super::chats::{self, CreateRequest};
 use super::config::VmConfig;
 use crate::cloud::secrets::{Keychain, SecretStore};
 use crate::cloud::transport::{Boxd, BoxdCli};
@@ -16,16 +17,68 @@ pub struct VmManager {
     pub builds: Arc<Mutex<BuildStore>>,
     pub boxd: Arc<dyn Boxd>,
     pub secrets: Arc<dyn SecretStore>,
+    /// Absolute path of the boxd CLI, for commands the chat pane spawns.
+    pub boxd_bin: String,
 }
 
 impl Default for VmManager {
     fn default() -> Self {
+        let cli = BoxdCli::default();
         Self {
             builds: Arc::new(Mutex::new(BuildStore::open(BuildStore::default_path()))),
-            boxd: Arc::new(BoxdCli::default()),
+            boxd_bin: cli.binary.clone(),
+            boxd: Arc::new(cli),
             secrets: Arc::new(Keychain),
         }
     }
+}
+
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())?
+}
+
+/// Creates the chat's VM from the project's active image and checks out its
+/// branch (seconds). Returns the VM name.
+#[tauri::command]
+pub async fn vm_chat_create(state: State<'_, VmManager>, req: CreateRequest) -> Result<String, String> {
+    let (boxd, secrets, builds) = (state.boxd.clone(), state.secrets.clone(), state.builds.clone());
+    blocking(move || {
+        let deps = chats::Deps {
+            boxd: boxd.as_ref(),
+            secrets: secrets.as_ref(),
+            github_fallback: crate::github::token(),
+            builds: &builds,
+            git_user: git_user(&req.repo_path),
+        };
+        chats::create(&deps, &req)
+    })
+    .await
+}
+
+/// Wakes the VM if needed. Called before every attach.
+#[tauri::command]
+pub async fn vm_chat_ensure_running(state: State<'_, VmManager>, vm: String) -> Result<(), String> {
+    let boxd = state.boxd.clone();
+    blocking(move || chats::ensure_running(boxd.as_ref(), &vm)).await
+}
+
+#[tauri::command]
+pub async fn vm_chat_remove(state: State<'_, VmManager>, vm: String) -> Result<(), String> {
+    let boxd = state.boxd.clone();
+    blocking(move || chats::remove(boxd.as_ref(), &vm)).await
+}
+
+/// The command line `acp_spawn` runs to reach the chat's agent on its VM.
+#[tauri::command]
+pub fn vm_agent_command(
+    state: State<VmManager>,
+    vm: String,
+    chat_id: String,
+    env: Option<std::collections::HashMap<String, String>>,
+) -> Result<String, String> {
+    let mut env: Vec<(String, String)> = env.unwrap_or_default().into_iter().collect();
+    env.sort();
+    chats::agent_command(&state.boxd_bin, &vm, &chat_id, &env)
 }
 
 /// The identity commits on a VM are made with: the repo's local git identity.
