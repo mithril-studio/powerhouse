@@ -58,5 +58,12 @@ export function reconnectDelayMs(n: number): number {
   return [1_000, 2_000, 5_000, 10_000][n] ?? 30_000;
 }
 
+/**
+ * A cloud chat that is off screen with no turn running lets go of its VM
+ * after this long, so boxd can suspend the VM (an attached connection keeps it
+ * awake). Opening the chat reattaches, which wakes the VM in about a second.
+ */
+export const PARK_AFTER_MS = 10 * 60_000;
+
 /** Give up after this many failed reconnects in a row; the user can retry. */
 export const MAX_RECONNECTS = 8;

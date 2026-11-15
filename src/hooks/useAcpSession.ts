@@ -49,6 +49,7 @@ import { mirrorCloudBranch } from "../lib/actions";
 import {
   isCloudBranch,
   MAX_RECONNECTS,
+  PARK_AFTER_MS,
   reconnectDelayMs,
   resumeMeta,
   vmAgentCommand,
@@ -103,6 +104,8 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
   const startRef = useRef<(resume: boolean) => Promise<void>>(async () => {});
   /** True while a connection is established; a failed start is handled by its catch. */
   const readyRef = useRef(false);
+  /** Cloud chats: let go of the VM while idle off screen; reattach when shown. */
+  const parkedRef = useRef(false);
   const activeRef = useRef(active);
   activeRef.current = active;
 
@@ -231,11 +234,16 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
         return;
       }
       if (cloud && !branch.vm) {
-        setError("This chat's VM is not ready yet.");
+        setError(
+          branch.merged
+            ? "This branch was merged, so its VM was deleted. Start a new cloud branch to keep going."
+            : "This chat's VM is not ready yet.",
+        );
         setConnection("error");
         return;
       }
       readyRef.current = false;
+      parkedRef.current = false;
       closingRef.current = true;
       await disposeAcp(chat.id);
       closingRef.current = false;
@@ -412,6 +420,7 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
       branch.id,
       branch.worktreePath,
       branch.vm,
+      branch.merged,
       cloud,
       chat.agentSeq,
       setChatAgentSeq,
@@ -460,11 +469,28 @@ export function useAcpSession({ repoId, branch, chat, active }: Params) {
 
   // Cloud chats attach as soon as they are mounted: their agent may be
   // mid-turn on the VM, and finishing should notify even when not on screen.
+  // A parked chat waits until it is shown again.
   useEffect(() => {
-    if (cloud && branch.vm && chat.agentSessionId && connection === "idle") {
+    if (cloud && branch.vm && chat.agentSessionId && connection === "idle" && (active || !parkedRef.current)) {
       void start(true);
     }
-  }, [cloud, branch.vm, chat.agentSessionId, connection, start]);
+  }, [cloud, branch.vm, chat.agentSessionId, connection, active, start]);
+
+  // Park an idle cloud chat that is off screen, so its VM can suspend.
+  useEffect(() => {
+    if (!cloud || connection !== "ready" || busy || active) return;
+    const timer = window.setTimeout(() => {
+      parkedRef.current = true;
+      readyRef.current = false;
+      closingRef.current = true;
+      void disposeAcp(chat.id).finally(() => {
+        closingRef.current = false;
+        setConnection("idle");
+        setChatStatus(chat.id, "idle");
+      });
+    }, PARK_AFTER_MS);
+    return () => window.clearTimeout(timer);
+  }, [cloud, connection, busy, active, chat.id, setChatStatus]);
 
   // Chats created this session auto-connect; restored ones wait for Resume/Start.
   useEffect(() => {

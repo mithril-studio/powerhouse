@@ -32,6 +32,10 @@
 //   client that resumes gets every unanswered one again.
 // - One client at a time: a new connection replaces the current one.
 // - When the agent exits, serve exits with its code and removes the socket.
+// - While any turn runs, serve makes a small outbound request every minute:
+//   boxd suspends a VM after a stretch of idle network, and a silent build
+//   inside a turn must not count as idle. `PH_AGENTD_KEEPALIVE_URL` overrides
+//   the target; an empty value disables it.
 
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -44,6 +48,8 @@ const SEQ = "ph/seq";
 const FROM_SEQ = "ph/fromSeq";
 const TURN = "_ph/turn";
 const ATTACH_WAIT_MS = 15_000;
+const KEEPALIVE_MS = 60_000;
+const KEEPALIVE_URL = process.env.PH_AGENTD_KEEPALIVE_URL ?? "https://boxd.sh";
 
 function parseArgs(argv) {
   const [command, ...rest] = argv;
@@ -95,6 +101,12 @@ export class Relay {
     this.seq = 0;
     this.sessions = new Map(); // sessionId -> { modes, configOptions, models, prompt }
     this.held = new Map(); // agent request id -> msg
+  }
+
+  /** Whether any session has a turn in flight. */
+  busy() {
+    for (const s of this.sessions.values()) if (s.prompt !== null) return true;
+    return false;
   }
 
   attach(send) {
@@ -354,6 +366,12 @@ async function serve(opts) {
   agent.stdin.on("error", () => {});
 
   const relay = new Relay((msg) => agent.stdin.write(JSON.stringify(msg) + "\n"));
+  if (KEEPALIVE_URL) {
+    setInterval(() => {
+      if (!relay.busy()) return;
+      fetch(KEEPALIVE_URL, { method: "HEAD", signal: AbortSignal.timeout(10_000) }).catch(() => {});
+    }, KEEPALIVE_MS).unref();
+  }
   readLines(agent.stdout, (msg) => relay.fromAgent(msg));
 
   let current = null; // the attached socket

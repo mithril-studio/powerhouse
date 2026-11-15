@@ -12,6 +12,10 @@ use crate::cloud::transport::{Boxd, NewOpts};
 
 pub const CHAT_PREFIX: &str = "ph-c-";
 pub const MAX_CHAT_VMS: usize = 5;
+/// boxd suspends a chat VM after this much idle network (memory kept; any
+/// `exec` wakes it in about a second). A running turn is never idle:
+/// ph-agentd pings while one runs, and an attached app holds a connection.
+pub const AUTO_SUSPEND_SECS: u32 = 600;
 const STEP_TIMEOUT: Duration = Duration::from_secs(120);
 const SETUP_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 
@@ -72,7 +76,7 @@ pub fn create(deps: &Deps, req: &CreateRequest) -> Result<String, String> {
 
     // A VM with this name is a leftover: git branch names are unique per repo.
     let _ = deps.boxd.machine_remove(&vm);
-    let opts = NewOpts { from_snapshot: Some(snapshot), auto_suspend_secs: Some(0), ..Default::default() };
+    let opts = NewOpts { from_snapshot: Some(snapshot), auto_suspend_secs: Some(AUTO_SUSPEND_SECS), ..Default::default() };
     deps.boxd.machine_new_with(&vm, &opts).map_err(|e| e.to_string())?;
     match prepare(deps, req, &vm) {
         Ok(()) => Ok(vm),
@@ -89,6 +93,8 @@ fn prepare(deps: &Deps, req: &CreateRequest, vm: &str) -> Result<(), String> {
         .map_err(|_| "The repository has no `origin` remote.".to_string())?;
     let remote_url = crate::cloud::workspace::https_remote(&origin)
         .ok_or_else(|| format!("The VM needs a GitHub-style remote; `origin` is {origin}."))?;
+    // The image may predate the current ph-agentd; chats always run this one.
+    remote::upload(deps.boxd, vm, AGENTD_PATH, remote::AGENTD_SOURCE.as_bytes())?;
     remote::upload_env(
         deps.boxd,
         deps.secrets,
@@ -168,13 +174,19 @@ pub fn agent_command(boxd_bin: &str, vm: &str, chat_id: &str, env: &[(String, St
     Ok(shell_words::join(argv))
 }
 
-/// Starts the VM when boxd reports it anything but running, and waits for it.
+/// Makes sure the next `exec` reaches the VM. A suspended (standby) or paused
+/// VM wakes on `exec` by itself; a stopped or hibernated one is started.
 pub fn ensure_running(boxd: &dyn Boxd, vm: &str) -> Result<(), String> {
     let status = boxd.machine_get(vm).map_err(|e| e.to_string())?.status;
-    if status != "running" {
-        let _ = boxd.machine_start(vm);
+    if wakes_on_exec(&status) {
+        return Ok(());
     }
+    let _ = boxd.machine_start(vm);
     remote::wait_running(boxd, vm)
+}
+
+pub fn wakes_on_exec(status: &str) -> bool {
+    matches!(status, "running" | "standby" | "suspended" | "paused")
 }
 
 /// Destroys a chat VM. Only `ph-c-…` names.
@@ -296,7 +308,8 @@ mod tests {
         assert_eq!(vm, vm_name("r1", "swift-comet"));
         assert!(vm.starts_with("ph-c-swift-comet-"));
         let calls = fake.calls.lock().unwrap().clone();
-        assert!(calls.contains(&format!("new {vm} from=Some(\"ph-app-b1\") suspend=Some(0)")), "{calls:#?}");
+        assert!(calls.contains(&format!("new {vm} from=Some(\"ph-app-b1\") suspend=Some({AUTO_SUSPEND_SECS})")), "{calls:#?}");
+        assert!(calls.iter().any(|c| c == "cp /home/boxd/.ph/ph-agentd.mjs"), "{calls:#?}");
         let pos = |n: &str| calls.iter().position(|c| c.contains(n)).unwrap_or_else(|| panic!("no {n} in {calls:#?}"));
         assert!(pos("cp /home/boxd/.ph/env") < pos("checkout -q --no-track -B swift-comet origin/test"));
         assert!(pos("checkout -q") < pos("pnpm install"));
@@ -446,6 +459,12 @@ mod tests {
         assert_eq!(branch.trim(), "e2e-chat");
         assert_eq!(done.pointer("/result/stopReason").and_then(|s| s.as_str()), Some("end_turn"), "{done}");
         assert!(text.contains("PONG"), "{text}");
+    }
+
+    #[test]
+    fn standby_and_paused_vms_wake_on_exec_but_stopped_ones_are_started() {
+        assert!(wakes_on_exec("standby") && wakes_on_exec("running") && wakes_on_exec("paused"));
+        assert!(!wakes_on_exec("stopped") && !wakes_on_exec("hibernated"));
     }
 
     #[test]

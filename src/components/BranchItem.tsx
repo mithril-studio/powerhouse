@@ -70,6 +70,8 @@ export function BranchItem({ repo, branch }: Props) {
               ? "Creating this branch's VM…"
               : branch.vm
                 ? `Runs on ${branch.vm}`
+                : branch.merged
+                  ? "Merged; its VM was deleted"
                 : branch.vmError
                   ? `No VM: ${branch.vmError}`
                   : "No VM yet"

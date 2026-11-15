@@ -164,7 +164,16 @@ Target for steps 2–5: under 10 s to the first prompt.
    (`src-tauri/src/vm/settings.rs`), the boxd transport, secrets and VM git helpers (`src-tauri/src/cloud/`),
    the Machines tab. "Also write `.env`" now applies to cloud chat VMs. Saved chats lose their old cloud
    result cards and recaps when loaded.
-7. **Lifecycle:** idle pause and hibernate, archive on merge, cleanup of old VMs.
+7. **Done:** lifecycle. Measured on real VMs first: an idle VM with boxd auto-suspend goes to `standby`
+   with its memory kept (a running process is frozen, not killed), any `exec` wakes it in about a second,
+   an attached `exec` connection keeps it awake, and outbound traffic every 30 s keeps it running.
+   Chat VMs are now created with a 10-minute auto-suspend. `ph-agentd` makes a small outbound request
+   every minute while a turn runs, so a silent build is never suspended mid-turn. An off-screen cloud
+   chat with no turn running lets go of its VM after 10 minutes (parked), so the VM can suspend; opening
+   the chat reattaches. Waking skips `machine start` for standby VMs. A merged cloud branch has its VM and
+   mirror ref deleted after the queue reports the merge; the chat keeps its transcript. Every new chat VM
+   gets the current `ph-agentd`, whatever image it came from. No one-time cleanup of old cloud workspace
+   VMs: the Machines tab lists and deletes any stray `ph-` machine.
 
 ## Open questions
 

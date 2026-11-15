@@ -37,7 +37,7 @@ function attachProcess(chat = "c1", agent = [process.execPath, FAKE]) {
   return spawn(
     process.execPath,
     [AGENTD, "attach", "--chat", chat, "--spawn", "detached", "--", ...agent],
-    { env: { ...process.env, PH_AGENTD_DIR: root }, stdio: ["pipe", "pipe", "pipe"] },
+    { env: { ...process.env, PH_AGENTD_DIR: root, PH_AGENTD_KEEPALIVE_URL: "" }, stdio: ["pipe", "pipe", "pipe"] },
   );
 }
 
@@ -318,6 +318,22 @@ describe("ph-agentd", () => {
     const texts = [...a.updates, ...b.updates].map((u) => u.update.content.text);
     expect(texts).toEqual(Array.from({ length: 10 }, (_, i) => String(i + 1)));
     expect(b.turns[0]).toMatchObject({ sessionId, running: true });
+  });
+});
+
+describe("Relay.busy", () => {
+  it("is true only while a turn is in flight", async () => {
+    const { Relay } = await import("../ph-agentd.mjs");
+    const toAgent = [];
+    const relay = new Relay((m) => toAgent.push(m));
+    const link = relay.attach(() => {});
+    link.receive({ jsonrpc: "2.0", id: 0, method: "session/new", params: {} });
+    relay.fromAgent({ jsonrpc: "2.0", id: toAgent[0].id, result: { sessionId: "s1" } });
+    expect(relay.busy()).toBe(false);
+    link.receive({ jsonrpc: "2.0", id: 1, method: "session/prompt", params: { sessionId: "s1", prompt: [] } });
+    expect(relay.busy()).toBe(true);
+    relay.fromAgent({ jsonrpc: "2.0", id: toAgent[1].id, result: { stopReason: "end_turn" } });
+    expect(relay.busy()).toBe(false);
   });
 });
 

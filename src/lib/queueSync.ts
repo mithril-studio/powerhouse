@@ -5,6 +5,7 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useAppStore, type QueueEntry } from "../store/appStore";
 import { queueState } from "./ipc";
+import { retireMergedVms } from "./actions";
 
 const subscriptions = new Map<string, UnlistenFn>();
 
@@ -14,12 +15,14 @@ async function subscribe(repoId: string) {
   subscriptions.set(repoId, () => {});
   const unlisten = await listen<QueueEntry[]>(`queue-update-${repoId}`, (e) => {
     useAppStore.getState().setQueueEntries(repoId, e.payload);
+    retireMergedVms(repoId);
   });
   subscriptions.set(repoId, unlisten);
   // Initial resync (covers entries enqueued before this listener attached).
   try {
     const entries = await queueState(repoId);
     useAppStore.getState().setQueueEntries(repoId, entries);
+    retireMergedVms(repoId);
   } catch {
     // engine has no queue for this repo yet — nothing to resync
   }

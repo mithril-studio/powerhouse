@@ -176,6 +176,29 @@ export function mirrorCloudBranch(repoId: string, branchId: string): Promise<voi
   return run;
 }
 
+const retiring = new Set<string>();
+
+/**
+ * A merged cloud branch is done: its work is pushed and landed. Delete its VM
+ * and mirror ref so it stops costing anything; the chat keeps its transcript.
+ */
+export function retireMergedVms(repoId: string) {
+  const repo = useAppStore.getState().repos.find((r) => r.id === repoId);
+  for (const branch of repo?.branches ?? []) {
+    if (!branch.merged || !branch.vm || retiring.has(branch.id)) continue;
+    const vm = branch.vm;
+    retiring.add(branch.id);
+    for (const chat of branch.chats) void disposeAcp(chat.id);
+    void vmChatRemove(vm)
+      .then(() => {
+        useAppStore.getState().setBranchVm(repoId, branch.id, null);
+        void vmChatDropMirror(repo!.path, branch.name).catch(() => {});
+      })
+      .catch(() => {}) // still listed in the Machines tab; retried on the next sync
+      .finally(() => retiring.delete(branch.id));
+  }
+}
+
 /** Creates a cloud branch's VM, then its one chat. Safe to call again after a failure. */
 export async function provisionCloudBranch(repoId: string, branchId: string, base?: string) {
   const s = useAppStore.getState();
