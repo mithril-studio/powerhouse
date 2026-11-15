@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { useAppStore, type BranchLocation } from "../store/appStore";
 import { createBranch } from "../lib/actions";
 import { gitListBranches, gitSweepBranches } from "../lib/ipc";
+import { Dialog, Kbd } from "./ui/dialog";
+import { ChevronDownIcon } from "./ui/icons";
+import { Segmented } from "./ui/page";
 
 const ADJECTIVES = [
   "amber", "bold", "calm", "crisp", "deft", "eager", "fleet", "keen",
@@ -87,86 +90,72 @@ export function NewBranchModal() {
   };
 
   return (
-    <div
-      className="absolute inset-0 z-50 flex items-start justify-center bg-background/60 pt-32"
-      onMouseDown={() => closeBranchModal()}
-    >
-      <div
-        onMouseDown={(e) => e.stopPropagation()}
-        className="pi-card w-96 p-4"
-      >
-        <p className="mb-1 font-medium">New branch</p>
-        <div role="radiogroup" aria-label="Where the agent runs" className="mb-2 flex gap-1 rounded-lg bg-input/60 p-0.5 text-xs">
-          {(["cloud", "local"] as const).map((l) => (
-            <button
-              key={l}
-              role="radio"
-              aria-checked={location === l}
-              onClick={() => setLocation(l)}
-              disabled={busy}
-              className={`h-7 flex-1 rounded-md ${location === l ? "bg-background font-medium text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
-            >
-              {l === "cloud" ? "Cloud" : "Local"}
-            </button>
-          ))}
-        </div>
-        <p className="mb-3 text-xs text-muted-foreground">
+    <Dialog title="New branch" onClose={closeBranchModal} busy={busy}>
+      <div className="ph-dialog-body">
+        <Segmented
+          label="Where the agent runs"
+          value={location}
+          onChange={setLocation}
+          disabled={busy}
+          options={[
+            { value: "cloud", label: "Cloud" },
+            { value: "local", label: "Local" },
+          ]}
+        />
+        <p className="ph-dialog-note mb-4">
           {location === "cloud"
             ? `Runs on its own VM from ${repo.name}'s VM image, and keeps going while your Mac sleeps.`
             : `New worktree in ${repo.name}; the agent runs on this Mac.`}
         </p>
-        <input
-          ref={inputRef}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") void submit();
-            if (e.key === "Escape") closeBranchModal();
-          }}
-          disabled={busy}
-          spellCheck={false}
-          className="h-8 w-full rounded-lg border border-input bg-background px-2.5 font-mono text-xs outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
-        />
-        <label className="mt-3 block text-xs text-muted-foreground">
-          Base branch
+        <label className="ph-field">
+          Branch name
+          <input
+            ref={inputRef}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void submit();
+            }}
+            disabled={busy}
+            spellCheck={false}
+            className="ph-input font-mono"
+          />
         </label>
-        <select
-          value={base}
-          onChange={(e) => setBase(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") closeBranchModal();
-          }}
-          disabled={busy}
-          className="mt-1 h-8 w-full rounded-lg border border-input bg-background px-2.5 font-mono text-xs outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
-        >
-          {baseOptions.map((b) => (
-            <option key={b} value={b}>
-              {b}
-              {b === repo.defaultBranch ? " (default)" : ""}
-            </option>
-          ))}
-        </select>
-        {error && (
-          <p className="mt-2 max-h-24 select-text overflow-y-auto whitespace-pre-wrap font-mono text-xs text-destructive">
-            {error}
-          </p>
-        )}
-        <div className="mt-3 flex justify-end gap-2">
-          <button
-            onClick={() => closeBranchModal()}
-            className="h-8 rounded-lg px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={() => void submit()}
-            disabled={busy || !name.trim()}
-            className="pi-btn pi-btn-primary h-8 px-4 font-medium focus-visible:ring-3 focus-visible:ring-ring/50"
-          >
-            {busy ? "Creating…" : "Create"}
-          </button>
-        </div>
+        <label className="ph-field">
+          Base branch
+          <span className="ph-select ph-select-block">
+            <select
+              value={base}
+              onChange={(e) => setBase(e.target.value)}
+              disabled={busy}
+              className="font-mono"
+            >
+              {baseOptions.map((b) => (
+                <option key={b} value={b}>
+                  {b}
+                  {b === repo.defaultBranch ? " (default)" : ""}
+                </option>
+              ))}
+            </select>
+            <ChevronDownIcon className="size-3.5" />
+          </span>
+        </label>
+        {error && <p className="ph-dialog-error font-mono">{error}</p>}
       </div>
-    </div>
+      <footer className="ph-dialog-foot">
+        <button type="button" onClick={() => closeBranchModal()} disabled={busy} className="ph-btn ph-btn-ghost">
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={() => void submit()}
+          disabled={busy || !name.trim()}
+          className="ph-btn ph-btn-primary"
+        >
+          {busy ? "Creating…" : "Create"}
+          {!busy && <Kbd>↵</Kbd>}
+        </button>
+      </footer>
+    </Dialog>
   );
 }

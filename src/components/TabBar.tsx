@@ -11,6 +11,7 @@ import {
 } from "../lib/cloud";
 import { ActivityDot } from "./ActivityDot";
 import { FileIcon } from "./RightSidebar";
+import { CloseIcon, PlusIcon } from "./ui/icons";
 
 interface Props {
   repo: Repo | null;
@@ -61,15 +62,9 @@ export function TabBar({ repo, branch }: Props) {
   const notReady = !cloudLocked && readiness !== null && !readiness.ready;
 
   return (
-    <div
-      data-tauri-drag-region
-      className="flex h-11 shrink-0 items-center gap-1 border-b border-border bg-card px-2"
-    >
+    <div data-tauri-drag-region className="ph-tabbar">
       {repo && branch && (
         <>
-          <span className="mr-2 max-w-48 truncate pl-1 font-mono text-xs text-muted-foreground">
-            {repo.name}/{branch.name}
-          </span>
           {branch.chats.map((chat) => {
             const active = chat.id === branch.activeChatId && !branch.activeFile;
             const agent = resolveAgent(settings, chat.agentId);
@@ -77,18 +72,13 @@ export function TabBar({ repo, branch }: Props) {
             return (
               <div
                 key={chat.id}
+                data-active={active}
                 onClick={() => setActiveChat(repo.id, branch.id, chat.id)}
-                className={`group flex h-11 items-center gap-2 border-b-2 pl-3 pr-1 ${
-                  active
-                    ? "border-accent-brand text-foreground"
-                    : "border-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground"
-                }`}
+                className="ph-tab"
               >
                 {activity && <ActivityDot activity={activity} />}
-                <span className="max-w-32 truncate">{chat.title}</span>
-                <span className="max-w-20 truncate text-[10px] text-muted-foreground/60">
-                  {agent.name}
-                </span>
+                <span className="max-w-40 truncate">{chat.title}</span>
+                <span className="ph-tab-meta max-w-24 truncate">{agent.name}</span>
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
@@ -96,9 +86,9 @@ export function TabBar({ repo, branch }: Props) {
                   }}
                   title="Close chat (⌘W)"
                   aria-label={`Close ${chat.title}`}
-                  className="flex size-5 items-center justify-center rounded-sm text-transparent hover:bg-input group-hover:text-muted-foreground hover:!text-foreground"
+                  className="ph-tab-close"
                 >
-                  ×
+                  <CloseIcon className="size-3" />
                 </button>
               </div>
             );
@@ -109,16 +99,13 @@ export function TabBar({ repo, branch }: Props) {
             return (
               <div
                 key={path}
+                data-active={active}
                 onClick={() => openFile(repo.id, branch.id, path)}
                 title={path}
-                className={`group flex h-11 items-center gap-2 border-b-2 pl-3 pr-1 ${
-                  active
-                    ? "border-accent-brand text-foreground"
-                    : "border-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground"
-                }`}
+                className="ph-tab"
               >
                 <FileIcon />
-                <span className="max-w-32 truncate font-mono text-xs">{name}</span>
+                <span className="max-w-40 truncate font-mono text-xs">{name}</span>
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
@@ -126,9 +113,9 @@ export function TabBar({ repo, branch }: Props) {
                   }}
                   title="Close file (⌘W)"
                   aria-label={`Close ${name}`}
-                  className="flex size-5 items-center justify-center rounded-sm text-transparent hover:bg-input group-hover:text-muted-foreground hover:!text-foreground"
+                  className="ph-tab-close"
                 >
-                  ×
+                  <CloseIcon className="size-3" />
                 </button>
               </div>
             );
@@ -138,18 +125,18 @@ export function TabBar({ repo, branch }: Props) {
               onClick={() => openChatPicker()}
               title="New chat (⌘T)"
               aria-label="New chat"
-              className="flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="ph-icon-btn ml-1"
             >
-              +
+              <PlusIcon className="size-4" />
             </button>
           )}
         </>
       )}
 
-      <span className="flex-1" />
+      <span data-tauri-drag-region className="flex-1 self-stretch" />
 
       {repo && branch && branch.location !== "cloud" && (
-        <>
+        <div className="mr-1 flex items-center gap-1.5">
           <button
             onClick={() => void sendChatToCloud(repo, branch)}
             disabled={cloudLocked || !branch.activeChatId}
@@ -160,32 +147,24 @@ export function TabBar({ repo, branch }: Props) {
                   ? `Not ready for the cloud:\n${readiness.missing.join("\n")}`
                   : "Continue this chat and its branch on a cloud machine"
             }
-            className="flex h-7 items-center gap-1.5 rounded-md bg-foreground px-2.5 text-xs font-medium text-background hover:bg-foreground/90 disabled:opacity-50"
+            className="ph-btn ph-btn-sm"
           >
-            {cloudBusy && (
-              <span className="size-2 animate-pulse rounded-full bg-background/70" />
-            )}
+            {cloudBusy && <span className="size-1.5 animate-pulse rounded-full bg-accent-brand" />}
             {notReady && (
-              <span aria-label="Not ready" className="size-2 rounded-full bg-amber-500" />
+              <span aria-label="Not ready" className="size-1.5 rounded-full bg-[var(--attention)]" />
             )}
             {cloudBusy ? "In cloud…" : cloudLocked ? "In cloud" : "Cloud"}
           </button>
           <button
             onClick={() => void startHandoff(repo.id, branch.id)}
             disabled={!pending && !activeRunning}
-            title={
-              pending
-                ? "Cancel handoff"
-                : "Hand off this chat to a fresh agent session"
-            }
-            className="flex h-7 items-center gap-1.5 rounded-md bg-foreground px-2.5 text-xs font-medium text-background hover:bg-foreground/90 disabled:opacity-50"
+            title={pending ? "Cancel handoff" : "Hand off this chat to a fresh agent session"}
+            className="ph-btn ph-btn-sm"
           >
-            {pending && (
-              <span className="size-2 animate-pulse rounded-full bg-background/70" />
-            )}
+            {pending && <span className="size-1.5 animate-pulse rounded-full bg-accent-brand" />}
             {pending ? "Handing off…" : "Handoff"}
           </button>
-        </>
+        </div>
       )}
 
       {repo && (
@@ -194,7 +173,7 @@ export function TabBar({ repo, branch }: Props) {
           title="Toggle right sidebar"
           aria-label="Toggle right sidebar"
           aria-pressed={rightSidebarOpen}
-          className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="ph-icon-btn"
         >
           {/* right-panel glyph */}
           <svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden>
