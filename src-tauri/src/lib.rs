@@ -8,6 +8,7 @@ mod memory;
 mod pty;
 mod queue;
 mod telemetry;
+mod vm;
 mod workflow;
 
 use acp::AcpManager;
@@ -39,6 +40,7 @@ pub fn run() {
         .manage(QueueManager::default())
         .manage(HandoffWatchers::default())
         .manage(CloudManager::default())
+        .manage(vm::commands::VmManager::default())
         .manage(MemoryState::default())
         .setup(|app| {
             app.manage(Telemetry::init(app.handle().clone()));
@@ -107,6 +109,10 @@ pub fn run() {
             cloud::machines::machine_start,
             cloud::machines::machine_stop,
             cloud::machines::machine_remove,
+            vm::commands::vm_builds,
+            vm::commands::vm_build_start,
+            vm::commands::vm_build_activate,
+            vm::commands::vm_config,
             telemetry::commands::telemetry_list_runs,
             telemetry::commands::telemetry_run_detail,
             telemetry::commands::telemetry_run_events,

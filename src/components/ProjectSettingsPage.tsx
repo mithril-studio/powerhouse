@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useAppStore, type WorkflowStep } from "../store/appStore";
 import { RepoEnvEditor } from "./RepoEnvEditor";
+import { VmBuildsSection } from "./VmBuildsSection";
 import { Section } from "./SettingsPage";
 import { normalizeWorkflowSteps, validateWorkflowSteps } from "../lib/workflowSteps";
 
@@ -215,6 +216,13 @@ export function ProjectSettingsPage() {
               Save
             </button>
           </div>
+
+          <Section
+            title="Cloud VM"
+            description="The image every new cloud chat starts from: the target branch with its tools and dependencies installed."
+          >
+            <VmBuildsSection repo={repo} />
+          </Section>
 
           <Section
             title="Cloud env vars"
