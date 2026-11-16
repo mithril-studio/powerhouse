@@ -19,9 +19,19 @@ pub const AUTO_SUSPEND_SECS: u32 = 600;
 const STEP_TIMEOUT: Duration = Duration::from_secs(120);
 const SETUP_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 
-/// What the agent process on the VM runs: the uploaded secrets as environment
-/// variables, then the ACP adapter.
-const AGENT_SCRIPT: &str = r#"set -a; [ -f "$HOME/.ph/env" ] && . "$HOME/.ph/env"; set +a; exec claude-agent-acp"#;
+/// What the agent process on the VM runs: the boxd guide dropped, the uploaded
+/// secrets as environment variables, then the ACP adapter.
+///
+/// boxd images link `~/.claude/CLAUDE.md` to boxd's own 45 KB guide to the VM
+/// (its CLI, sharing, desktop, Hermes…), which Claude Code loads into every
+/// session as user instructions: ~12k tokens a chat never needs. The script
+/// drops that link, and only that link, so a CLAUDE.md written on the VM
+/// survives. It runs on every agent start, so VMs from older images and a
+/// link boxd puts back are covered too.
+const AGENT_SCRIPT: &str = concat!(
+    r#"[ "$(readlink "$HOME/.claude/CLAUDE.md")" = "$HOME/.config/boxd/AGENTS.md" ] && rm -f "$HOME/.claude/CLAUDE.md"; "#,
+    r#"set -a; [ -f "$HOME/.ph/env" ] && . "$HOME/.ph/env"; set +a; exec claude-agent-acp"#
+);
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -543,5 +553,51 @@ mod tests {
         assert!(agent_command("boxd", "my-vm", "c", &[]).is_err());
         assert!(agent_command("boxd", "ph-c-x", "bad id;rm", &[]).is_err());
         assert!(remove(&Fake::default(), "specter-ai").is_err());
+    }
+
+    /// Runs the real agent script in a fake home, with a stub adapter on PATH.
+    fn run_agent_script(home: &Path) {
+        let bin = home.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let stub = bin.join("claude-agent-acp");
+        std::fs::write(&stub, "#!/bin/sh\necho adapter-ran\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
+        let out = std::process::Command::new("bash")
+            .args(["-c", AGENT_SCRIPT])
+            .env("HOME", home)
+            .env("PATH", path)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "adapter-ran");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn the_agent_script_drops_the_boxd_guide_but_keeps_a_users_claude_md() {
+        let home = tempfile::tempdir().unwrap();
+        let (claude, boxd) = (home.path().join(".claude"), home.path().join(".config/boxd"));
+        std::fs::create_dir_all(&claude).unwrap();
+        std::fs::create_dir_all(&boxd).unwrap();
+        std::fs::write(boxd.join("AGENTS.md"), "# boxd VM\n").unwrap();
+        let md = claude.join("CLAUDE.md");
+
+        std::os::unix::fs::symlink(boxd.join("AGENTS.md"), &md).unwrap();
+        run_agent_script(home.path());
+        assert!(md.symlink_metadata().is_err(), "the boxd link is gone");
+        assert!(boxd.join("AGENTS.md").exists(), "boxd's own file is untouched");
+
+        std::fs::write(&md, "mine\n").unwrap();
+        run_agent_script(home.path());
+        assert_eq!(std::fs::read_to_string(&md).unwrap(), "mine\n");
+
+        // No CLAUDE.md at all still starts the adapter.
+        std::fs::remove_file(&md).unwrap();
+        run_agent_script(home.path());
     }
 }
