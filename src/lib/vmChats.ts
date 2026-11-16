@@ -21,8 +21,8 @@ export const vmChatRemove = (vm: string) => invoke<void>("vm_chat_remove", { vm 
 export const vmAgentCommand = (vm: string, chatId: string, env?: Record<string, string>) =>
   invoke<string>("vm_agent_command", { vm, chatId, env });
 
-export const vmChatMirror = (vm: string, worktree: string, branch: string) =>
-  invoke<string>("vm_chat_mirror", { vm, worktree, branch });
+export const vmChatMirror = (vm: string, worktree: string, branch: string, base: string) =>
+  invoke<string>("vm_chat_mirror", { vm, worktree, branch, base });
 export const vmChatCommitPush = (vm: string, worktree: string, branch: string, message: string) =>
   invoke<string>("vm_chat_commit_push", { vm, worktree, branch, message });
 export const vmChatRetire = (vm: string, mergedHead: string) =>

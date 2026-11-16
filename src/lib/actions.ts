@@ -161,13 +161,11 @@ export function mirrorCloudBranch(repoId: string, branchId: string): Promise<voi
   const run = (async () => {
     do {
       mirrorAgain.delete(branchId);
-      const branch = useAppStore
-        .getState()
-        .repos.find((r) => r.id === repoId)
-        ?.branches.find((b) => b.id === branchId);
-      if (!branch?.vm) return;
+      const repo = useAppStore.getState().repos.find((r) => r.id === repoId);
+      const branch = repo?.branches.find((b) => b.id === branchId);
+      if (!repo || !branch?.vm) return;
       try {
-        await vmChatMirror(branch.vm, branch.worktreePath, branch.name);
+        await vmChatMirror(branch.vm, branch.worktreePath, branch.name, repo.defaultBranch);
         useAppStore.getState().setVmMirror(branchId);
       } catch (err) {
         useAppStore.getState().setVmMirror(branchId, String(err));

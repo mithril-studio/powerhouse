@@ -149,13 +149,15 @@ Target for steps 2–5: under 10 s to the first prompt.
    VM creation run over a single `exec`, so closing the laptop mid-build fails the build.
 4–5. **Done, as one slice:** the local worktree mirrors the VM (`src-tauri/src/vm/sync.rs`). Instead of
    reading every file over `exec`, the VM snapshots its working tree when a turn ends (new files included,
-   ignored files not, branch and index untouched) and pushes it to `refs/ph/wip/<branch>`. The local
+   ignored files not, branch and index untouched) and bundles it with any unpushed commits; `boxd machine
+   cp` brings the bundle to the Mac, which fetches it into a local-only `refs/ph/wip/<branch>`. Nothing goes
+   to GitHub (the repo may be public). The local
    worktree then takes the VM's HEAD as its tip and the snapshot as its working tree, so Files, Changes and
    Diff work unchanged. The worktree is a read-only mirror: syncing discards local edits there. Changes →
    ↻ pulls a fresh snapshot. **Merge** first commits everything left on the VM (message: the chat's title
    if renamed, else its first prompt line, else the branch name), pushes the branch, resets the local branch
    to it, then runs the normal queue. The Shell tab opens `bash -l` in `~/repo` on the VM; the Agent CLI tab
-   is unavailable on cloud branches. Deleting the branch also deletes its mirror ref. Diff follows the VM at
+   is unavailable on cloud branches. Deleting the branch also deletes its local mirror ref. Diff follows the VM at
    the end of each turn, not live mid-turn.
 6. **Done:** removed handoff (Rust watcher, `/handoff` command seeding, button, store state), the cloud
    workspace flow (`claude -p` turns, polling, result cards, banner, recap, "bring back local", the Cloud
@@ -178,3 +180,11 @@ Target for steps 2–5: under 10 s to the first prompt.
 ## Open questions
 
 - v1 cloud chats are Claude only (decided 2026-11-15). pi and other agents can follow later.
+
+## Security rules (2026-11-16)
+
+- Cloud agents run without permission prompts, so a VM only ever gets a GitHub token from Settings → Cloud
+  (Keychain `github_token[:owner[/repo]]`), meant to be fine-grained and limited to the repos Powerhouse may
+  push to. There is no fallback to the GitHub sign-in: without a token, builds and chat VMs refuse to start.
+- The agent's uncommitted work never leaves boxd and this Mac: the mirror travels VM → Mac as a git bundle.
+  The only push to GitHub is the branch itself, at Merge.

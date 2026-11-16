@@ -609,7 +609,7 @@ function CloudSection() {
             </button>
           </div>
           <p className="text-muted-foreground">
-            Kept in your macOS Keychain and written to each cloud machine's ~/.ph/env, outside the repo. Without a GitHub token here, your GitHub connection is used.
+            Kept in your macOS Keychain and written to each cloud machine's ~/.ph/env, outside the repo. Required for cloud chats: they never use your GitHub sign-in. Cloud agents run without permission prompts, so give this token only the repos Powerhouse may push to.
           </p>
         </div>
       </div>

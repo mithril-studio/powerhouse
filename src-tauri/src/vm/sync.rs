@@ -3,12 +3,15 @@
 //!
 //! - Mirror (after each turn): the VM commits its working tree (untracked
 //!   files included, ignored ones not) to a throwaway commit on top of HEAD,
-//!   without touching the branch or its index, and pushes it to
-//!   `refs/ph/wip/<branch>`. The local worktree then takes the VM's HEAD as its
-//!   branch tip and that snapshot as its working tree, so committed work shows
-//!   as commits and uncommitted work as changes.
+//!   without touching the branch or its index, and packs it into a git bundle
+//!   with every commit not yet on the base branch. `boxd machine cp` brings
+//!   the bundle to this Mac, which fetches it into the local-only
+//!   `refs/ph/wip/<branch>`. The agent's uncommitted work never goes to
+//!   GitHub. The local worktree then takes the VM's HEAD as its branch tip
+//!   and the snapshot as its working tree, so committed work shows as
+//!   commits and uncommitted work as changes.
 //! - Commit and push (before a merge): everything on the VM is committed and
-//!   the branch pushed; the local branch is reset to it.
+//!   the branch pushed; the local branch is reset to it. This is the only push.
 //!
 //! The local worktree of a cloud branch is a read-only mirror: syncing
 //! discards local edits there.
@@ -29,8 +32,13 @@ fn q(s: &str) -> String {
     shell_words::quote(s).into_owned()
 }
 
-/// Snapshots the VM's working tree and pushes it. Prints `<snapshot> <head>`.
-pub fn snapshot_script(branch: &str) -> String {
+/// Where the VM writes the mirror bundle.
+pub const BUNDLE_PATH: &str = "/home/boxd/.ph/mirror.bundle";
+
+/// Snapshots the VM's working tree into a bundle at `out`. Incremental (only
+/// commits since the merge-base with `origin/<base>`) unless `full`. Prints
+/// `<snapshot> <head>`.
+pub fn bundle_script(base: &str, full: bool, out: &str) -> String {
     format!(
         r#"set -e; cd {REPO_DIR}
 tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
@@ -39,10 +47,49 @@ GIT_INDEX_FILE="$tmp" git add -A
 tree="$(GIT_INDEX_FILE="$tmp" git write-tree)"
 head="$(git rev-parse HEAD)"
 snap="$(git commit-tree "$tree" -p "$head" -m 'Powerhouse mirror snapshot')"
-git push -q -f origin "$snap:{wip}"
+git update-ref refs/ph/mirror "$snap"
+out={out}; mkdir -p "$(dirname "$out")"; rm -f "$out"
+since=""
+{since_line}
+if [ -n "$since" ]; then git bundle create -q "$out" refs/ph/mirror "^$since"; else git bundle create -q "$out" refs/ph/mirror; fi
 echo "$snap $head""#,
-        wip = q(&wip_ref(branch)),
+        out = q(out),
+        since_line = if full {
+            String::new()
+        } else {
+            format!("since=\"$(git merge-base HEAD {} 2>/dev/null || true)\"", q(&format!("origin/{base}")))
+        },
     )
+}
+
+/// Fetches the bundle's snapshot into the local-only `refs/ph/wip/<branch>`.
+fn fetch_bundle(worktree: &Path, bundle: &Path, branch: &str) -> Result<(), String> {
+    let wip = wip_ref(branch);
+    crate::git::git(worktree, &["fetch", "-q", &bundle.to_string_lossy(), &format!("+refs/ph/mirror:{wip}")]).map(|_| ())
+}
+
+/// Fetches an incremental bundle, falling back to a full one when this repo
+/// lacks the commit it builds on. `make(full)` produces a bundle and returns
+/// its path and the `<snapshot> <head>` line.
+fn fetch_with_fallback(
+    worktree: &Path,
+    branch: &str,
+    mut make: impl FnMut(bool) -> Result<(std::path::PathBuf, String), String>,
+) -> Result<(String, String), String> {
+    let (path, line) = make(false)?;
+    let line = match fetch_bundle(worktree, &path, branch) {
+        Ok(()) => line,
+        Err(_) => {
+            let (path, line) = make(true)?;
+            fetch_bundle(worktree, &path, branch)?;
+            line
+        }
+    };
+    let mut parts = line.split_whitespace();
+    match (parts.next(), parts.next()) {
+        (Some(s), Some(h)) if is_sha(s) && is_sha(h) => Ok((s.to_string(), h.to_string())),
+        _ => Err(format!("unexpected snapshot output: {line}")),
+    }
 }
 
 /// Commits everything on the VM (when anything changed) and pushes the
@@ -102,17 +149,19 @@ pub fn apply_locally(worktree: &Path, head: &str, snapshot: &str) -> Result<(), 
     Ok(())
 }
 
-/// Mirrors the VM into the local worktree. Returns the snapshot commit.
-pub fn mirror(boxd: &dyn Boxd, vm: &str, worktree: &Path, branch: &str) -> Result<String, String> {
+/// Mirrors the VM into the local worktree, VM to Mac only. Returns the
+/// snapshot commit.
+pub fn mirror(boxd: &dyn Boxd, vm: &str, worktree: &Path, branch: &str, base: &str) -> Result<String, String> {
     ensure_mirror_target(worktree, branch)?;
-    let out = exec_ok(boxd, vm, &snapshot_script(branch), SYNC_TIMEOUT)?;
-    let mut parts = last_line(&out).split_whitespace();
-    let (snapshot, head) = match (parts.next(), parts.next()) {
-        (Some(s), Some(h)) if is_sha(s) && is_sha(h) => (s.to_string(), h.to_string()),
-        _ => return Err(format!("unexpected snapshot output: {}", last_line(&out))),
-    };
-    let wip = wip_ref(branch);
-    git_origin(worktree, &["fetch", "-q", "origin", &format!("+{wip}:{wip}")])?;
+    // The incremental bundle builds on a commit of origin/<base>; have it here.
+    let _ = git_origin(worktree, &["fetch", "-q", "origin", &format!("+refs/heads/{base}:refs/remotes/origin/{base}")]);
+    let dir = tempfile::Builder::new().prefix("ph-mirror-").tempdir().map_err(|e| e.to_string())?;
+    let (snapshot, head) = fetch_with_fallback(worktree, branch, |full| {
+        let out = exec_ok(boxd, vm, &bundle_script(base, full, BUNDLE_PATH), SYNC_TIMEOUT)?;
+        let local = dir.path().join(if full { "full.bundle" } else { "mirror.bundle" });
+        boxd.cp_from(vm, BUNDLE_PATH, &local).map_err(|e| e.to_string())?;
+        Ok((local, last_line(&out).to_string()))
+    })?;
     apply_locally(worktree, &head, &snapshot)?;
     Ok(snapshot)
 }
@@ -133,11 +182,9 @@ pub fn commit_and_push(boxd: &dyn Boxd, vm: &str, worktree: &Path, branch: &str,
     Ok(head)
 }
 
-/// Deletes the branch's mirror ref on the remote (best effort, at cleanup).
+/// Deletes the branch's local mirror ref (at cleanup).
 pub fn drop_wip_ref(repo: &Path, branch: &str) {
-    let wip = wip_ref(branch);
-    let _ = git_origin(repo, &["push", "-q", "origin", &format!(":{wip}")]);
-    let _ = crate::git::git(repo, &["update-ref", "-d", &wip]);
+    let _ = crate::git::git(repo, &["update-ref", "-d", &wip_ref(branch)]);
 }
 
 #[cfg(test)]
@@ -176,16 +223,21 @@ mod tests {
         let w = world();
         // On the VM: one commit, then uncommitted edits, a deletion, a new file and an ignored dir.
         sh(&w.vm, "echo two > a.txt && git commit -qam 'agent commit' && echo three >> a.txt && rm b.txt && echo new > c.txt && mkdir -p node_modules && echo x > node_modules/x");
-        let out = run_vm(&w, &snapshot_script("feat"));
-        let mut it = last_line(&out).split_whitespace();
-        let (snap, head) = (it.next().unwrap().to_string(), it.next().unwrap().to_string());
+        let bundle = w.vm.parent().unwrap().join("out").join("mirror.bundle");
+        let (snap, head) = fetch_with_fallback(&w.local, "feat", |full| {
+            let out = run_vm(&w, &bundle_script("main", full, &bundle.to_string_lossy()));
+            assert!(!full, "the local repo has the merge-base: no full bundle needed");
+            Ok((bundle.clone(), last_line(&out).to_string()))
+        })
+        .unwrap();
 
         // The VM's branch, index and files are untouched by the snapshot.
         assert_eq!(sh(&w.vm, "git rev-parse HEAD").trim(), head);
         assert!(sh(&w.vm, "git status --porcelain").contains("?? c.txt"));
+        // Nothing reached the remote: the work went VM → bundle → this repo only.
+        let remote = sh(&w.vm, "git ls-remote origin");
+        assert!(!remote.contains("refs/ph/") && !remote.contains("refs/heads/feat"), "{remote}");
 
-        let wip = wip_ref("feat");
-        crate::git::git(&w.local, &["fetch", "-q", "origin", &format!("+{wip}:{wip}")]).unwrap();
         std::fs::write(w.local.join("stale.txt"), "local junk").unwrap();
         apply_locally(&w.local, &head, &snap).unwrap();
 
@@ -198,6 +250,27 @@ mod tests {
         assert!(!status.contains("stale.txt") && !status.contains("node_modules"), "{status}");
         assert_eq!(std::fs::read_to_string(w.local.join("a.txt")).unwrap(), "two\nthree\n");
         assert_eq!(sh(&w.local, "git diff --cached --name-only").trim(), "", "nothing staged");
+    }
+
+    #[test]
+    fn falls_back_to_a_full_bundle_when_this_repo_lacks_the_fork_point() {
+        let w = world();
+        sh(&w.vm, "echo two > a.txt && git commit -qam 'agent commit'");
+        // A local repo with none of the history: the incremental bundle cannot apply.
+        let empty = w.vm.parent().unwrap().join("empty");
+        sh(w.vm.parent().unwrap(), "git init -q empty");
+        let dir = w.vm.parent().unwrap().join("out2");
+        let mut asked = vec![];
+        let (snap, head) = fetch_with_fallback(&empty, "feat", |full| {
+            asked.push(full);
+            let path = dir.join(if full { "full.bundle" } else { "inc.bundle" });
+            let out = run_vm(&w, &bundle_script("main", full, &path.to_string_lossy()));
+            Ok((path, last_line(&out).to_string()))
+        })
+        .unwrap();
+        assert_eq!(asked, vec![false, true]);
+        assert_eq!(sh(&empty, &format!("git rev-parse {}", wip_ref("feat"))).trim(), snap);
+        assert_eq!(sh(&empty, &format!("git rev-parse {snap}^")).trim(), head);
     }
 
     #[test]
@@ -235,12 +308,18 @@ mod tests {
             exec_ok(&boxd, &vm, "set -e; git init -q --bare ~/origin.git; git clone -q ~/origin.git ~/repo 2>/dev/null; cd ~/repo; \
                 git config user.name V; git config user.email v@v; echo a > a.txt; git add -A; git commit -qm init; \
                 git push -q origin HEAD:refs/heads/main; git checkout -q -b feat; echo b >> a.txt; echo n > new.txt", t)?;
-            let out = exec_ok(&boxd, &vm, &snapshot_script("feat"), t)?;
-            let mut it = last_line(&out).split_whitespace();
-            let snap = it.next().unwrap_or_default().to_string();
-            assert!(is_sha(&snap) && is_sha(it.next().unwrap_or_default()), "{out}");
-            let remote = exec_ok(&boxd, &vm, "git -C ~/origin.git rev-parse refs/ph/wip/feat; git -C ~/repo status --porcelain", t)?;
-            assert!(remote.starts_with(&snap), "{remote}");
+            // The mirror path: bundle on the VM, copied down with boxd, fetched here.
+            let out = exec_ok(&boxd, &vm, &bundle_script("main", false, BUNDLE_PATH), t)?;
+            let line = last_line(&out).to_string();
+            let snap = line.split_whitespace().next().unwrap_or_default().to_string();
+            assert!(is_sha(&snap), "{out}");
+            let here = tempfile::tempdir().map_err(|e| e.to_string())?;
+            let local = here.path().join("m.bundle");
+            boxd.cp_from(&vm, BUNDLE_PATH, &local).map_err(|e| e.to_string())?;
+            let heads = crate::git::git(here.path(), &["bundle", "list-heads", &local.to_string_lossy()])?;
+            assert!(heads.starts_with(&snap), "{heads}");
+            let remote = exec_ok(&boxd, &vm, "git -C ~/origin.git for-each-ref --format='%(refname)'; git -C ~/repo status --porcelain", t)?;
+            assert!(!remote.contains("refs/ph/"), "nothing but the branch reaches origin: {remote}");
             assert!(remote.contains("?? new.txt"), "the VM's own state is untouched: {remote}");
             let pushed = exec_ok(&boxd, &vm, &commit_push_script("feat", "Chat 1: it's \"done\""), t)?;
             let head = last_line(&pushed).to_string();
@@ -268,6 +347,7 @@ mod tests {
     #[test]
     fn scripts_quote_what_they_interpolate() {
         assert!(commit_push_script("feat", "it's `rm -rf`").contains(r#"'it'\''s `rm -rf`'"#));
-        assert!(snapshot_script("a b").contains("'refs/ph/wip/a b'"));
+        assert!(bundle_script("feat/x y", false, BUNDLE_PATH).contains("'origin/feat/x y'"));
+        assert!(!bundle_script("main", true, BUNDLE_PATH).contains("merge-base"));
     }
 }

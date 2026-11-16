@@ -49,7 +49,6 @@ pub fn upload(boxd: &dyn Boxd, vm: &str, remote_path: &str, bytes: &[u8]) -> Res
 pub fn upload_env(
     boxd: &dyn Boxd,
     store: &dyn SecretStore,
-    github_fallback: Option<String>,
     vm: &str,
     repo_id: &str,
     remote_url: &str,
@@ -57,7 +56,7 @@ pub fn upload_env(
 ) -> Result<(), String> {
     exec_ok(boxd, vm, r#"mkdir -p "$HOME/.ph" && chmod 700 "$HOME/.ph""#, Duration::from_secs(60))?;
     let project = secrets::project_env_values(store, repo_id, env_names)?;
-    let env = secrets::workspace_env(store, remote_url, &project, github_fallback)?;
+    let env = secrets::workspace_env(store, remote_url, &project)?;
     upload(boxd, vm, "/home/boxd/.ph/env", secrets::render_env_file(&env)?.as_bytes())
 }
 

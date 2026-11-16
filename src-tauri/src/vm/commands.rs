@@ -55,7 +55,6 @@ pub async fn vm_chat_create(state: State<'_, VmManager>, req: CreateRequest) -> 
         let deps = chats::Deps {
             boxd: boxd.as_ref(),
             secrets: secrets.as_ref(),
-            github_fallback: crate::github::token(),
             builds: &builds,
             git_user: git_user(&req.repo_path),
         };
@@ -134,7 +133,6 @@ pub fn vm_build_start(app: AppHandle, state: State<VmManager>, req: BuildRequest
     let deps = builds::Deps {
         boxd: boxd.as_ref(),
         secrets: secrets.as_ref(),
-        github_fallback: crate::github::token(),
         store: &store,
         notify: &notify,
         git_user: git_user.clone(),
@@ -148,7 +146,6 @@ pub fn vm_build_start(app: AppHandle, state: State<VmManager>, req: BuildRequest
         let deps = builds::Deps {
             boxd: boxd.as_ref(),
             secrets: secrets.as_ref(),
-            github_fallback: crate::github::token(),
             store: &store,
             notify: &notify,
             git_user,
@@ -161,11 +158,17 @@ pub fn vm_build_start(app: AppHandle, state: State<VmManager>, req: BuildRequest
 /// Makes the cloud branch's local worktree mirror its VM (after each turn).
 /// Returns the snapshot commit.
 #[tauri::command]
-pub async fn vm_chat_mirror(state: State<'_, VmManager>, vm: String, worktree: String, branch: String) -> Result<String, String> {
+pub async fn vm_chat_mirror(
+    state: State<'_, VmManager>,
+    vm: String,
+    worktree: String,
+    branch: String,
+    base: String,
+) -> Result<String, String> {
     let (boxd, lock) = (state.boxd.clone(), state.sync_lock(&worktree));
     blocking(move || {
         let _held = lock.lock().unwrap();
-        super::sync::mirror(boxd.as_ref(), &vm, Path::new(&worktree), &branch)
+        super::sync::mirror(boxd.as_ref(), &vm, Path::new(&worktree), &branch, &base)
     })
     .await
 }
@@ -188,7 +191,7 @@ pub async fn vm_chat_commit_push(
     .await
 }
 
-/// Deletes a cloud branch's mirror ref from the remote (cleanup, best effort).
+/// Deletes a cloud branch's local mirror ref (cleanup).
 #[tauri::command]
 pub async fn vm_chat_drop_mirror(repo_path: String, branch: String) -> Result<(), String> {
     blocking(move || {

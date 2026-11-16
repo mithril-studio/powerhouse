@@ -41,7 +41,6 @@ pub struct CreateRequest {
 pub struct Deps<'a> {
     pub boxd: &'a dyn Boxd,
     pub secrets: &'a dyn SecretStore,
-    pub github_fallback: Option<String>,
     pub builds: &'a std::sync::Mutex<BuildStore>,
     pub git_user: (String, String),
 }
@@ -102,7 +101,6 @@ fn prepare(deps: &Deps, req: &CreateRequest, vm: &str) -> Result<(), String> {
     remote::upload_env(
         deps.boxd,
         deps.secrets,
-        deps.github_fallback.clone(),
         vm,
         &req.repo_id,
         &remote_url,
@@ -322,7 +320,7 @@ mod tests {
         let secrets = MemoryStore::default();
         secrets.set(crate::cloud::secrets::CLAUDE_OAUTH, "c").unwrap();
         secrets.set("github_token", "g").unwrap();
-        let deps = Deps { boxd: fake, secrets: &secrets, github_fallback: None, builds, git_user: ("Me".into(), "me@x".into()) };
+        let deps = Deps { boxd: fake, secrets: &secrets, builds, git_user: ("Me".into(), "me@x".into()) };
         create(
             &deps,
             &CreateRequest {
@@ -412,7 +410,6 @@ mod tests {
         let bdeps = crate::vm::builds::Deps {
             boxd: &boxd,
             secrets: &secrets,
-            github_fallback: None,
             store: &builds,
             notify: &notify,
             git_user: ("E2E".into(), "e2e@x".into()),
@@ -428,7 +425,7 @@ mod tests {
         let built = crate::vm::builds::run(&bdeps, &req, b);
         assert_eq!(built.status, BuildStatus::Ready, "{}", built.log);
 
-        let deps = Deps { boxd: &boxd, secrets: &secrets, github_fallback: None, builds: &builds, git_user: ("E2E".into(), "e2e@x".into()) };
+        let deps = Deps { boxd: &boxd, secrets: &secrets, builds: &builds, git_user: ("E2E".into(), "e2e@x".into()) };
         let started = std::time::Instant::now();
         let created = create(
             &deps,

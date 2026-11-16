@@ -209,7 +209,6 @@ pub struct BuildRequest {
 pub struct Deps<'a> {
     pub boxd: &'a dyn Boxd,
     pub secrets: &'a dyn SecretStore,
-    pub github_fallback: Option<String>,
     pub store: &'a std::sync::Mutex<BuildStore>,
     pub notify: &'a dyn Fn(&VmBuild),
     /// Git identity for commits made on chat VMs.
@@ -334,7 +333,6 @@ fn steps(r: &mut Run, req: &BuildRequest, vm: &str) -> Result<(), String> {
     remote::upload_env(
         boxd,
         r.deps.secrets,
-        r.deps.github_fallback.clone(),
         vm,
         &req.repo_id,
         &remote_url,
@@ -518,7 +516,6 @@ mod tests {
         let deps = Deps {
             boxd: fake,
             secrets: &secrets,
-            github_fallback: None,
             store,
             notify: &notify,
             git_user: ("Me".into(), "me@x".into()),
@@ -678,7 +675,6 @@ mod tests {
         let deps = Deps {
             boxd: &boxd,
             secrets: &secrets,
-            github_fallback: None,
             store: &store,
             notify: &notify,
             git_user: ("E2E".into(), "e2e@x".into()),

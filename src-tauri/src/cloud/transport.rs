@@ -97,6 +97,10 @@ pub trait Boxd: Send + Sync {
         }
         Err(TransportError::Other("machine_new_with is not supported here".into()))
     }
+    /// Copies `remote_path` on the VM to `local` on this Mac.
+    fn cp_from(&self, _vm: &str, _remote_path: &str, _local: &Path) -> TResult<()> {
+        Err(TransportError::Other("cp_from is not supported here".into()))
+    }
     /// Saves a running machine's memory and disk as snapshot `name` (owned).
     fn snapshot_save(&self, _vm: &str, _name: &str) -> TResult<()> {
         Err(TransportError::Other("snapshot_save is not supported here".into()))
@@ -317,6 +321,16 @@ impl Boxd for BoxdCli {
         let argv: Vec<&str> = args.iter().map(String::as_str).collect();
         let v = self.json(&argv, Duration::from_secs(300))?;
         Self::machine_from_create(v, name)
+    }
+
+    fn cp_from(&self, vm: &str, remote_path: &str, local: &Path) -> TResult<()> {
+        let src = format!("{vm}:{remote_path}");
+        let dest = local.to_string_lossy().to_string();
+        let (_, stderr, code) = self.run(&["machine", "cp", &src, &dest, "--json"], Duration::from_secs(300))?;
+        if code != 0 {
+            return Err(TransportError::Other(format!("cp from {vm} failed: {}", stderr.trim())));
+        }
+        Ok(())
     }
 
     fn snapshot_save(&self, vm: &str, name: &str) -> TResult<()> {
