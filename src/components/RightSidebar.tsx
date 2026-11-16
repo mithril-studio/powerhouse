@@ -14,14 +14,12 @@ import {
 import { DiffView } from "./DiffView";
 import { mirrorCloudBranch } from "../lib/actions";
 import { QueuePane } from "./QueuePane";
-import { MachinesPane } from "./MachinesPane";
+import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon, RefreshIcon } from "./ui/icons";
 
 const TABS: { id: RightTab; label: string }[] = [
-  { id: "files", label: "Files" },
   { id: "changes", label: "Changes" },
-  { id: "diff", label: "Diff" },
   { id: "merge", label: "Merge" },
-  { id: "machines", label: "Machines" },
+  { id: "files", label: "Files" },
 ];
 
 function statusColor(status: string) {
@@ -127,21 +125,20 @@ function TreeRows({
         const open = expanded.has(child.path);
         return (
           <div key={child.path}>
-            <div
+            <button
+              type="button"
               onClick={() => (isDir ? toggle(child.path) : onOpenFile(child.path))}
-              style={{ paddingLeft: `${depth * 12 + 8}px` }}
-              className={`flex h-7 cursor-default items-center gap-1.5 rounded-md pr-1.5 ${
-                child.path === activePath
-                  ? "bg-muted text-foreground"
-                  : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
-              }`}
+              aria-expanded={isDir ? open : undefined}
+              aria-current={child.path === activePath}
+              style={{ paddingLeft: `${depth * 12 + 6}px` }}
+              className="ph-row gap-1.5"
             >
-              <span className="w-3 shrink-0 text-center text-[9px] text-muted-foreground">
-                {isDir ? (open ? "▾" : "▸") : ""}
+              <span className="flex w-3 shrink-0 justify-center text-muted-foreground">
+                {isDir && (open ? <ChevronDownIcon className="size-3" /> : <ChevronRightIcon className="size-3" />)}
               </span>
               {isDir ? <FolderIcon open={open} /> : <FileIcon />}
               <span className="min-w-0 flex-1 truncate font-mono text-xs">{child.name}</span>
-            </div>
+            </button>
             {isDir && open && (
               <TreeRows
                 node={child}
@@ -183,13 +180,9 @@ function FilesTab({ repo, branch }: { repo: Repo; branch: Branch }) {
     });
 
   return (
-    <div className="h-full overflow-y-auto px-1.5 py-1.5">
-      {error && (
-        <p className="select-text px-1.5 py-2 font-mono text-xs text-destructive">{error}</p>
-      )}
-      {!error && files.length === 0 && (
-        <p className="px-1.5 py-2 text-xs text-muted-foreground">No files.</p>
-      )}
+    <div className="h-full overflow-y-auto px-1.5 py-2">
+      {error && <p className="ph-panel-error">{error}</p>}
+      {!error && files.length === 0 && <p className="ph-panel-note px-1.5 pt-1">No files.</p>}
       <TreeRows
         node={tree}
         depth={0}
@@ -202,108 +195,98 @@ function FilesTab({ repo, branch }: { repo: Repo; branch: Branch }) {
   );
 }
 
-function ChangesTab({
-  repo,
-  branch,
-  onOpenDiff,
-}: {
-  repo: Repo;
-  branch: Branch;
-  onOpenDiff: (path: string) => void;
-}) {
+/** Changed files vs the target branch; picking one shows its diff in place. */
+function ChangesTab({ repo, branch }: { repo: Repo; branch: Branch }) {
   const [files, setFiles] = useState<ChangedFile[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
 
   const mirror = useAppStore((s) => s.vmMirror[branch.id]);
+  const [refreshing, setRefreshing] = useState(false);
   const load = useCallback(() => {
     setError(null);
-    gitChangedFiles(branch.worktreePath, repo.defaultBranch)
+    return gitChangedFiles(branch.worktreePath, repo.defaultBranch)
       .then(setFiles)
       .catch((e) => setError(String(e)));
   }, [branch.worktreePath, repo.defaultBranch]);
 
-  useEffect(() => load(), [load, mirror?.at]);
+  useEffect(() => void load(), [load, mirror?.at]);
 
   /** Cloud branches: refresh pulls the VM's latest state first. */
   const refresh = useCallback(() => {
-    if (branch.vm) void mirrorCloudBranch(repo.id, branch.id);
-    else load();
+    setRefreshing(true);
+    void (branch.vm ? mirrorCloudBranch(repo.id, branch.id) : load()).finally(() => setRefreshing(false));
   }, [branch.vm, branch.id, repo.id, load]);
+
+  if (selected) {
+    return <FileDiff repo={repo} branch={branch} path={selected} onBack={() => setSelected(null)} />;
+  }
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-8 shrink-0 items-center gap-2 px-2">
-        <span className="flex-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          {files.length} changed
+      <div className="ph-panel-head">
+        <span className="ph-section-label">
+          {files.length} {files.length === 1 ? "file" : "files"} changed vs{" "}
+          <span className="font-mono">{repo.defaultBranch}</span>
         </span>
         <button
+          type="button"
           onClick={refresh}
+          disabled={refreshing}
           title={branch.vm ? "Refresh from the VM" : "Refresh"}
-          className="flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+          aria-label={branch.vm ? "Refresh from the VM" : "Refresh changes"}
+          className="ph-icon-btn"
         >
-          ↻
+          <RefreshIcon className="size-3.5" />
         </button>
       </div>
+      {branch.vm && !mirror?.error && (
+        <p className="ph-panel-note">
+          {mirror
+            ? `From ${branch.vm}, as of ${new Date(mirror.at).toLocaleTimeString()}`
+            : `From ${branch.vm} after the next turn`}
+        </p>
+      )}
+      {mirror?.error && <p className="ph-panel-error">Could not mirror the VM: {mirror.error}</p>}
+      {error && <p className="ph-panel-error">{error}</p>}
       <div className="flex-1 overflow-y-auto px-1.5 pb-2">
-        {branch.vm && (
-          <p className="px-1.5 pb-1 text-[11px] text-muted-foreground">
-            {mirror?.error
-              ? null
-              : mirror
-                ? `From ${branch.vm}, as of ${new Date(mirror.at).toLocaleTimeString()}`
-                : `From ${branch.vm} after the next turn`}
-          </p>
-        )}
-        {mirror?.error && (
-          <p className="select-text px-1.5 py-1 font-mono text-xs text-destructive">
-            Could not mirror the VM: {mirror.error}
-          </p>
-        )}
-        {error && (
-          <p className="select-text px-1.5 py-2 font-mono text-xs text-destructive">{error}</p>
-        )}
         {!error && files.length === 0 && (
-          <p className="px-1.5 py-2 text-xs text-muted-foreground">
-            No changes vs {repo.defaultBranch}.
-          </p>
+          <p className="ph-panel-note px-1.5 pt-1">No changes vs {repo.defaultBranch}.</p>
         )}
         {files.map((f) => (
-          <div
+          <button
             key={f.path}
-            onClick={() => onOpenDiff(f.path)}
+            type="button"
+            onClick={() => setSelected(f.path)}
             title={f.path}
-            className="flex h-7 cursor-default items-center gap-2 rounded-md px-1.5 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+            className="ph-row"
           >
-            <span className={`shrink-0 font-mono text-[11px] ${statusColor(f.status)}`}>
-              {f.status}
-            </span>
+            <span className={`w-3 shrink-0 font-mono text-xs ${statusColor(f.status)}`}>{f.status}</span>
             <span className="min-w-0 flex-1 truncate font-mono text-xs" dir="rtl">
               {f.path}
             </span>
-          </div>
+          </button>
         ))}
       </div>
     </div>
   );
 }
 
-function DiffTab({
+function FileDiff({
   repo,
   branch,
   path,
+  onBack,
 }: {
   repo: Repo;
   branch: Branch;
-  path: string | null;
+  path: string;
+  onBack: () => void;
 }) {
   const openFile = useAppStore((s) => s.openFile);
   const [diff, setDiff] = useState("");
 
   useEffect(() => {
-    if (!path) {
-      setDiff("");
-      return;
-    }
     let cancelled = false;
     void gitFileDiff(branch.worktreePath, repo.defaultBranch, path)
       .then((d) => !cancelled && setDiff(d))
@@ -313,26 +296,32 @@ function DiffTab({
     };
   }, [path, branch.worktreePath, repo.defaultBranch]);
 
-  if (!path) {
-    return (
-      <div className="flex h-full items-center justify-center px-4 text-center">
-        <p className="text-sm text-muted-foreground">
-          Pick a file in Changes to see its diff.
-        </p>
-      </div>
-    );
-  }
-
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex h-8 shrink-0 items-center gap-1.5 border-b border-border px-2">
-        <span className="min-w-0 flex-1 truncate font-mono text-xs" dir="rtl">
+    <div
+      className="flex h-full flex-col"
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onBack();
+      }}
+    >
+      <div className="ph-panel-head gap-1 border-b border-border pl-1.5">
+        <button
+          type="button"
+          onClick={onBack}
+          title="Back to changes · esc"
+          aria-label="Back to changes"
+          className="ph-icon-btn flex-none"
+          autoFocus
+        >
+          <ArrowLeftIcon className="size-3.5" />
+        </button>
+        <span className="min-w-0 flex-1 truncate font-mono text-xs" dir="rtl" title={path}>
           {path}
         </span>
         <button
+          type="button"
           onClick={() => openFile(repo.id, branch.id, path)}
           title="Open the whole file as a tab"
-          className="h-6 shrink-0 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="ph-btn ph-btn-ghost h-7 flex-none px-2 text-xs"
         >
           Open file
         </button>
@@ -396,16 +385,7 @@ export function RightSidebar({
 }) {
   const rightTab = useAppStore((s) => s.rightTab);
   const setRightTab = useAppStore((s) => s.setRightTab);
-  const [diffPath, setDiffPath] = useState<string | null>(null);
   const resize = useSidebarWidth();
-
-  // Reset the selected diff file when the branch changes.
-  useEffect(() => setDiffPath(null), [branch?.id]);
-
-  const openDiff = (path: string) => {
-    setDiffPath(path);
-    setRightTab("diff");
-  };
 
   return (
     <aside
@@ -424,26 +404,23 @@ export function RightSidebar({
           resize.dragging ? "bg-accent-brand/40" : ""
         }`}
       />
-      <div className="flex h-11 shrink-0 items-center gap-0.5 border-b border-border px-1.5">
+      <nav aria-label="Branch panel" className="ph-panel-tabs">
         {TABS.map((t) => (
           <button
             key={t.id}
+            type="button"
             onClick={() => setRightTab(t.id)}
-            className={`h-7 flex-1 rounded-md px-1 text-xs ${
-              rightTab === t.id
-                ? "bg-muted text-foreground"
-                : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
-            }`}
+            data-active={rightTab === t.id}
+            aria-current={rightTab === t.id ? "page" : undefined}
+            className="ph-tab"
           >
             {t.label}
           </button>
         ))}
-      </div>
+      </nav>
 
       <div className="min-h-0 flex-1">
-        {rightTab === "machines" ? (
-          <MachinesPane branch={branch} />
-        ) : rightTab === "merge" ? (
+        {rightTab === "merge" ? (
           repo ? (
             <QueuePane repo={repo} branch={branch} />
           ) : (
@@ -453,10 +430,8 @@ export function RightSidebar({
           <Empty>Select a branch.</Empty>
         ) : rightTab === "files" ? (
           <FilesTab key={branch.id} repo={repo} branch={branch} />
-        ) : rightTab === "changes" ? (
-          <ChangesTab key={branch.id} repo={repo} branch={branch} onOpenDiff={openDiff} />
         ) : (
-          <DiffTab repo={repo} branch={branch} path={diffPath} />
+          <ChangesTab key={branch.id} repo={repo} branch={branch} />
         )}
       </div>
     </aside>

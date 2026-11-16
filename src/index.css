@@ -365,4 +365,18 @@
 .ph-tab:hover .ph-tab-close, .ph-tab[data-active=true] .ph-tab-close, .ph-tab-close:focus-visible { color: var(--muted-foreground); }
 .ph-tab-close:hover { background: var(--accent); color: var(--foreground) !important; }
 .ph-icon-btn[aria-pressed=true] { color: var(--foreground); }
+/* Right sidebar: same tab underline as the top bar, quiet section heads, dense rows. */
+.ph-panel-tabs { display: flex; height: 2.75rem; flex-shrink: 0; align-items: stretch; gap: 0.25rem; padding: 0 0.375rem; border-bottom: 1px solid var(--border); }
+.ph-panel-tabs .ph-tab { padding: 0 0.375rem; font-size: 13px; }
+.ph-panel-head { display: flex; height: 2.25rem; flex-shrink: 0; align-items: center; gap: 0.5rem; padding: 0 0.5rem 0 0.75rem; }
+.ph-panel-head > :first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ph-panel-meta { font-size: 12px; color: var(--muted-foreground); white-space: nowrap; }
+.ph-panel-head .ph-icon-btn { width: 1.5rem; height: 1.5rem; }
+.ph-panel-head .ph-icon-btn:disabled svg { animation: ph-spin 0.9s linear infinite; }
+.ph-row { display: flex; width: 100%; height: 1.75rem; align-items: center; gap: 0.5rem; padding: 0 0.375rem; border-radius: 6px; color: var(--muted-foreground); text-align: left; cursor: default; }
+.ph-row:hover { background: var(--accent); color: var(--foreground); }
+.ph-row[aria-current=true] { background: var(--accent); color: var(--foreground); }
+.ph-panel-note { padding: 0 0.75rem 0.5rem; font-size: 12px; line-height: 1.5; color: var(--muted-foreground); }
+.ph-panel-error { padding: 0.25rem 0.75rem 0.5rem; font-family: var(--font-mono); font-size: 12px; color: var(--destructive); overflow-wrap: anywhere; user-select: text; }
 }
+

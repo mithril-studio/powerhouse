@@ -1,14 +1,14 @@
-//! The Machines tab: every boxd machine on the account, with create, start,
-//! stop and delete. Shells are not handled here: the
-//! frontend runs `boxd connect <vm>` in a terminal, which brings its own SSH.
+//! Settings → Cloud → Machines: every boxd machine on the account, with start,
+//! stop and delete. Chats create their own VMs, so there is no create here.
+//! Shells are not handled here: the frontend runs `boxd connect <vm>` in a
+//! terminal, which brings its own SSH.
 //!
 //! Delete stays behind `ensure_owned`, so only `ph-…` machines can go.
 
 use tauri::State;
 
 use crate::vm::commands::VmManager;
-use super::transport::{ensure_owned, Boxd, MachineInfo, OWNED_PREFIX};
-use super::workspace as ws;
+use super::transport::{ensure_owned, Boxd, MachineInfo};
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,28 +41,11 @@ fn check_name(vm: &str) -> Result<(), String> {
     }
 }
 
-/// What the user typed, as a Powerhouse-owned name: trimmed, lowercased, `ph-` added.
-pub fn owned_name(input: &str) -> Result<String, String> {
-    let name = input.trim().to_lowercase();
-    let name = if name.starts_with(OWNED_PREFIX) { name } else { format!("{OWNED_PREFIX}{name}") };
-    check_name(&name)?;
-    ensure_owned(&name).map_err(|e| e.to_string())?;
-    Ok(name)
-}
-
 /// Running machines first, then by name.
 pub fn list(boxd: &dyn Boxd) -> Result<Vec<MachineRow>, String> {
     let mut rows: Vec<MachineRow> = boxd.machine_list().map_err(|e| e.to_string())?.into_iter().map(Into::into).collect();
     rows.sort_by(|a, b| (a.status != "running", &a.name).cmp(&(b.status != "running", &b.name)));
     Ok(rows)
-}
-
-pub fn create(boxd: &dyn Boxd, input: &str) -> Result<MachineRow, String> {
-    let name = owned_name(input)?;
-    if boxd.machine_list().map_err(|e| e.to_string())?.iter().any(|m| m.name == name) {
-        return Err(format!("a machine named `{name}` already exists"));
-    }
-    boxd.machine_new(&name).map(Into::into).map_err(|e| e.to_string())
 }
 
 pub fn start(boxd: &dyn Boxd, vm: &str) -> Result<(), String> {
@@ -92,18 +75,6 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Sen
 pub async fn machines_list(state: State<'_, VmManager>) -> Result<Vec<MachineRow>, String> {
     let boxd = state.boxd.clone();
     blocking(move || list(boxd.as_ref())).await
-}
-
-/// The name a new machine for this branch gets, same as its cloud workspace VM.
-#[tauri::command]
-pub fn machine_suggest_name(branch: String) -> String {
-    ws::vm_name(&branch)
-}
-
-#[tauri::command]
-pub async fn machine_create(state: State<'_, VmManager>, name: String) -> Result<MachineRow, String> {
-    let boxd = state.boxd.clone();
-    blocking(move || create(boxd.as_ref(), &name)).await
 }
 
 #[tauri::command]
@@ -199,26 +170,6 @@ mod tests {
     }
 
     #[test]
-    fn new_machines_are_always_powerhouse_owned() {
-        assert_eq!(owned_name(" Try-Machines ").unwrap(), "ph-try-machines");
-        assert_eq!(owned_name("ph-x").unwrap(), "ph-x");
-        assert!(owned_name("").is_err());
-        assert!(owned_name("ph-").is_err());
-        assert!(owned_name("has space").is_err());
-        assert!(owned_name("--fork=prod").is_err());
-    }
-
-    #[test]
-    fn create_refuses_an_existing_name() {
-        let fake = Fake::with(&[("ph-taken", "running")]);
-        assert!(create(&fake, "taken").unwrap_err().contains("already exists"));
-        let row = create(&fake, "fresh").unwrap();
-        assert_eq!(row.name, "ph-fresh");
-        assert!(row.owned);
-        assert_eq!(fake.calls(), ["new ph-fresh"]);
-    }
-
-    #[test]
     fn start_and_stop_reject_flag_like_names_before_calling_boxd() {
         let fake = Fake::with(&[]);
         assert!(stop(&fake, "--all").is_err());
@@ -237,7 +188,7 @@ mod tests {
         assert_eq!(fake.calls(), ["remove ph-a"]);
     }
 
-    /// Real boxd: the Machines tab's calls on a throwaway `ph-e2e-…` machine.
+    /// Real boxd: the Machines section's calls on a throwaway `ph-e2e-…` machine.
     /// `PH_CLOUD_E2E=1 cargo test machines_on_a_real_vm -- --ignored --nocapture`
     #[test]
     #[ignore]
@@ -259,9 +210,9 @@ mod tests {
         let result = std::panic::catch_unwind(|| {
             let before = list(&boxd).unwrap();
             assert!(!before.is_empty(), "the account has machines");
-            let row = create(&boxd, &vm).unwrap();
+            // Chats create VMs; the tab only lists, starts, stops and deletes them.
+            let row: MachineRow = boxd.machine_new(&vm).unwrap().into();
             assert!(row.owned);
-            assert!(create(&boxd, &vm).unwrap_err().contains("already exists"));
             let status = || list(&boxd).unwrap().into_iter().find(|m| m.name == vm).map(|m| m.status);
             wait_for("running", 300, &|| status().as_deref() == Some("running"));
             stop(&boxd, &vm).unwrap();

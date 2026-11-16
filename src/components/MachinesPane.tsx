@@ -1,41 +1,45 @@
-import { useCallback, useEffect, useState } from "react";
-import { useAppStore, type Branch } from "../store/appStore";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useAppStore } from "../store/appStore";
 import { runInShell } from "../lib/cloud";
 import {
   canStart,
   isRunning,
-  machineCreate,
   machineRemove,
   machineStart,
   machineStop,
-  machineSuggestName,
   machinesList,
   machinesProblem,
   machinesSummary,
   statusTone,
   type MachineRow,
 } from "../lib/machines";
+import { RefreshIcon } from "./ui/icons";
 
 const REFRESH_MS = 15_000;
 
-const action =
-  "h-6 shrink-0 rounded-md border border-border px-1.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40";
-
-const DOT = {
-  on: "bg-green-500",
-  busy: "animate-pulse bg-amber-500",
-  off: "bg-muted-foreground/40",
+const TONE = {
+  on: "tone-running",
+  busy: "tone-review animate-pulse",
+  off: "text-muted-foreground/50",
 };
 
-/** Every boxd machine on the account. Mounted only while the tab is open, so
- *  it polls only then. */
-export function MachinesPane({ branch }: { branch: Branch | null }) {
+/** Settings → Cloud → Machines: every boxd machine on the account. Chats create,
+ *  suspend and retire their own VMs; this is for leftovers and the VM cap.
+ *  Mounted only while the Cloud tab is open, so it polls only then. */
+export function MachinesPane() {
+  const repos = useAppStore((s) => s.repos);
+  const branchId = useAppStore((s) => s.selection.branchId);
   const [rows, setRows] = useState<MachineRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<Record<string, string>>({});
-  const [branchVm, setBranchVm] = useState<string | null>(null);
-  const [creating, setCreating] = useState<string | null>(null);
+
+  /** VM name → the branch whose chat runs on it. */
+  const usedBy = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const repo of repos) for (const b of repo.branches) if (b.vm) map.set(b.vm, `${repo.name} / ${b.name}`);
+    return map;
+  }, [repos]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -55,12 +59,6 @@ export function MachinesPane({ branch }: { branch: Branch | null }) {
     return () => clearInterval(id);
   }, [refresh]);
 
-  const branchName = branch?.name;
-  useEffect(() => {
-    setBranchVm(null);
-    if (branchName) void machineSuggestName(branchName).then(setBranchVm).catch(() => {});
-  }, [branchName]);
-
   /** Runs one row action, shows its label while it runs, then refreshes. */
   const run = async (vm: string, label: string, fn: () => Promise<void>) => {
     setBusy((b) => ({ ...b, [vm]: label }));
@@ -78,46 +76,26 @@ export function MachinesPane({ branch }: { branch: Branch | null }) {
   const problem = machinesProblem(error);
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto px-3 py-3 text-xs">
-      <div className="mb-2 flex items-center gap-2">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Machines</span>
-        <span className="h-px flex-1 bg-border" />
-        {rows && <span className="text-[11px] text-muted-foreground">{machinesSummary(rows)}</span>}
+    <div className="text-[13px]">
+      <div className="mb-2 flex h-7 items-center gap-2">
+        <span className="flex-1 text-xs text-muted-foreground">{rows ? machinesSummary(rows) : "Loading…"}</span>
         <button
+          type="button"
           onClick={() => void refresh()}
           disabled={loading}
           title="Refresh"
           aria-label="Refresh machines"
-          className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-input hover:text-foreground disabled:opacity-40"
+          className="ph-icon-btn disabled:[&_svg]:animate-spin"
         >
-          ↻
-        </button>
-        <button
-          onClick={() => setCreating(creating === null ? (branchVm ?? "ph-") : null)}
-          disabled={problem !== null}
-          className={action}
-        >
-          New
+          <RefreshIcon className="size-3.5" />
         </button>
       </div>
-
-      {creating !== null && (
-        <NewMachine
-          initial={creating}
-          onCancel={() => setCreating(null)}
-          onCreate={async (name) => {
-            await machineCreate(name);
-            setCreating(null);
-            void refresh();
-          }}
-        />
-      )}
 
       {problem === "signed-out" ? (
         <Notice>
           boxd is signed out.{" "}
-          {branch ? (
-            <button onClick={() => runInShell(branch.id, "boxd auth login")} className="underline hover:text-foreground">
+          {branchId ? (
+            <button type="button" onClick={() => runInShell(branchId, "boxd auth login")} className="underline hover:text-foreground">
               Sign in
             </button>
           ) : (
@@ -132,86 +110,105 @@ export function MachinesPane({ branch }: { branch: Branch | null }) {
           The boxd CLI is not installed. Install it from boxd.sh and run <code>boxd auth login</code>.
         </Notice>
       ) : error ? (
-        <p className="mb-2 break-words text-destructive">{error}</p>
+        <p className="mb-2 select-text break-words font-mono text-xs text-destructive">{error}</p>
       ) : null}
 
-      {rows?.length === 0 && <p className="text-muted-foreground">No machines yet.</p>}
-      <ul className="space-y-1">
-        {rows?.map((m) => (
-          <MachineItem
-            key={m.name}
-            machine={m}
-            current={m.name === branchVm}
-            busy={busy[m.name]}
-            run={(label, fn) => void run(m.name, label, fn)}
-          />
-        ))}
-      </ul>
+      {rows?.length === 0 && <p className="text-xs text-muted-foreground">No machines.</p>}
+      {rows && rows.length > 0 && (
+        <ul className="divide-y divide-border rounded-[10px] border border-border">
+          {rows.map((m) => (
+            <MachineItem
+              key={m.name}
+              machine={m}
+              usedBy={usedBy.get(m.name)}
+              busy={busy[m.name]}
+              run={(label, fn) => void run(m.name, label, fn)}
+            />
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
 
 export function MachineItem({
   machine: m,
-  current,
+  usedBy,
   busy,
   run,
 }: {
   machine: MachineRow;
-  current: boolean;
+  /** The branch whose chat runs on this VM; its lifecycle owns delete. */
+  usedBy: string | undefined;
   busy: string | undefined;
   run: (label: string, fn: () => Promise<void>) => void;
 }) {
   const openMachineTerminal = useAppStore((s) => s.openMachineTerminal);
+  const setWorkspaceView = useAppStore((s) => s.setWorkspaceView);
   const [confirming, setConfirming] = useState(false);
   const [typed, setTyped] = useState("");
   const running = isRunning(m.status);
+  const btn = "ph-btn h-7 px-2.5 text-xs";
 
   return (
-    <li className={`rounded-lg border px-2 py-1.5 ${current ? "border-accent-brand/60" : "border-border"}`}>
-      <div className="flex items-center gap-2">
-        <span className={`size-2 shrink-0 rounded-full ${DOT[statusTone(m.status)]}`} aria-hidden />
-        <span className="min-w-0 flex-1 truncate font-mono text-foreground" title={m.url ?? m.name}>
-          {m.name}
-        </span>
-        {current && <span className="text-[10px] text-accent-brand">this branch</span>}
-        <span className="shrink-0 text-[10px] text-muted-foreground">
-          {busy ? `${busy}…` : [m.status, m.size].filter(Boolean).join(" · ")}
-        </span>
-      </div>
-      <div className="mt-1 flex flex-wrap gap-1">
-        <button onClick={() => openMachineTerminal(m.name)} disabled={!!busy} title={`boxd connect ${m.name}`} className={action}>
-          Connect
-        </button>
-        <button
-          onClick={() => void navigator.clipboard.writeText(`ssh ${m.name}.boxd`)}
-          title={`Copy: ssh ${m.name}.boxd`}
-          className={action}
-        >
-          Copy ssh
-        </button>
-        {running ? (
-          <button onClick={() => run("Stopping", () => machineStop(m.name))} disabled={!!busy} className={action}>
-            Stop
-          </button>
-        ) : canStart(m.status) ? (
-          <button onClick={() => run("Starting", () => machineStart(m.name))} disabled={!!busy} className={action}>
-            Start
-          </button>
-        ) : null}
-        {m.owned && (
+    <li className="px-3 py-2.5">
+      <div className="flex items-center gap-2.5">
+        <span className={`ph-dot bg-current ${TONE[statusTone(m.status)]}`} aria-hidden />
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-mono text-xs text-foreground" title={m.url ?? m.name}>
+            {m.name}
+          </div>
+          <div className="truncate text-xs text-muted-foreground">
+            {busy ? `${busy}…` : [m.status, m.size, usedBy && `chat VM for ${usedBy}`].filter(Boolean).join(" · ")}
+          </div>
+        </div>
+        <div className="flex shrink-0 gap-1">
           <button
-            onClick={() => setConfirming((c) => !c)}
+            type="button"
+            onClick={() => {
+              // The terminal opens in the bottom panel of the branch view.
+              setWorkspaceView("home");
+              openMachineTerminal(m.name);
+            }}
             disabled={!!busy}
-            className={`${action} hover:text-destructive`}
+            title={`boxd connect ${m.name}`}
+            className={btn}
           >
-            Delete
+            Connect
           </button>
-        )}
+          <button
+            type="button"
+            onClick={() => void navigator.clipboard.writeText(`ssh ${m.name}.boxd`)}
+            title={`Copy: ssh ${m.name}.boxd`}
+            className={btn}
+          >
+            Copy ssh
+          </button>
+          {running ? (
+            <button type="button" onClick={() => run("Stopping", () => machineStop(m.name))} disabled={!!busy} className={btn}>
+              Stop
+            </button>
+          ) : canStart(m.status) ? (
+            <button type="button" onClick={() => run("Starting", () => machineStart(m.name))} disabled={!!busy} className={btn}>
+              Start
+            </button>
+          ) : null}
+          {m.owned && !usedBy && (
+            <button
+              type="button"
+              onClick={() => setConfirming((c) => !c)}
+              disabled={!!busy}
+              aria-expanded={confirming}
+              className={`${btn} ph-btn-ghost hover:!text-destructive`}
+            >
+              Delete
+            </button>
+          )}
+        </div>
       </div>
       {confirming && (
         <form
-          className="mt-1.5 flex gap-1"
+          className="mt-2 flex gap-1.5 pl-[1.1rem]"
           onSubmit={(e) => {
             e.preventDefault();
             setConfirming(false);
@@ -224,10 +221,11 @@ export function MachineItem({
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
             placeholder={`Type ${m.name} to delete it`}
+            aria-label={`Type ${m.name} to confirm`}
             spellCheck={false}
-            className="h-6 min-w-0 flex-1 rounded-md border border-border bg-background px-1.5 font-mono text-[11px] outline-none focus:border-accent-brand"
+            className="ph-input h-7 min-w-0 flex-1 px-2 font-mono text-xs"
           />
-          <button type="submit" disabled={typed.trim() !== m.name} className={`${action} text-destructive`}>
+          <button type="submit" disabled={typed.trim() !== m.name} className={`${btn} ph-btn-danger`}>
             Delete
           </button>
         </form>
@@ -236,56 +234,6 @@ export function MachineItem({
   );
 }
 
-function NewMachine({
-  initial,
-  onCancel,
-  onCreate,
-}: {
-  initial: string;
-  onCancel: () => void;
-  onCreate: (name: string) => Promise<void>;
-}) {
-  const [name, setName] = useState(initial);
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  return (
-    <form
-      className="mb-3 rounded-lg border border-border p-2"
-      onSubmit={(e) => {
-        e.preventDefault();
-        setPending(true);
-        setError(null);
-        onCreate(name)
-          .catch((err) => setError(String(err)))
-          .finally(() => setPending(false));
-      }}
-    >
-      <div className="flex gap-1">
-        <input
-          autoFocus
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          disabled={pending}
-          spellCheck={false}
-          aria-label="Machine name"
-          className="h-6 min-w-0 flex-1 rounded-md border border-border bg-background px-1.5 font-mono text-[11px] outline-none focus:border-accent-brand"
-        />
-        <button type="submit" disabled={pending || !name.trim()} className={action}>
-          {pending ? "Creating…" : "Create"}
-        </button>
-        <button type="button" onClick={onCancel} disabled={pending} className={action}>
-          Cancel
-        </button>
-      </div>
-      <p className="mt-1 text-[10px] text-muted-foreground">
-        Names start with <code>ph-</code>, so Powerhouse can delete it later. Creating takes up to a minute.
-      </p>
-      {error && <p className="mt-1 break-words text-destructive">{error}</p>}
-    </form>
-  );
-}
-
 function Notice({ children }: { children: React.ReactNode }) {
-  return <p className="mb-2 rounded-lg border border-border bg-card px-2 py-1.5 text-muted-foreground">{children}</p>;
+  return <p className="mb-2 rounded-[10px] border border-border px-3 py-2 text-xs text-muted-foreground">{children}</p>;
 }

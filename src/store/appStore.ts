@@ -7,7 +7,7 @@ import type { AcpTranscriptItem } from "../lib/acpTranscript";
 export type AgentTransport = "acp" | "pty";
 
 /** Which surface the persistent bottom panel is showing. */
-/** `vm:<name>` is a `boxd connect` terminal opened from the Machines tab. */
+/** `vm:<name>` is a `boxd connect` terminal opened from Settings → Cloud → Machines. */
 export type BottomTab = "shell" | "agent" | `vm:${string}`;
 
 /**
@@ -124,7 +124,7 @@ export interface Branch {
 export type BranchLocation = "cloud" | "local";
 
 /** Tabs of the toggleable right inspector sidebar. */
-export type RightTab = "files" | "changes" | "diff" | "merge" | "machines";
+export type RightTab = "changes" | "merge" | "files";
 
 /** A configurable check step. `type` is reserved for future "agent" steps. */
 export interface WorkflowStep {

@@ -88,8 +88,6 @@ pub fn run() {
             vm::settings::cloud_project_env_status,
             vm::settings::cloud_import_env_file,
             cloud::machines::machines_list,
-            cloud::machines::machine_suggest_name,
-            cloud::machines::machine_create,
             cloud::machines::machine_start,
             cloud::machines::machine_stop,
             cloud::machines::machine_remove,

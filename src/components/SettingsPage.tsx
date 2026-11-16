@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { MachinesPane } from "./MachinesPane";
 import { PageHeader, Segmented } from "./ui/page";
 import { TelemetryPage } from "./telemetry/TelemetryPage";
 import { MemoryPage } from "./memory/MemoryPage";
@@ -690,12 +691,20 @@ export function SettingsPage() {
               <MemorySection />
             </Section>
           ) : tab === "Cloud" ? (
-            <Section
-              title="Cloud"
-              description="Credentials and defaults for one-click cloud runs."
-            >
-              <CloudSection />
-            </Section>
+            <>
+              <Section
+                title="Cloud"
+                description="Credentials and defaults for one-click cloud runs."
+              >
+                <CloudSection />
+              </Section>
+              <Section
+                title="Machines"
+                description="Every boxd VM on your account. Chats create and retire their own; stop or delete leftovers here."
+              >
+                <MachinesPane />
+              </Section>
+            </>
           ) : (
             <TelemetryPage embedded />
           )}

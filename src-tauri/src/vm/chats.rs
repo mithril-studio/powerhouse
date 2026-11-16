@@ -76,7 +76,7 @@ pub fn create(deps: &Deps, req: &CreateRequest) -> Result<String, String> {
     // Never replace an existing VM: it may hold work nobody has pushed.
     if deps.boxd.machine_get(&vm).is_ok() {
         return Err(format!(
-            "A VM named {vm} already exists and may hold unpushed work. Delete it in the Machines tab, or delete this branch."
+            "A VM named {vm} already exists and may hold unpushed work. Delete it in Settings → Cloud → Machines, or delete this branch."
         ));
     }
     let opts = NewOpts { from_snapshot: Some(snapshot), auto_suspend_secs: Some(AUTO_SUSPEND_SECS), ..Default::default() };
