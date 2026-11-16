@@ -12,8 +12,7 @@ import {
   type VmConfig,
 } from "../lib/vmBuilds";
 
-const button =
-  "h-8 shrink-0 rounded-lg border border-border px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50";
+const rowButton = "ph-btn ph-btn-ghost h-7 px-2 text-xs";
 
 /**
  * Project settings → Cloud VM: what `powerhouse.toml` says, the build button,
@@ -85,79 +84,80 @@ export function VmBuildsSection({ repo }: { repo: Repo }) {
   }
 
   return (
-    <div className="space-y-3 text-xs">
-      <div className="rounded-lg border border-border px-3 py-2">
-        {configError ? (
-          <p className="text-destructive">{configError}</p>
-        ) : config ? (
-          <dl className="grid grid-cols-[5rem_1fr] gap-x-3 gap-y-1">
-            <dt className="text-muted-foreground">Install</dt>
-            <dd className="truncate font-mono">{config.install ?? "—"}</dd>
-            <dt className="text-muted-foreground">Setup</dt>
-            <dd className="truncate font-mono">{config.setup ?? "from the lockfile"}</dd>
-            <dt className="text-muted-foreground">Size</dt>
-            <dd>{config.vcpu ? `${config.vcpu} vCPU / ${config.vcpu * 4} GB` : "org default"}</dd>
-          </dl>
-        ) : (
-          <p className="text-muted-foreground">Reading powerhouse.toml…</p>
-        )}
-        <p className="mt-2 text-muted-foreground">
-          From <code>powerhouse.toml</code> on <code>{repo.defaultBranch}</code>. Commit changes there, then build.
-        </p>
-      </div>
+    <>
+      {configError ? (
+        <p className="ph-error">{configError}</p>
+      ) : config ? (
+        <dl className="ph-props">
+          <dt>Install</dt>
+          <dd className="font-mono text-xs leading-5">{config.install ?? "—"}</dd>
+          <dt>Setup</dt>
+          <dd className="font-mono text-xs leading-5">{config.setup ?? "from the lockfile"}</dd>
+          <dt>Size</dt>
+          <dd>{config.vcpu ? `${config.vcpu} vCPU / ${config.vcpu * 4} GB` : "org default"}</dd>
+        </dl>
+      ) : (
+        <p className="ph-hint">Reading powerhouse.toml…</p>
+      )}
+      <p className="ph-hint">
+        From <code>powerhouse.toml</code> on <code>{repo.defaultBranch}</code>. Commit changes there, then build.
+      </p>
 
-      <div className="flex items-center gap-2">
-        <button onClick={() => void build()} disabled={!!running} className={button}>
+      <div className="flex items-center gap-3">
+        <button type="button" onClick={() => void build()} disabled={!!running} className="ph-btn">
           {running ? `Building… ${running.step}` : "Build VM image"}
         </button>
-        <p className="min-w-0 flex-1 truncate text-muted-foreground">
-          {active
-            ? `New chats start from build ${active}.`
-            : "No image yet: build one before starting a cloud chat."}
+        <p className="ph-hint min-w-0 flex-1 truncate">
+          {active ? `New chats start from build ${active}.` : "No image yet: build one before starting a cloud chat."}
         </p>
       </div>
-      {error && <p className="text-destructive">{error}</p>}
+      {error && <p className="ph-error">{error}</p>}
 
       {builds.length > 0 && (
-        <ul className="divide-y divide-border rounded-lg border border-border">
+        <ul className="ph-list">
           {builds.map((b) => (
-            <li key={b.number} className="px-3 py-2">
-              <div className="flex items-center gap-2">
-                <span className="font-medium">Build {b.number}</span>
+            <li key={b.number} className="py-1.5 pl-3 pr-1.5">
+              <div className="flex h-7 items-center gap-2.5 text-[13px]">
                 <span
-                  className={`flex items-center gap-1.5 ${
+                  className={`ph-dot bg-current ${
                     b.status === "failed"
                       ? "text-destructive"
                       : b.number === active
                         ? "tone-running"
                         : b.status === "running"
-                          ? "tone-review"
-                          : "text-muted-foreground"
+                          ? "tone-review animate-pulse"
+                          : "text-muted-foreground/50"
                   }`}
-                >
-                  <span className="ph-dot bg-current" aria-hidden="true" />
-                  {b.status === "running" ? b.step : b.number === active ? "Active" : b.status.charAt(0).toUpperCase() + b.status.slice(1)}
-                </span>
-                <span className="font-mono text-muted-foreground">
-                  {b.commit ? `${b.commit.slice(0, 7)} · ` : ""}
-                  {buildDuration(b)}
+                  aria-hidden="true"
+                />
+                <span className="font-medium text-foreground">Build {b.number}</span>
+                <span className={`text-xs ${b.status === "failed" ? "text-destructive" : "text-muted-foreground"}`}>
+                  {[
+                    b.status === "running" ? b.step : b.number === active ? "Active" : b.status.charAt(0).toUpperCase() + b.status.slice(1),
+                    b.commit?.slice(0, 7),
+                    buildDuration(b),
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
                 </span>
                 <span className="flex-1" />
                 {b.status === "ready" && b.number !== active && (
-                  <button onClick={() => void activate(b.number)} className="text-muted-foreground hover:text-foreground">
+                  <button type="button" onClick={() => void activate(b.number)} className={rowButton}>
                     Use this build
                   </button>
                 )}
                 <button
+                  type="button"
                   onClick={() => setOpenLog(openLog === b.number ? null : b.number)}
-                  className="text-muted-foreground hover:text-foreground"
+                  aria-expanded={openLog === b.number}
+                  className={rowButton}
                 >
                   {openLog === b.number ? "Hide log" : "Log"}
                 </button>
               </div>
-              {b.error && <p className="mt-1 text-destructive">{b.error.split("\n")[0]}</p>}
+              {b.error && <p className="ph-error pl-[1.1rem]">{b.error.split("\n")[0]}</p>}
               {openLog === b.number && (
-                <pre className="mt-2 max-h-64 select-text overflow-auto whitespace-pre-wrap rounded-md border border-border bg-background p-2.5 font-mono text-[11px] leading-relaxed">
+                <pre className="mb-1.5 mr-1.5 mt-2 max-h-64 select-text overflow-auto whitespace-pre-wrap rounded-md border border-border bg-background p-2.5 font-mono text-[11px] leading-relaxed">
                   {b.log.trim() || "…"}
                 </pre>
               )}
@@ -165,6 +165,6 @@ export function VmBuildsSection({ repo }: { repo: Repo }) {
           ))}
         </ul>
       )}
-    </div>
+    </>
   );
 }

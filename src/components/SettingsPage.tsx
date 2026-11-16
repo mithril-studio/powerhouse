@@ -36,117 +36,59 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** Where a user fully revokes access — local disconnect can't (no client secret). */
 const GITHUB_APPS_URL = "https://github.com/settings/applications";
 
-/** A section block: left-hand label/description, right-hand controls. */
+/** One settings row: label (and optional live status) left, controls right. */
 export function Section({
   title,
   description,
   children,
 }: {
   title: string;
-  description?: string;
+  description?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
-    <section className="grid grid-cols-[minmax(0,12rem)_1fr] gap-6 border-t border-border py-6 first:border-t-0 first:pt-0">
+    <section className="ph-settings-section">
       <div>
-        <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-        {description && (
-          <p className="mt-1 text-xs text-muted-foreground">{description}</p>
-        )}
+        <h2>{title}</h2>
+        {description && <p>{description}</p>}
       </div>
-      <div className="min-w-0">{children}</div>
+      <div className="ph-settings-stack">{children}</div>
     </section>
   );
 }
 
+/** Dot + word for a stored/missing value, used as a section's live status. */
+function Status({ ok, yes, no }: { ok: boolean | undefined; yes: string; no: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className={`ph-dot ${ok ? "bg-current tone-running" : "ph-dot-ring text-muted-foreground/60"}`} aria-hidden />
+      {ok ? yes : no}
+    </span>
+  );
+}
+
+/** Main → Account: the GitHub sign-in, with the app version as live status. */
 function AccountSection() {
   const github = useAppStore((s) => s.settings.connections.github);
-  const [version, setVersion] = useState<string | null>(null);
-
-  useEffect(() => {
-    void getVersion()
-      .then(setVersion)
-      .catch(() => setVersion(null));
-  }, []);
-
-  const connected = github.status === "connected";
-
-  return (
-    <div className="flex items-center gap-3 rounded-xl border border-border bg-card p-3">
-      {connected && github.avatarUrl ? (
-        <img
-          src={github.avatarUrl}
-          alt=""
-          className="size-10 shrink-0 rounded-full object-cover"
-        />
-      ) : (
-        <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary text-base font-semibold text-primary-foreground">
-          P
-        </div>
-      )}
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-foreground">
-          {connected && github.login ? github.login : "Powerhouse account"}
-        </p>
-        <p className="truncate text-xs text-muted-foreground">
-          {connected
-            ? `Signed in with GitHub as @${github.login}`
-            : "Not signed in"}
-        </p>
-      </div>
-      {version && (
-        <span className="shrink-0 rounded-md bg-muted px-2 py-0.5 font-mono text-[11px] text-muted-foreground">
-          v{version}
-        </span>
-      )}
-    </div>
-  );
-}
-
-function AppearanceSection() {
-  const theme = useAppStore((s) => s.settings.theme);
-  const setTheme = useAppStore((s) => s.setTheme);
-  const options: { value: Theme; label: string }[] = [
-    { value: "dark", label: "Dark" },
-    { value: "light", label: "Light" },
-  ];
-
-  return (
-    <div className="inline-flex rounded-lg border border-border bg-card p-0.5">
-      {options.map((opt) => (
-        <button
-          key={opt.value}
-          onClick={() => setTheme(opt.value)}
-          className={`h-8 rounded-md px-4 text-xs font-medium transition-colors ${
-            theme === opt.value
-              ? "bg-primary text-primary-foreground"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          {opt.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function ConnectionsSection() {
-  const github = useAppStore((s) => s.settings.connections.github);
   const setGithubConnection = useAppStore((s) => s.setGithubConnection);
+  const [version, setVersion] = useState<string | null>(null);
   const [device, setDevice] = useState<DeviceStart | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   // Guards the async poll loop so Cancel / unmount stops it cleanly.
   const activeRef = useRef(false);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    void getVersion()
+      .then(setVersion)
+      .catch(() => setVersion(null));
+    return () => {
       activeRef.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
 
   const { status } = github;
+  const connected = status === "connected";
 
   function finishDisconnected() {
     activeRef.current = false;
@@ -224,94 +166,86 @@ function ConnectionsSection() {
     }
   }
 
-  const dotClass =
-    status === "connected"
-      ? "bg-success"
-      : status === "connecting"
-        ? "bg-primary animate-pulse"
-        : "bg-muted-foreground/40";
-
-  const label =
-    status === "connected"
-      ? github.login
-        ? `Connected as @${github.login}`
-        : "Connected"
-      : status === "connecting"
-        ? "Waiting for authorization…"
-        : "Not connected";
-
   return (
-    <div className="rounded-xl border border-border bg-card p-3">
+    <Section title="Account" description={version ? `Powerhouse v${version}` : undefined}>
       <div className="flex items-center gap-3">
-        <span className={`size-2 shrink-0 rounded-full ${dotClass}`} />
+        {connected && github.avatarUrl ? (
+          <img src={github.avatarUrl} alt="" className="size-8 shrink-0 rounded-full object-cover" />
+        ) : (
+          <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-[13px] font-semibold text-muted-foreground">
+            {connected && github.login ? github.login[0].toUpperCase() : "P"}
+          </div>
+        )}
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium text-foreground">GitHub</p>
-          <p className="truncate text-xs text-muted-foreground">{label}</p>
+          <p className="truncate text-foreground">{connected && github.login ? `@${github.login}` : "Not signed in"}</p>
+          <p className="ph-hint truncate">
+            {connected ? "Signed in with GitHub" : status === "connecting" ? "Waiting for GitHub…" : "Sign in with your GitHub account"}
+          </p>
         </div>
-        {status === "connected" ? (
-          <button
-            onClick={() => void disconnect()}
-            className="h-8 shrink-0 rounded-lg border border-border px-3 text-xs font-medium text-muted-foreground transition-all hover:text-foreground active:translate-y-px"
-          >
+        {connected ? (
+          <button type="button" onClick={() => void disconnect()} className="ph-btn">
             Disconnect
           </button>
         ) : status === "connecting" ? (
-          <button
-            onClick={finishDisconnected}
-            className="h-8 shrink-0 rounded-lg border border-border px-3 text-xs font-medium text-muted-foreground transition-all hover:text-foreground active:translate-y-px"
-          >
+          <button type="button" onClick={finishDisconnected} className="ph-btn">
             Cancel
           </button>
         ) : (
-          <button
-            onClick={() => void connect()}
-            className="h-8 shrink-0 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-all active:translate-y-px focus-visible:ring-3 focus-visible:ring-ring/50"
-          >
-            Connect
+          <button type="button" onClick={() => void connect()} className="ph-btn ph-btn-primary">
+            Sign in with GitHub
           </button>
         )}
       </div>
 
       {status === "connecting" && device && (
-        <div className="mt-3 rounded-lg border border-border bg-background p-3">
-          <p className="text-xs text-muted-foreground">
-            Enter this code at{" "}
-            <button
-              onClick={() => void openUrl(device.verification_uri)}
-              className="font-medium text-foreground underline underline-offset-2"
-            >
-              {device.verification_uri.replace(/^https?:\/\//, "")}
-            </button>
-          </p>
-          <div className="mt-2 flex items-center gap-2">
-            <code className="rounded-md bg-muted px-3 py-1.5 font-mono text-lg tracking-[0.3em] text-foreground">
-              {device.user_code}
-            </code>
-            <button
-              onClick={() => void copyCode()}
-              className="h-8 shrink-0 rounded-lg border border-border px-3 text-xs font-medium text-muted-foreground transition-all hover:text-foreground active:translate-y-px"
-            >
-              {copied ? "Copied" : "Copy"}
-            </button>
+        <div className="ph-list flex items-center gap-3 px-4 py-3">
+          <div className="min-w-0 flex-1">
+            <p className="ph-hint">
+              Enter this code at{" "}
+              <button type="button" onClick={() => void openUrl(device.verification_uri)}>
+                {device.verification_uri.replace(/^https?:\/\//, "")}
+              </button>
+            </p>
+            <code className="mt-1 block font-mono text-lg tracking-[0.3em] text-foreground">{device.user_code}</code>
           </div>
+          <button type="button" onClick={() => void copyCode()} className="ph-btn">
+            {copied ? "Copied" : "Copy code"}
+          </button>
         </div>
       )}
 
-      {status === "connected" && (
-        <p className="mt-2 text-[11px] text-muted-foreground">
+      {connected && (
+        <p className="ph-hint">
           Disconnect removes the local token. To fully revoke access, visit{" "}
-          <button
-            onClick={() => void openUrl(GITHUB_APPS_URL)}
-            className="underline underline-offset-2 hover:text-foreground"
-          >
+          <button type="button" onClick={() => void openUrl(GITHUB_APPS_URL)}>
             GitHub → Applications
           </button>
           .
         </p>
       )}
 
-      {error && <p className="mt-2 text-[11px] text-destructive">{error}</p>}
-    </div>
+      {error && <p className="ph-error">{error}</p>}
+    </Section>
+  );
+}
+
+function AppearanceSection() {
+  const theme = useAppStore((s) => s.settings.theme);
+  const setTheme = useAppStore((s) => s.setTheme);
+  return (
+    <Section title="Appearance">
+      <div>
+        <Segmented<Theme>
+          label="Color theme"
+          value={theme}
+          onChange={setTheme}
+          options={[
+            { value: "dark", label: "Dark" },
+            { value: "light", label: "Light" },
+          ]}
+        />
+      </div>
+    </Section>
   );
 }
 
@@ -347,65 +281,47 @@ function LoginTerminal({ sessionId, command }: { sessionId: string; command: str
   }, [sessionId]);
 
   return (
-    <div className="mt-2 h-56 overflow-hidden rounded-lg border border-border bg-[#0d0e11]">
+    <div className="h-56 overflow-hidden rounded-[var(--radius)] border border-border bg-[#0d0e11] p-1">
       <div ref={containerRef} className="h-full" />
     </div>
   );
 }
 
-function AgentRow({ agent }: { agent: AgentProfile }) {
+/** Agents → one row per agent: its CLI login and the default model. */
+function AgentSection({ agent }: { agent: AgentProfile }) {
   const [open, setOpen] = useState(false);
   const setAgentDefaultModel = useAppStore((s) => s.setAgentDefaultModel);
-  if (!agent.loginCommand && !agent.modelEnvVar) return null;
 
   return (
-    <div className="rounded-xl border border-border bg-card p-3">
-      <div className="flex items-center gap-3">
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium text-foreground">{agent.name}</p>
-          {agent.loginCommand && (
-            <p className="truncate font-mono text-[11px] text-muted-foreground">
-              {agent.loginCommand}
-            </p>
-          )}
-        </div>
-        {agent.loginCommand && (
-          <button
-            onClick={() => setOpen((v) => !v)}
-            className={
-              open
-                ? "h-8 shrink-0 rounded-lg border border-border px-3 text-xs font-medium text-muted-foreground transition-all hover:text-foreground active:translate-y-px"
-                : "h-8 shrink-0 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-all active:translate-y-px focus-visible:ring-3 focus-visible:ring-ring/50"
-            }
-          >
-            {open ? "Close" : "Run login"}
+    <Section title={agent.name}>
+      {agent.loginCommand && (
+        <div className="flex items-center gap-3">
+          <p className="ph-hint min-w-0 flex-1">
+            Sign in by running <code>{agent.loginCommand}</code> in a terminal here.
+          </p>
+          <button type="button" onClick={() => setOpen((v) => !v)} className="ph-btn">
+            {open ? "Close terminal" : "Run login"}
           </button>
-        )}
-      </div>
+        </div>
+      )}
+      {open && agent.loginCommand && <LoginTerminal sessionId={`login-${agent.id}`} command={agent.loginCommand} />}
       {agent.modelEnvVar && (
-        <label className="mt-2 block space-y-1 text-xs">
-          <span className="text-muted-foreground">
-            Default model for new chats (blank = agent default)
-          </span>
+        <label className="ph-field">
+          Default model for new chats
           <input
             value={agent.defaultModel ?? ""}
             onChange={(e) => setAgentDefaultModel(agent.id, e.target.value)}
-            placeholder="e.g. claude-opus-4-8"
+            placeholder="Agent default"
             spellCheck={false}
-            className={`${cloudInput} font-mono`}
+            className="ph-input h-8 font-mono"
           />
         </label>
       )}
-      {open && agent.loginCommand && (
-        <LoginTerminal
-          sessionId={`login-${agent.id}`}
-          command={agent.loginCommand}
-        />
-      )}
-    </div>
+    </Section>
   );
 }
 
+/** Memory → the switch and the Basic Memory server every session shares. */
 function MemorySection() {
   const settings = useAppStore((s) => s.settings);
   const setMemorySettings = useAppStore((s) => s.setMemorySettings);
@@ -426,92 +342,82 @@ function MemorySection() {
   };
 
   const statusText: Record<MemoryServerStatus | "checking", string> = {
-    checking: "checking…",
-    external: "connected",
-    supervised: "local server running (started by Powerhouse)",
-    unreachable: "unreachable",
-    failed: "local server failed to start",
+    checking: "Checking…",
+    external: "Connected",
+    supervised: "Local server running, started by Powerhouse",
+    unreachable: "Unreachable",
+    failed: "Local server failed to start",
   };
+  const healthy = status === "external" || status === "supervised";
 
   return (
-    <div className="space-y-3 text-xs">
-      <div className="rounded-xl border border-border bg-card p-3">
-        <label className="flex items-center gap-2">
+    <>
+      <Section title="Shared memory">
+        <label className="ph-toggle">
           <input
             type="checkbox"
+            className="ph-switch"
             checked={memory.enabled}
             onChange={(e) => patch({ enabled: e.target.checked })}
           />
-          <span className="text-foreground">Give every agent session the shared memory</span>
+          <span>
+            Give every agent session the shared memory
+            <span>
+              Claude Code and Pi get the same Basic Memory server as an MCP tool, plus a brief of relevant notes on
+              the first prompt. Their own memories are switched off so there is exactly one.
+            </span>
+          </span>
         </label>
-        <p className="mt-1 text-muted-foreground">
-          Claude Code and Pi get the same Basic Memory server as an MCP tool, plus a brief of
-          relevant notes on the first prompt. The runtimes' own memories are switched off so
-          there is exactly one.
-        </p>
-      </div>
-      <div className="rounded-xl border border-border bg-card p-3">
-        <p className="mb-2 font-semibold uppercase tracking-wider text-[11px] text-muted-foreground">Server</p>
-        <div className="grid grid-cols-[1fr_minmax(0,14rem)] gap-2">
-          <label className="space-y-1">
-            <span className="text-muted-foreground">MCP endpoint</span>
+      </Section>
+      <Section title="Server">
+        <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,14rem)] gap-3">
+          <label className="ph-field">
+            MCP endpoint
             <input
               value={memory.url}
               onChange={(e) => patch({ url: e.target.value })}
               spellCheck={false}
               placeholder={DEFAULT_MEMORY_SETTINGS.url}
-              className={`${cloudInput} font-mono`}
+              className="ph-input h-8 font-mono"
             />
           </label>
-          <label className="space-y-1">
-            <span className="text-muted-foreground">Bearer token (remote host)</span>
+          <label className="ph-field mt-0">
+            Bearer token (remote host)
             <input
               type="password"
               value={memory.token}
               onChange={(e) => patch({ token: e.target.value })}
-              className={cloudInput}
+              className="ph-input h-8"
             />
           </label>
         </div>
-        <div className="mt-2 flex items-center gap-2">
-          <button type="button" onClick={check} className="pi-btn text-[11px]">
+        <div className="flex items-center gap-3">
+          <button type="button" onClick={check} disabled={status === "checking"} className="ph-btn">
             Check connection
           </button>
           {status && (
-            <span className={status === "external" || status === "supervised" ? "text-muted-foreground" : "text-destructive"}>
+            <span className={`inline-flex items-center gap-1.5 text-xs ${healthy || status === "checking" ? "text-muted-foreground" : "text-destructive"}`}>
+              <span
+                className={`ph-dot bg-current ${healthy ? "tone-running" : status === "checking" ? "animate-pulse" : ""}`}
+                aria-hidden
+              />
               {statusText[status]}
             </span>
           )}
         </div>
-        {error && <p className="mt-1 text-destructive">{error}</p>}
-        <p className="mt-2 text-muted-foreground">
-          A loopback endpoint is started by Powerhouse itself (needs <code>basic-memory</code> on
-          PATH: <code>uv tool install basic-memory</code>). Point it at the memory VM to share one
-          memory across machines. Notes live in <code>~/.powerhouse/memory</code>.
+        {error && <p className="ph-error">{error}</p>}
+        <p className="ph-hint">
+          Powerhouse starts a loopback endpoint itself (needs <code>basic-memory</code> on your PATH:{" "}
+          <code>uv tool install basic-memory</code>). Point it at the memory VM to share one memory across machines.
+          Notes live in <code>~/.powerhouse/memory</code>.
         </p>
-      </div>
-    </div>
+      </Section>
+    </>
   );
 }
 
-function AgentsSection() {
-  const agents = useAppStore((s) => s.settings.agents);
-  const configurable = agents.filter((a) => a.loginCommand || a.modelEnvVar);
-
-  return (
-    <div className="space-y-2">
-      {configurable.map((agent) => (
-        <AgentRow key={agent.id} agent={agent} />
-      ))}
-    </div>
-  );
-}
-
-const cloudInput =
-  "h-8 w-full rounded-lg border border-input bg-background px-2.5 text-xs outline-none focus-visible:ring-3 focus-visible:ring-ring/50";
-
-/** Credentials for cloud workspaces. Everything else is inherited from the
- * chat (agent, model) and the repo (env vars). */
+/** Credentials for cloud chats. Everything else is inherited from the chat
+ * (agent, model) and the repo (env vars). */
 function CloudSection() {
   const branchId = useAppStore((s) => s.selection.branchId);
   const closeSettings = useAppStore((s) => s.closeSettings);
@@ -519,15 +425,21 @@ function CloudSection() {
   const [claudeInput, setClaudeInput] = useState("");
   const [githubInput, setGithubInput] = useState("");
   const [githubScope, setGithubScope] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [claudeError, setClaudeError] = useState<string | null>(null);
+  const [githubError, setGithubError] = useState<string | null>(null);
 
   useEffect(() => {
     void cloudSecretStatus()
       .then(setSecrets)
-      .catch((e) => setError(String(e)));
+      .catch((e) => setClaudeError(String(e)));
   }, []);
 
-  const saveSecret = async (name: string, value: string, clearInput: () => void) => {
+  const saveSecret = async (
+    name: string,
+    value: string,
+    clearInput: () => void,
+    setError: (e: string | null) => void,
+  ) => {
     setError(null);
     try {
       setSecrets(await cloudSetSecret(name, value));
@@ -540,83 +452,104 @@ function CloudSection() {
   const githubSlot = githubScope.trim() ? `github_token:${githubScope.trim()}` : "github_token";
 
   return (
-    <div className="space-y-3 text-xs">
-      <div className="rounded-xl border border-border bg-card p-3">
-        <p className="mb-2 font-semibold uppercase tracking-wider text-[11px] text-muted-foreground">
-          Credentials · Claude {secrets?.claude ? "✓" : "missing"} · GitHub {secrets?.github ? "✓" : "missing"}
-        </p>
-        <div className="space-y-2">
-          <div className="flex gap-1.5">
-            <input
-              type="password"
-              value={claudeInput}
-              onChange={(e) => setClaudeInput(e.target.value)}
-              placeholder={secrets?.claude ? "Claude OAuth token (stored) — paste to replace" : "Claude OAuth token from `claude setup-token`"}
-              spellCheck={false}
-              className={`${cloudInput} min-w-0 font-mono`}
-            />
-            <button
-              onClick={() => void saveSecret("claude_oauth_token", claudeInput, () => setClaudeInput(""))}
-              disabled={!claudeInput.trim() && !secrets?.claude}
-              className="h-8 shrink-0 rounded-lg border border-border px-2 text-muted-foreground hover:text-foreground disabled:opacity-50"
-            >
-              {claudeInput.trim() ? "Save" : "Clear"}
-            </button>
-            <button
-              onClick={() => {
-                if (!branchId) return;
-                closeSettings();
-                runInShell(branchId, "claude setup-token");
-              }}
-              disabled={!branchId}
-              title={
-                branchId
-                  ? "Runs `claude setup-token` in this branch's shell. Paste the token it prints here."
-                  : "Select a branch first; the command runs in its shell."
-              }
-              className="h-8 shrink-0 rounded-lg border border-border px-2 text-muted-foreground hover:text-foreground disabled:opacity-50"
-            >
-              Get token
-            </button>
-          </div>
-          {!secrets?.claude && (
-            <p className="text-muted-foreground">
-              No token yet? <span className="text-foreground">Get token</span> runs <code>claude setup-token</code> in the bottom shell; paste the token it prints above.
-            </p>
-          )}
+    <>
+      <Section title="Claude token" description={<Status ok={secrets?.claude} yes="Stored in Keychain" no="Not set" />}>
+        <div className="flex gap-2">
           <input
             type="password"
-            value={githubInput}
-            onChange={(e) => setGithubInput(e.target.value)}
-            placeholder="GitHub fine-grained token, Contents: read & write"
+            value={claudeInput}
+            onChange={(e) => setClaudeInput(e.target.value)}
+            placeholder={secrets?.claude ? "Paste a new token to replace it" : "OAuth token from claude setup-token"}
+            aria-label="Claude OAuth token"
             spellCheck={false}
-            className={`${cloudInput} font-mono`}
+            className="ph-input h-8 min-w-0 flex-1 font-mono"
           />
-          <div className="flex gap-1.5">
-            <input
-              value={githubScope}
-              onChange={(e) => setGithubScope(e.target.value)}
-              placeholder="owner or owner/repo (blank = any)"
-              spellCheck={false}
-              title={`Saves to Keychain slot ${githubSlot}; the most specific slot wins per remote.`}
-              className={`${cloudInput} min-w-0 font-mono`}
-            />
-            <button
-              onClick={() => void saveSecret(githubSlot, githubInput, () => setGithubInput(""))}
-              disabled={!githubInput.trim()}
-              className="h-8 shrink-0 rounded-lg border border-border px-3 text-muted-foreground hover:text-foreground disabled:opacity-50"
-            >
-              Save
-            </button>
-          </div>
-          <p className="text-muted-foreground">
-            Kept in your macOS Keychain and written to each cloud machine's ~/.ph/env, outside the repo. Required for cloud chats: they never use your GitHub sign-in. Cloud agents run without permission prompts, so give this token only the repos Powerhouse may push to.
-          </p>
+          <button
+            type="button"
+            onClick={() =>
+              void saveSecret("claude_oauth_token", claudeInput, () => setClaudeInput(""), setClaudeError)
+            }
+            disabled={!claudeInput.trim() && !secrets?.claude}
+            className="ph-btn"
+          >
+            {claudeInput.trim() || !secrets?.claude ? "Save" : "Clear"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (!branchId) return;
+              closeSettings();
+              runInShell(branchId, "claude setup-token");
+            }}
+            disabled={!branchId}
+            title={
+              branchId
+                ? "Runs `claude setup-token` in this branch's shell. Paste the token it prints here."
+                : "Select a branch first; the command runs in its shell."
+            }
+            className="ph-btn"
+          >
+            Get token
+          </button>
         </div>
-      </div>
+        {!secrets?.claude && (
+          <p className="ph-hint">
+            Get token runs <code>claude setup-token</code> in the bottom shell; paste the token it prints above.
+          </p>
+        )}
+        {claudeError && <p className="ph-error">{claudeError}</p>}
+      </Section>
 
-      {error && <p className="text-destructive">{error}</p>}
-    </div>
+      <Section title="GitHub token" description={<Status ok={secrets?.github} yes="Stored in Keychain" no="Not set" />}>
+        <input
+          type="password"
+          value={githubInput}
+          onChange={(e) => setGithubInput(e.target.value)}
+          placeholder="Fine-grained token with Contents: read & write"
+          aria-label="GitHub token"
+          spellCheck={false}
+          className="ph-input h-8 font-mono"
+        />
+        <div className="flex gap-2">
+          <input
+            value={githubScope}
+            onChange={(e) => setGithubScope(e.target.value)}
+            placeholder="owner or owner/repo (blank = any)"
+            aria-label="Repos this token is for"
+            spellCheck={false}
+            title={`Saves to Keychain slot ${githubSlot}; the most specific slot wins per remote.`}
+            className="ph-input h-8 min-w-0 flex-1 font-mono"
+          />
+          <button
+            type="button"
+            onClick={() => void saveSecret(githubSlot, githubInput, () => setGithubInput(""), setGithubError)}
+            disabled={!githubInput.trim()}
+            className="ph-btn"
+          >
+            Save
+          </button>
+        </div>
+        {githubError && <p className="ph-error">{githubError}</p>}
+        <p className="ph-hint">
+          Written to each cloud machine's <code>~/.ph/env</code>, outside the repo. Cloud chats never use your GitHub
+          sign-in, and their agents run without permission prompts, so give this token only the repos Powerhouse may
+          push to.
+        </p>
+      </Section>
+    </>
+  );
+}
+
+function AgentsTab() {
+  const agents = useAppStore((s) => s.settings.agents);
+  const configurable = agents.filter((a) => a.loginCommand || a.modelEnvVar);
+  if (configurable.length === 0) return <p className="ph-hint py-6">No agent needs a login or a default model.</p>;
+  return (
+    <>
+      {configurable.map((agent) => (
+        <AgentSection key={agent.id} agent={agent} />
+      ))}
+    </>
   );
 }
 
@@ -650,7 +583,7 @@ export function SettingsPage() {
 
       <div className="flex-1 overflow-y-auto">
         <div className={`mx-auto w-full px-8 pb-16 pt-2 ${tab === "Telemetry" || tab === "Memory" ? "max-w-6xl" : "max-w-4xl"}`}>
-          <PageHeader title="Settings" className="mx-0 mb-2 border-b-0 pt-0">
+          <PageHeader title="Settings" className="mx-0 pt-0">
             <Segmented
               label="Settings section"
               value={tab}
@@ -661,43 +594,16 @@ export function SettingsPage() {
 
           {tab === "Main" ? (
             <>
-              <Section title="Account" description="Your Powerhouse identity.">
-                <AccountSection />
-              </Section>
-
-              <Section title="Appearance" description="Choose your color theme.">
-                <AppearanceSection />
-              </Section>
-
-              <Section
-                title="Connections"
-                description="Link external services to Powerhouse."
-              >
-                <ConnectionsSection />
-              </Section>
+              <AccountSection />
+              <AppearanceSection />
             </>
           ) : tab === "Agents" ? (
-            <Section
-              title="Agents"
-              description="CLI access and the default model for each coding agent."
-            >
-              <AgentsSection />
-            </Section>
+            <AgentsTab />
           ) : tab === "Memory" ? (
-            <Section
-              title="Memory"
-              description="One shared memory for every coding agent."
-            >
-              <MemorySection />
-            </Section>
+            <MemorySection />
           ) : tab === "Cloud" ? (
             <>
-              <Section
-                title="Cloud"
-                description="Credentials and defaults for one-click cloud runs."
-              >
-                <CloudSection />
-              </Section>
+              <CloudSection />
               <Section
                 title="Machines"
                 description="Every boxd VM on your account. Chats create and retire their own; stop or delete leftovers here."

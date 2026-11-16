@@ -110,12 +110,12 @@ export function MachinesPane() {
           The boxd CLI is not installed. Install it from boxd.sh and run <code>boxd auth login</code>.
         </Notice>
       ) : error ? (
-        <p className="mb-2 select-text break-words font-mono text-xs text-destructive">{error}</p>
+        <p className="ph-error mb-2 font-mono">{error}</p>
       ) : null}
 
       {rows?.length === 0 && <p className="text-xs text-muted-foreground">No machines.</p>}
       {rows && rows.length > 0 && (
-        <ul className="divide-y divide-border rounded-[10px] border border-border">
+        <ul className="ph-list">
           {rows.map((m) => (
             <MachineItem
               key={m.name}
@@ -235,5 +235,5 @@ export function MachineItem({
 }
 
 function Notice({ children }: { children: React.ReactNode }) {
-  return <p className="mb-2 rounded-[10px] border border-border px-3 py-2 text-xs text-muted-foreground">{children}</p>;
+  return <p className="ph-list ph-hint mb-2 px-3 py-2">{children}</p>;
 }

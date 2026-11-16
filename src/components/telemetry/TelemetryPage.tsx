@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "../../store/appStore";
+import { ChevronDownIcon } from "../ui/icons";
 import {
   telemetryListRuns,
   telemetryRebuild,
@@ -34,31 +35,31 @@ function HealthStrip({ checks }: { checks: CheckResult[] }) {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className={`flex w-full items-center gap-2 border px-2 py-1 text-left text-[11px] ${
-          failures.length > 0 ? "border-destructive text-destructive" : "border-border"
-        }`}
+        aria-expanded={open}
+        className={`flex h-8 w-full items-center gap-2 border px-3 text-left text-xs ${
+          open || failures.length > 0 ? "rounded-t-[var(--radius)]" : "rounded-[var(--radius)]"
+        } ${failures.length > 0 ? "border-destructive/60 text-destructive" : "border-border hover:bg-accent"}`}
       >
         <span
-          className={`size-1.5 shrink-0 rounded-full ${
-            failures.length > 0 ? "bg-destructive" : "bg-success"
-          }`}
+          className={`ph-dot bg-current ${failures.length > 0 ? "" : "tone-running"}`}
+          aria-hidden
         />
         <span className={failures.length > 0 ? "" : "text-muted-foreground"}>
           {failures.length > 0
             ? `${failures.length} invariant check${failures.length === 1 ? "" : "s"} failing`
-            : `health: ${checks.filter((c) => c.status === "pass").length} checks passing`}
+            : `${checks.filter((c) => c.status === "pass").length} health checks passing`}
         </span>
         {heartbeat && (
           <span className="text-muted-foreground/70">· {heartbeat.detail}</span>
         )}
-        <span className="ml-auto text-muted-foreground">{open ? "▾" : "▸"}</span>
+        <ChevronDownIcon className={`ml-auto size-3.5 text-muted-foreground ${open ? "" : "-rotate-90"}`} />
       </button>
       {(open || failures.length > 0) && (
-        <div className="border border-t-0 border-border px-2 py-1">
+        <div className="rounded-b-[var(--radius)] border border-t-0 border-border px-3 py-1.5">
           {(open ? checks : failures).map((check) => (
             <div key={check.id} className="flex items-baseline gap-2 py-0.5">
               <span
-                className={`text-[10px] ${
+                className={`text-xs ${
                   check.status === "fail"
                     ? "text-destructive"
                     : check.status === "pass"
@@ -68,8 +69,8 @@ function HealthStrip({ checks }: { checks: CheckResult[] }) {
               >
                 {check.status === "fail" ? "✗" : check.status === "pass" ? "✓" : "·"}
               </span>
-              <span className="shrink-0 text-[11px] text-foreground">{check.label}</span>
-              <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
+              <span className="shrink-0 text-xs text-foreground">{check.label}</span>
+              <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
                 {check.detail}
               </span>
             </div>
@@ -90,11 +91,11 @@ function StatTile({
   alert?: boolean;
 }) {
   return (
-    <div className="pi-card flex-1 px-3 py-2">
-      <div className={`text-base ${alert ? "text-destructive" : "text-foreground"}`}>
+    <div className="min-w-0 rounded-[var(--radius)] border border-border bg-card px-3 py-2">
+      <div title={value} className={`truncate font-mono text-[15px] tabular-nums ${alert ? "text-destructive" : "text-foreground"}`}>
         {value}
       </div>
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+      <div className="truncate text-xs text-muted-foreground">
         {label}
       </div>
     </div>
@@ -171,8 +172,25 @@ export function TelemetryPage({ embedded = false }: { embedded?: boolean } = {})
 
       <div className={embedded ? "contents" : "flex-1 overflow-y-auto"}>
         <div className={embedded ? "pt-6" : "mx-auto w-full max-w-5xl px-8 pb-16 pt-2"}>
-          <div className={embedded ? "mb-4 flex justify-end" : "ph-page-header mx-0 mb-6 pt-0"}>
-            {!embedded && <h1 className="ph-page-title">Telemetry</h1>}
+          {!embedded && (
+            <div className="ph-page-header mx-0 mb-6 pt-0">
+              <h1 className="ph-page-title">Telemetry</h1>
+            </div>
+          )}
+
+          <div className="mb-4 flex h-10 items-stretch gap-3 border-b border-border">
+            {TABS.map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setTab(t)}
+                data-active={tab === t}
+                className="ph-tab px-1 text-[13px]"
+              >
+                {t}
+              </button>
+            ))}
+            <span className="flex-1" />
             <button
               type="button"
               disabled={(stats?.activeRuns ?? 0) > 0}
@@ -186,33 +204,16 @@ export function TelemetryPage({ embedded = false }: { embedded?: boolean } = {})
                   ? "Wait for active runs to finish before rebuilding"
                   : "Wipe projections and re-derive them from raw events"
               }
-              className="pi-btn text-[11px] disabled:cursor-not-allowed disabled:opacity-50"
+              className="ph-btn ph-btn-ghost h-7 self-center px-2.5 text-xs"
             >
               Rebuild projections
             </button>
           </div>
 
-          <div className="mb-4 flex gap-4 border-b border-border">
-            {TABS.map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => setTab(t)}
-                className={`-mb-px border-b pb-1.5 text-[11px] font-semibold uppercase tracking-wider ${
-                  tab === t
-                    ? "border-accent-brand text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
-
           {!unavailable && <HealthStrip checks={checks} />}
 
           {unavailable ? (
-            <p className="text-xs text-muted-foreground">
+            <p className="ph-hint">
               Telemetry database unavailable — check the dev console for details.
             </p>
           ) : tab === "Tasks" ? (
@@ -222,7 +223,7 @@ export function TelemetryPage({ embedded = false }: { embedded?: boolean } = {})
           ) : (
             <>
               {stats && (
-                <div className="mb-4 flex gap-2">
+                <div className="mb-4 grid grid-cols-[repeat(auto-fill,minmax(8.5rem,1fr))] gap-2">
                   <StatTile label="runs" value={String(stats.totalRuns)} />
                   <StatTile label="active" value={String(stats.activeRuns)} />
                   <StatTile
@@ -253,7 +254,7 @@ export function TelemetryPage({ embedded = false }: { embedded?: boolean } = {})
 
               <div className="flex gap-6">
                 <div className="min-w-0 flex-1">
-                  <h2 className="mb-1 border-b border-border pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <h2 className="ph-section-label mb-2">
                     Runs
                   </h2>
                   <RunsTable
@@ -266,7 +267,7 @@ export function TelemetryPage({ embedded = false }: { embedded?: boolean } = {})
                     <button
                       type="button"
                       onClick={loadOlder}
-                      className="pi-btn mt-2 text-[11px]"
+                      className="ph-btn mt-2 h-7 px-2.5 text-xs"
                     >
                       Load older runs
                     </button>

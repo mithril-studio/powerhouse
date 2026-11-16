@@ -378,5 +378,27 @@
 .ph-row[aria-current=true] { background: var(--accent); color: var(--foreground); }
 .ph-panel-note { padding: 0 0.75rem 0.5rem; font-size: 12px; line-height: 1.5; color: var(--muted-foreground); }
 .ph-panel-error { padding: 0.25rem 0.75rem 0.5rem; font-family: var(--font-mono); font-size: 12px; color: var(--destructive); overflow-wrap: anywhere; user-select: text; }
+/* Settings pages: one row per setting (label left, controls right), hairlines between. */
+.ph-settings-section { display: grid; grid-template-columns: minmax(0, 13rem) minmax(0, 1fr); gap: 2rem; padding-block: 1.5rem; border-top: 1px solid var(--border); }
+.ph-settings-section:first-of-type { border-top: 0; }
+.ph-settings-section > div:first-child h2 { font-size: 13px; font-weight: 600; line-height: 2rem; color: var(--foreground); }
+.ph-settings-section > div:first-child p { font-size: 12px; line-height: 1.5; color: var(--muted-foreground); }
+.ph-settings-stack { display: flex; min-width: 0; flex-direction: column; gap: 0.625rem; font-size: 13px; }
+.ph-hint { font-size: 12px; line-height: 1.5; color: var(--muted-foreground); }
+.ph-hint code, .ph-settings-section code { font-family: var(--font-mono); font-size: 0.92em; color: var(--foreground); }
+.ph-hint button { color: var(--foreground); text-decoration: underline; text-underline-offset: 2px; }
+.ph-error { font-size: 12px; line-height: 1.5; color: var(--destructive); overflow-wrap: anywhere; user-select: text; }
+.ph-list { border: 1px solid var(--border); border-radius: var(--radius); }
+.ph-list > li + li { border-top: 1px solid var(--border); }
+:root:not(.light) .ph-list, :root:not(.light) .ph-list > li + li { border-color: #222; }
+.ph-switch { position: relative; width: 1.875rem; height: 1.125rem; flex-shrink: 0; appearance: none; border-radius: 999px; background: var(--input); cursor: pointer; transition: background 0.12s ease; }
+.ph-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 0.875rem; height: 0.875rem; border-radius: 999px; background: var(--muted-foreground); transition: transform 0.12s ease, background 0.12s ease; }
+.ph-switch:checked { background: var(--accent-brand); }
+.ph-switch:checked::after { transform: translateX(0.75rem); background: #fff; }
+.ph-switch:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.ph-switch:disabled { opacity: 0.5; cursor: default; }
+.ph-toggle { display: flex; align-items: flex-start; gap: 0.75rem; cursor: pointer; }
+.ph-toggle .ph-switch { margin-top: 0.125rem; }
+.ph-toggle > span { display: flex; min-width: 0; flex-direction: column; gap: 0.125rem; font-size: 13px; color: var(--foreground); }
+.ph-toggle > span > span { font-size: 12px; line-height: 1.5; color: var(--muted-foreground); }
 }
-
