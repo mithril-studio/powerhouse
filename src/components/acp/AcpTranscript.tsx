@@ -13,11 +13,12 @@ import { attachmentData, formatBytes, type AttachmentRef } from "../../lib/attac
 import { ChatImage } from "./ChatImage";
 import { AcpMarkdown } from "./AcpMarkdown";
 import { ContextUsageMeter } from "./ContextUsageMeter";
+import { ArrowDownIcon, CheckIcon, ChevronRightIcon, CloseIcon, ImageIcon } from "../ui/icons";
 
 /** Context-window reading at the end of a turn: how full the model's memory is. */
 function UsageItem({ item }: { item: Extract<AcpTranscriptItem, { type: "usage" }> }) {
   return (
-    <p role="status" className="flex justify-end text-[10px]">
+    <p role="status" className="chat-usage">
       <ContextUsageMeter
         used={item.used}
         size={item.size}
@@ -28,12 +29,16 @@ function UsageItem({ item }: { item: Extract<AcpTranscriptItem, { type: "usage" 
   );
 }
 
-const statusGlyph: Record<string, string> = {
-  pending: "·",
-  in_progress: "●",
-  completed: "✓",
-  failed: "×",
-};
+/** Tool and plan-step status as an icon: hollow ring, live dot, check, or cross. */
+function StatusIcon({ status }: { status?: string | null }) {
+  if (status === "completed") return <CheckIcon className="chat-status size-3.5 text-muted-foreground" />;
+  if (status === "failed") return <CloseIcon className="chat-status size-3.5 text-destructive" />;
+  return (
+    <span className="chat-status grid size-3.5 place-items-center" aria-hidden>
+      <span className={status === "in_progress" ? "chat-status-live" : "chat-status-pending"} />
+    </span>
+  );
+}
 
 function readableValue(value: unknown): string {
   if (value == null) return "";
@@ -49,7 +54,7 @@ function ToolContent({ item }: { item: ToolCallContent }) {
   if (item.type === "content") {
     if (item.content.type === "image") return <ChatImage mimeType={item.content.mimeType} data={item.content.data} />;
     return item.content.type === "text" ? (
-      <pre className="whitespace-pre-wrap break-words text-xs text-muted-foreground">
+      <pre className="chat-tool-output">
         {item.content.text}
       </pre>
     ) : (
@@ -60,7 +65,7 @@ function ToolContent({ item }: { item: ToolCallContent }) {
     return (
       <div className="space-y-2">
         <p className="text-xs text-muted-foreground">{item.path}</p>
-        <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words border-l border-border bg-card py-1 pl-3 text-xs">
+        <pre className="chat-tool-output chat-tool-diff">
           {item.newText}
         </pre>
       </div>
@@ -68,13 +73,6 @@ function ToolContent({ item }: { item: ToolCallContent }) {
   }
   return <p className="text-xs text-muted-foreground">Terminal {item.terminalId}</p>;
 }
-
-const glyphTone = (status: ToolTranscriptItem["status"]) =>
-  status === "failed"
-    ? "text-destructive"
-    : status === "in_progress"
-      ? "text-accent-brand"
-      : "text-muted-foreground/70";
 
 const ToolRow = memo(function ToolRow({ item }: { item: ToolTranscriptItem }) {
   const details = Boolean(
@@ -86,12 +84,10 @@ const ToolRow = memo(function ToolRow({ item }: { item: ToolTranscriptItem }) {
   const label = toolLabel(item);
   const header = (
     <>
-      <span className={`w-3 shrink-0 text-center ${glyphTone(item.status)}`} aria-hidden>
-        {statusGlyph[item.status ?? "pending"] ?? "·"}
-      </span>
-      <span className="w-12 shrink-0 text-muted-foreground/70">{toolVerb(item.kind)}</span>
+      <StatusIcon status={item.status} />
+      <span className="chat-tool-verb">{toolVerb(item.kind)}</span>
       <span
-        className={`min-w-0 truncate ${item.status === "failed" ? "text-destructive" : "text-foreground/80"}`}
+        className={`min-w-0 truncate ${item.status === "failed" ? "text-destructive" : "text-foreground/85"}`}
         title={item.title}
       >
         {label || item.title}
@@ -100,21 +96,21 @@ const ToolRow = memo(function ToolRow({ item }: { item: ToolTranscriptItem }) {
   );
 
   if (!details) {
-    return <div className="flex items-center gap-2 text-xs leading-5">{header}</div>;
+    return <div className="chat-tool-row">{header}</div>;
   }
   return (
-    <details className="group text-xs leading-5">
-      <summary className="flex cursor-default list-none items-center gap-2 outline-none hover:bg-muted/50 focus-visible:bg-muted">
+    <details className="chat-tool">
+      <summary className="chat-tool-row">
         {header}
       </summary>
-      <div className="mb-1 ml-1.5 mt-0.5 space-y-2 border-l border-border py-1 pl-4">
+      <div className="chat-tool-details">
         {item.title !== label && (
-          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs text-foreground/80">
+          <pre className="chat-tool-output text-foreground/85">
             {item.title}
           </pre>
         )}
         {item.locations?.map((location) => (
-          <p key={`${location.path}:${location.line ?? ""}`} className="text-xs text-muted-foreground">
+          <p key={`${location.path}:${location.line ?? ""}`} className="text-muted-foreground">
             {location.path}{location.line ? `:${location.line}` : ""}
           </p>
         ))}
@@ -122,12 +118,12 @@ const ToolRow = memo(function ToolRow({ item }: { item: ToolTranscriptItem }) {
           <ToolContent key={index} item={content} />
         ))}
         {item.rawInput !== undefined && (
-          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs text-muted-foreground">
+          <pre className="chat-tool-output">
             {readableValue(item.rawInput)}
           </pre>
         )}
         {item.rawOutput !== undefined && (
-          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs text-muted-foreground">
+          <pre className="chat-tool-output">
             {readableValue(item.rawOutput)}
           </pre>
         )}
@@ -136,7 +132,7 @@ const ToolRow = memo(function ToolRow({ item }: { item: ToolTranscriptItem }) {
   );
 });
 
-/** Consecutive tool calls as one line — "▸ 14 tool calls · 9 run · 3 read" —
+/** Consecutive tool calls as one line — "14 tool calls  9 run · 3 read" —
  *  expandable to the full list. While running, the live call shows under it. */
 function ToolGroupItem({ group }: { group: ToolGroup }) {
   const [open, setOpen] = useState(false);
@@ -151,27 +147,25 @@ function ToolGroupItem({ group }: { group: ToolGroup }) {
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className="flex w-full items-center gap-2 text-left text-xs leading-5 text-muted-foreground outline-none hover:text-foreground focus-visible:bg-muted"
+        className="chat-tool-row chat-disclosure w-full text-left"
       >
-        <span className={`w-3 shrink-0 text-center ${active ? "text-accent-brand" : ""}`} aria-hidden>
-          {open ? "▾" : "▸"}
-        </span>
-        <span className="shrink-0 text-foreground/80">{tools.length} tool calls</span>
-        <span className="min-w-0 truncate text-muted-foreground/70">{summarizeTools(tools)}</span>
+        <ChevronRightIcon className="chat-chevron size-3.5" />
+        <span className="shrink-0 text-foreground/85">{tools.length} tool calls</span>
+        <span className="min-w-0 truncate">{summarizeTools(tools)}</span>
         {failed > 0 && <span className="shrink-0 text-destructive">{failed} failed</span>}
       </button>
       {tools.flatMap((tool) => (tool.content ?? []).filter((content) => content.type === "content" && content.content.type === "image").map((content, index) => (
         <ToolContent key={`${tool.id}-${index}`} item={content} />
       )))}
       {open ? (
-        <div className="ml-1.5 border-l border-border pl-3">
+        <div className="chat-tool-group">
           {tools.map((tool) => (
             <ToolRow key={tool.id} item={tool} />
           ))}
         </div>
       ) : (
         active && (
-          <div className="ml-1.5 border-l border-border pl-3">
+          <div className="chat-tool-group">
             <ToolRow item={active} />
           </div>
         )
@@ -189,12 +183,12 @@ function Attachments({ items }: { items?: AttachmentRef[] }) {
       {items.map((ref) => {
         const data = attachmentData(ref.id);
         return (
-          <li key={ref.id} className="text-[11px] text-muted-foreground">
+          <li key={ref.id} className="text-xs text-muted-foreground">
             {data ? (
               <ChatImage mimeType={ref.mimeType} data={data} />
             ) : (
-              <span className="inline-flex items-center gap-1 border border-border px-1.5 py-0.5">
-                ▣ {ref.name} · {formatBytes(ref.bytes)}
+              <span className="chat-chip">
+                <ImageIcon className="size-3.5" /> {ref.name} · {formatBytes(ref.bytes)}
               </span>
             )}
           </li>
@@ -214,16 +208,12 @@ const TranscriptItem = memo(function TranscriptItem({ item }: { item: AcpTranscr
   if (item.type === "usage") return <UsageItem item={item} />;
   if (item.type === "plan") {
     return (
-      <section className="border-l border-accent-brand/40 pl-3" aria-label="Agent plan">
-        <p className="mb-1 text-xs text-accent-brand">
-          ◇ plan
-        </p>
-        <ol className="space-y-1">
+      <section className="chat-plan" aria-label="Agent plan">
+        <p className="chat-plan-title">Plan</p>
+        <ol className="space-y-1.5">
           {item.entries.map((entry, index) => (
-            <li key={`${index}-${entry.content}`} className="flex gap-2 text-xs">
-              <span className={entry.status === "completed" ? "text-success" : "text-muted-foreground"}>
-                {statusGlyph[entry.status]}
-              </span>
+            <li key={`${index}-${entry.content}`} className="flex items-start gap-2.5">
+              <span className="mt-[3px]"><StatusIcon status={entry.status} /></span>
               <span className={entry.status === "completed" ? "text-muted-foreground line-through" : ""}>
                 {entry.content}
               </span>
@@ -235,11 +225,12 @@ const TranscriptItem = memo(function TranscriptItem({ item }: { item: AcpTranscr
   }
   if (item.role === "thought") {
     return (
-      <details className="text-xs text-muted-foreground">
-        <summary className="cursor-default outline-none focus-visible:bg-muted">
-          ◇ thinking
+      <details className="chat-thought">
+        <summary className="chat-tool-row chat-disclosure">
+          <ChevronRightIcon className="chat-chevron size-3.5" />
+          Thinking
         </summary>
-        <AcpMarkdown text={item.text} className="mt-2 border-l border-border pl-3" />
+        <AcpMarkdown text={item.text} className="chat-thought-body" />
       </details>
     );
   }
@@ -259,11 +250,7 @@ const TranscriptItem = memo(function TranscriptItem({ item }: { item: AcpTranscr
     return (
       <p
         role={item.tone === "error" ? "alert" : "status"}
-        className={`border-l py-0.5 pl-3 text-xs ${
-          item.tone === "error"
-            ? "border-destructive text-destructive"
-            : "border-border text-muted-foreground"
-        }`}
+        className={`chat-notice ${item.tone === "error" ? "text-destructive" : "text-muted-foreground"}`}
       >
         {item.text}
       </p>
@@ -281,13 +268,11 @@ export function AcpTranscript({
   items,
   busy,
   agentName,
-  branchName,
   commandCount,
 }: {
   items: AcpTranscriptItem[];
   busy: boolean;
   agentName: string;
-  branchName: string;
   commandCount: number;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -316,16 +301,13 @@ export function AcpTranscript({
       }}
       className="h-full overflow-y-auto px-6 py-8"
     >
-      <div className="chat-column flex flex-col gap-5">
+      <div className="chat-column flex min-h-full flex-col gap-5">
         {items.length === 0 && (
-          <div className="py-8" role="status">
-            <p className="text-sm text-accent-brand">Powerhouse / {agentName}</p>
-            <p className="mt-1 text-xs text-muted-foreground">{branchName}</p>
-            <p className="mt-4 text-xs text-muted-foreground">
-              ⌘⇧P commands{commandCount > 0 ? ` · ${commandCount} from agent` : ""}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Type <span className="text-foreground">/</span> for agent commands and skills.
+          <div className="chat-empty" role="status">
+            <p className="chat-empty-title">Start a conversation with {agentName}</p>
+            <p>
+              Ask a question or describe a task. Type <kbd className="ph-kbd">/</kbd> for
+              commands and skills{commandCount > 0 ? ` (${commandCount} from the agent)` : ""}.
             </p>
           </div>
         )}
@@ -337,18 +319,18 @@ export function AcpTranscript({
           ),
         )}
         {busy && (
-          <p className="flex items-center gap-2 text-xs text-accent-brand" role="status">
-            <span className="animate-pulse">●</span>
-            working…
+          <p className="chat-working" role="status">
+            <span className="chat-working-dots" aria-hidden><i /><i /><i /></span>
+            Working
           </p>
         )}
       </div>
     </div>
-    {showLatest && <button type="button" className="jump-latest pi-btn" onClick={() => {
+    {showLatest && <button type="button" className="jump-latest ph-btn" onClick={() => {
       followRef.current = true;
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
       setShowLatest(false);
-    }}>↓ Jump to latest</button>}
+    }}><ArrowDownIcon className="size-3.5" /> Jump to latest</button>}
     </div>
   );
 }

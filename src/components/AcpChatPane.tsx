@@ -5,7 +5,7 @@ import {
   type Branch,
   type Chat,
 } from "../store/appStore";
-import { cycleMode } from "../lib/agentControls";
+import { cycleMode, resolveModels, resolveReasoning } from "../lib/agentControls";
 import { buildPalette } from "../lib/acpCommandPalette";
 import { latestUsage } from "../lib/acpTranscript";
 import { useAcpSession } from "../hooks/useAcpSession";
@@ -16,7 +16,7 @@ import { AcpPermissionCard } from "./acp/AcpPermissionCard";
 import { AcpComposer } from "./acp/AcpComposer";
 import { AcpConnectionPanel } from "./acp/AcpConnectionPanel";
 import { AcpCommandPalette } from "./acp/AcpCommandPalette";
-import { AcpFooter } from "./acp/AcpFooter";
+import { ChatContextBar } from "./acp/ChatContextBar";
 
 interface Props {
   repoId: string;
@@ -30,6 +30,9 @@ interface Props {
 export function AcpChatPane({ repoId, branch, chat, active }: Props) {
   const session = useAcpSession({ repoId, branch, chat, active });
   const openBottomPanel = useAppStore((state) => state.openBottomPanel);
+  const projectName = useAppStore(
+    (state) => state.repos.find((repo) => repo.id === repoId)?.name,
+  );
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [draft, setDraft] = useState("");
 
@@ -43,6 +46,11 @@ export function AcpChatPane({ repoId, branch, chat, active }: Props) {
   });
   const paletteView = useMemo(
     () => buildPalette(session.controlState),
+    [session.controlState],
+  );
+  const models = useMemo(() => resolveModels(session.controlState), [session.controlState]);
+  const reasoning = useMemo(
+    () => resolveReasoning(session.controlState),
     [session.controlState],
   );
   const usage = useMemo(
@@ -91,16 +99,19 @@ export function AcpChatPane({ repoId, branch, chat, active }: Props) {
       <AcpTranscript
         items={chat.acpTranscript ?? []}
         busy={session.busy}
-        agentName={branch.vm ? `${session.agentLabel} · ${branch.vm}` : session.agentLabel}
-        branchName={branch.name}
+        agentName={session.agentLabel}
         commandCount={session.commands.length}
       />
 
       {session.permission && (
-        <AcpPermissionCard
-          permission={session.permission}
-          onResolve={session.resolvePermission}
-        />
+        <div className="shrink-0 px-6 pb-2">
+          <div className="chat-column">
+            <AcpPermissionCard
+              permission={session.permission}
+              onResolve={session.resolvePermission}
+            />
+          </div>
+        </div>
       )}
 
       {!connected ? (
@@ -137,7 +148,9 @@ export function AcpChatPane({ repoId, branch, chat, active }: Props) {
           }}
           onOpenCommands={() => setPaletteOpen(true)}
           onCancel={session.cancel}
-          thinkingLevel={session.thinkingLevel}
+          models={models}
+          reasoning={reasoning}
+          onApply={session.applyOp}
           attachments={attachments.attachments}
           supportsImages={session.supportsImages}
           dragging={attachments.dragging}
@@ -146,13 +159,12 @@ export function AcpChatPane({ repoId, branch, chat, active }: Props) {
           onRemoveAttachment={attachments.remove}
         />
       )}
-      {connected && (
-        <AcpFooter
-          branchName={branch.name}
-          configOptions={session.configOptions}
-          usage={usage}
-        />
-      )}
+      <ChatContextBar
+        projectName={projectName}
+        branchName={branch.name}
+        vm={branch.vm}
+        usage={usage}
+      />
     </section>
   );
 }

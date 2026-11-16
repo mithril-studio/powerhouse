@@ -6,6 +6,7 @@ import {
   type PaletteView,
 } from "../../lib/acpCommandPalette";
 import type { ApplyOp } from "../../lib/agentControls";
+import { ArrowLeftIcon, CheckIcon, ChevronRightIcon } from "../ui/icons";
 
 interface Props {
   view: PaletteView;
@@ -107,7 +108,7 @@ export function AcpCommandPalette({
       role="dialog"
       aria-modal="true"
       aria-label="Agent command palette"
-      className="shrink-0 border-t border-border bg-background px-3 pt-2 font-mono"
+      className="chat-palette shrink-0 px-6 pt-1"
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.preventDefault();
@@ -133,20 +134,14 @@ export function AcpCommandPalette({
         }
       }}
     >
-      <div className="flex h-9 items-center border border-accent-brand/70 bg-card px-2 text-sm">
+      <div className="chat-column composer-surface">
+      <div className="chat-palette-search">
         {stack.length > 1 && (
-          <button
-            type="button"
-            onClick={goBack}
-            aria-label="Back"
-            className="mr-2 text-muted-foreground hover:text-foreground"
-          >
-            ‹
+          <button type="button" onClick={goBack} aria-label="Back" className="ph-icon-btn size-6">
+            <ArrowLeftIcon className="size-3.5" />
           </button>
         )}
-        <span className="mr-2 text-accent-brand" aria-hidden>
-          {current.title ? current.title : ">"}
-        </span>
+        {current.title && <span className="shrink-0 font-medium">{current.title}</span>}
         <input
           ref={inputRef}
           value={query}
@@ -158,13 +153,13 @@ export function AcpCommandPalette({
           placeholder={
             current.title
               ? `Search ${current.title.toLowerCase()}…`
-              : "commands, skills, model, mode…"
+              : "Search commands, skills, model, mode…"
           }
-          className="h-full flex-1 bg-transparent text-foreground outline-none placeholder:text-muted-foreground/60"
+          className="h-full flex-1 bg-transparent text-foreground outline-none placeholder:text-muted-foreground"
         />
-        <kbd className="text-[10px] text-muted-foreground">esc</kbd>
+        <kbd className="ph-kbd">esc</kbd>
       </div>
-      <div role="listbox" className="max-h-64 overflow-y-auto py-1.5">
+      <div role="listbox" className="chat-palette-list">
         {filtered.groups.map((group) =>
           group.items.map((item) => {
             const index = items.indexOf(item);
@@ -174,7 +169,7 @@ export function AcpCommandPalette({
             return (
               <div key={item.id}>
                 {showGroup && !current.title && (
-                  <p className="px-2 pb-1 pt-2 text-[10px] uppercase tracking-wider text-muted-foreground/60">
+                  <p className="chat-palette-heading">
                     {group.heading}
                   </p>
                 )}
@@ -185,43 +180,32 @@ export function AcpCommandPalette({
                   aria-selected={index === activeIndex}
                   onMouseMove={(event) => hoverIndex(index, event)}
                   onClick={() => choose(item)}
-                  className={`flex w-full items-center gap-3 px-2 py-1.5 text-left text-xs ${
-                    index === activeIndex
-                      ? "bg-muted text-foreground"
-                      : "text-muted-foreground"
-                  }`}
+                  className="chat-palette-item"
                 >
-                  <span className="w-3 shrink-0 text-accent-brand" aria-hidden>
-                    {item.selected ? "✓" : index === activeIndex ? "›" : ""}
-                  </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-foreground">{item.label}</span>
                     {item.description && (
-                      <span className="block truncate text-[10px] text-muted-foreground">
+                      <span className="block truncate text-xs text-muted-foreground">
                         {item.description}
                       </span>
                     )}
                   </span>
                   {item.hint && (
-                    <span className="shrink-0 text-[10px] text-muted-foreground">
-                      {item.hint}
-                    </span>
+                    <span className="ph-kbd shrink-0">{item.hint}</span>
                   )}
-                  {isSubmenu && (
-                    <span className="shrink-0 text-muted-foreground" aria-hidden>
-                      ›
-                    </span>
-                  )}
+                  {item.selected && <CheckIcon className="size-3.5 text-foreground" />}
+                  {isSubmenu && <ChevronRightIcon className="size-3.5 text-muted-foreground" />}
                 </button>
               </div>
             );
           }),
         )}
         {items.length === 0 && (
-          <p className="px-2 py-6 text-center text-xs text-muted-foreground">
+          <p className="px-2 py-6 text-center text-muted-foreground">
             No matching commands
           </p>
         )}
+      </div>
       </div>
     </section>
   );

@@ -24,7 +24,7 @@ it("does not execute HTML, unsafe links or load remote images", () => {
 });
 
 it("renders agent images and tool result images without opening tool details", () => {
-  const html = renderToStaticMarkup(<AcpTranscript busy={false} agentName="Claude" branchName="test" commandCount={0} items={[
+  const html = renderToStaticMarkup(<AcpTranscript busy={false} agentName="Claude" commandCount={0} items={[
     { id: "image", type: "message", role: "assistant", text: "Result", attachments: [registerAttachment({ name: "result.png", mimeType: "image/png", data: "aGVsbG8=" })] },
     { id: "read", type: "tool", toolCallId: "t0", title: "Read screenshot", status: "completed" },
     { id: "tool", type: "tool", toolCallId: "t1", title: "Screenshot", status: "completed", content: [{ type: "content", content: { type: "image", mimeType: "image/png", data: "aGVsbG8=" } }] },
