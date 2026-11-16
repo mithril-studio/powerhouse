@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { useAppStore, type Repo } from "../store/appStore";
+import { CloseIcon } from "./ui/icons";
 import { cloudImportEnvFile, cloudProjectEnvStatus, cloudSetSecret } from "../lib/cloud";
 
-const input =
-  "h-8 w-full rounded-lg border border-input bg-background px-2.5 text-xs outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50";
+const input = "ph-input h-8 font-mono";
 
 /**
  * Per-repo env vars for cloud workspaces. Names live in the repo's config; values
@@ -85,57 +85,67 @@ export function RepoEnvEditor({ repo }: { repo: Repo }) {
   };
 
   return (
-    <div className="space-y-1.5 text-xs">
-      {names.map((name) => (
-        <div key={name} className="flex items-center gap-1.5">
-          <span className="w-40 shrink-0 truncate font-mono" title={name}>
-            {status[name] ? "✓" : "∅"} {name}
-          </span>
-          <input
-            type="password"
-            value={valueInputs[name] ?? ""}
-            onChange={(e) => setValueInputs((s) => ({ ...s, [name]: e.target.value }))}
-            placeholder={status[name] ? "value stored — paste to replace" : "value (kept in your Keychain)"}
-            spellCheck={false}
-            className={`${input} font-mono`}
-          />
-          <button
-            onClick={() => void saveValue(name)}
-            disabled={!(valueInputs[name] ?? "").trim() && !status[name]}
-            className="h-8 shrink-0 rounded-lg border border-border px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
-          >
-            {(valueInputs[name] ?? "").trim() ? "Save" : "Clear"}
-          </button>
-          <button
-            onClick={() => void removeName(name)}
-            title={`Remove ${name} and its stored value`}
-            className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-input hover:text-destructive"
-          >
-            ×
-          </button>
-        </div>
-      ))}
-      <div className="flex items-center gap-1.5">
+    <>
+      {names.length > 0 && (
+        <ul className="ph-list">
+          {names.map((name) => {
+            const typed = (valueInputs[name] ?? "").trim();
+            return (
+              <li key={name} className="flex items-center gap-2 py-1.5 pl-3 pr-1.5">
+                <span
+                  className={`ph-dot ${status[name] ? "bg-current tone-running" : "ph-dot-ring text-muted-foreground/60"}`}
+                  title={status[name] ? "Value stored" : "No value yet"}
+                  aria-hidden
+                />
+                <span className="w-44 shrink-0 truncate font-mono text-xs" title={name}>
+                  {name}
+                </span>
+                <input
+                  type="password"
+                  value={valueInputs[name] ?? ""}
+                  onChange={(e) => setValueInputs((s) => ({ ...s, [name]: e.target.value }))}
+                  onKeyDown={(e) => e.key === "Enter" && typed && void saveValue(name)}
+                  placeholder={status[name] ? "Stored. Paste to replace" : "Value"}
+                  aria-label={`${name} value`}
+                  spellCheck={false}
+                  className={`${input} min-w-0 flex-1`}
+                />
+                <button
+                  type="button"
+                  onClick={() => void saveValue(name)}
+                  disabled={!typed && !status[name]}
+                  className="ph-btn"
+                >
+                  {typed || !status[name] ? "Save" : "Clear"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void removeName(name)}
+                  title={`Remove ${name} and its stored value`}
+                  aria-label={`Remove ${name}`}
+                  className="ph-icon-btn shrink-0 hover:!text-destructive"
+                >
+                  <CloseIcon className="size-3.5" />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <div className="flex items-center gap-2">
         <input
           value={nameInput}
           onChange={(e) => setNameInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && addName()}
           placeholder="VAR_NAME"
+          aria-label="New variable name"
           spellCheck={false}
-          className={`${input} w-40 shrink-0 grow-0 font-mono`}
+          className={`${input} w-56`}
         />
-        <button
-          onClick={addName}
-          disabled={!nameInput.trim()}
-          className="h-8 shrink-0 rounded-lg border border-border px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
-        >
+        <button type="button" onClick={addName} disabled={!nameInput.trim()} className="ph-btn">
           Add
         </button>
-        <p className="min-w-0 flex-1 text-muted-foreground">
-          Exported to this repo's cloud agent on its VM only.
-        </p>
-      </div>
-      <div className="flex items-center gap-1.5 pt-1">
+        <span className="flex-1" />
         <input
           value={envFile}
           onChange={(e) => setEnvFile(e.target.value)}
@@ -144,19 +154,16 @@ export function RepoEnvEditor({ repo }: { repo: Repo }) {
           spellCheck={false}
           aria-label="Env file to import"
           title={`Read from ${importDir}`}
-          className={`${input} w-40 shrink-0 grow-0 font-mono`}
+          className={`${input} w-28`}
         />
-        <button
-          onClick={() => void importFile()}
-          className="h-8 shrink-0 rounded-lg border border-border px-2 text-xs text-muted-foreground hover:text-foreground"
-        >
-          Import from {envFile.trim() || ".env"}
+        <button type="button" onClick={() => void importFile()} className="ph-btn" title={`Read from ${importDir}`}>
+          Import
         </button>
-        <p className="min-w-0 flex-1 truncate text-muted-foreground" title={importNote ?? undefined}>
-          {importNote ?? "Stores every value in your Keychain; importing again updates them."}
-        </p>
       </div>
-      {error && <p className="text-destructive">{error}</p>}
-    </div>
+      <p className="ph-hint">
+        {importNote ?? "Import stores every value from the file in your Keychain; importing again updates them."}
+      </p>
+      {error && <p className="ph-error">{error}</p>}
+    </>
   );
 }

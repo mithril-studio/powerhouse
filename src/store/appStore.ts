@@ -7,7 +7,7 @@ import type { AcpTranscriptItem } from "../lib/acpTranscript";
 export type AgentTransport = "acp" | "pty";
 
 /** Which surface the persistent bottom panel is showing. */
-/** `vm:<name>` is a `boxd connect` terminal opened from the Machines tab. */
+/** `vm:<name>` is a `boxd connect` terminal opened from Settings → Cloud → Machines. */
 export type BottomTab = "shell" | "agent" | `vm:${string}`;
 
 /**
@@ -19,7 +19,6 @@ export type BottomTab = "shell" | "agent" | `vm:${string}`;
  *   (only after real round-trip resume is verified for that runtime).
  */
 export type HandoffMode = "unsupported" | "workspace-only" | "resumable";
-import type { CloudWorkspace } from "../lib/cloud";
 
 export interface Chat {
   id: string;
@@ -40,9 +39,10 @@ export interface Chat {
   transport?: AgentTransport;
   /** Structured ACP history. PTY chats continue to use raw transcript files. */
   acpTranscript?: AcpTranscriptItem[];
-  /** What happened in the cloud since the local session last saw this chat;
-   *  prefixed to the next local prompt, then cleared. */
-  cloudRecap?: string;
+  /** Cloud chats: the last `ph/seq` rendered, so a reconnect replays only what was missed. */
+  agentSeq?: number;
+  /** Cloud chats: which ph-agentd process `agentSeq` counts in (seq restarts with it). */
+  agentEpoch?: string;
 }
 
 export interface AgentProfile {
@@ -110,10 +110,21 @@ export interface Branch {
   activeFile?: string | null;
   /** Set true once this branch lands on main via the queue (green dot). */
   merged?: boolean;
+  /** Where its agent runs. Absent = local (branches from before cloud chats). */
+  location?: BranchLocation;
+  /** Cloud branches: the chat's boxd VM, once created. */
+  vm?: string;
+  /** Cloud branches: why creating the VM failed. */
+  vmError?: string;
+  /** Cloud branches: the commit pushed from the VM for the pending merge. Its VM
+   *  is deleted only once the queue merges exactly this commit. */
+  mergeSha?: string;
 }
 
+export type BranchLocation = "cloud" | "local";
+
 /** Tabs of the toggleable right inspector sidebar. */
-export type RightTab = "files" | "changes" | "diff" | "merge" | "machines";
+export type RightTab = "changes" | "merge" | "files";
 
 /** A configurable check step. `type` is reserved for future "agent" steps. */
 export interface WorkflowStep {
@@ -225,6 +236,10 @@ interface AppState extends PersistedTree {
   chatStatus: Record<string, ChatStatus>;
   /** chatId → agent turn state; absent means idle or already seen. */
   chatActivity: Record<string, ChatActivity>;
+  /** Cloud branches whose VM is being created right now (not persisted). */
+  vmCreating: Record<string, true>;
+  /** Cloud branches: when the local worktree last mirrored the VM, or why it failed (not persisted). */
+  vmMirror: Record<string, { at: number; error?: string }>;
   branchModalRepoId: string | null;
   rightSidebarOpen: boolean;
   rightTab: RightTab;
@@ -234,10 +249,6 @@ interface AppState extends PersistedTree {
   /** VMs with a `boxd connect` terminal in the bottom panel, in tab order (not persisted). */
   machineTerminals: string[];
   shellStatus: Record<string, ChatStatus>;
-  /** branchId → setTimeout id of the in-flight handoff (presence = pending). */
-  pendingHandoff: Record<string, number>;
-  /** Runtime mirror of the Rust-owned cloud workspace store, by id (never persisted here). */
-  cloudWorkspaces: Record<string, CloudWorkspace>;
 
   settingsOpen: boolean;
   telemetryOpen: boolean;
@@ -270,7 +281,9 @@ interface AppState extends PersistedTree {
   /** Open `path` as a tab (or focus it if already open). */
   openFile: (repoId: string, branchId: string, path: string) => void;
   closeFile: (repoId: string, branchId: string, path: string) => void;
-  setChatCloudRecap: (repoId: string, branchId: string, chatId: string, recap: string | null) => void;
+  setBranchVm: (repoId: string, branchId: string, vm: string | null, error?: string) => void;
+  setChatAgentSeq: (repoId: string, branchId: string, chatId: string, seq: number, epoch?: string) => void;
+  setBranchMergeSha: (repoId: string, branchId: string, sha: string | null) => void;
   setChatAgentSession: (
     repoId: string,
     branchId: string,
@@ -292,6 +305,8 @@ interface AppState extends PersistedTree {
   select: (repoId: string | null, branchId: string | null) => void;
   setChatStatus: (chatId: string, status: ChatStatus) => void;
   setChatActivity: (chatId: string, activity: ChatActivity | null) => void;
+  setVmCreating: (branchId: string, creating: boolean) => void;
+  setVmMirror: (branchId: string, error?: string) => void;
   openBranchModal: (repoId: string) => void;
   closeBranchModal: () => void;
 
@@ -315,12 +330,6 @@ interface AppState extends PersistedTree {
   openMachineTerminal: (vm: string) => void;
   closeMachineTerminal: (vm: string) => void;
   setShellStatus: (branchId: string, status: ChatStatus) => void;
-  setPendingHandoff: (branchId: string, timerId: number) => void;
-  clearPendingHandoff: (branchId: string) => void;
-
-  setCloudWorkspaces: (items: CloudWorkspace[]) => void;
-  setCloudWorkspace: (workspace: CloudWorkspace) => void;
-  removeCloudWorkspace: (id: string) => void;
   setMemorySettings: (memory: MemorySettings) => void;
 }
 
@@ -408,16 +417,21 @@ function migrateGithub(raw: unknown): GithubConnection {
 }
 
 /** Migrates the old `agentCmd` string into agent profiles, or passes settings through. */
-/** Chats saved before cloud workspaces hold `cloud-result` cards for runs
- *  that no longer exist; nothing renders them now. */
+/** Chats saved by the retired cloud flows hold result cards and recaps for
+ *  runs that no longer exist; nothing renders them now. */
 function dropLegacyCloudItems(branch: Branch): Branch {
-  const legacy = (item: { type: string }) => item.type === "cloud-result";
-  if (!branch.chats.some((c) => c.acpTranscript?.some(legacy))) return branch;
+  // Result cards from the retired cloud flows, and the recap the old cloud
+  // workspaces left for the next local prompt.
+  const legacy = (item: { type: string }) =>
+    item.type === "cloud-result" || item.type === "cloud-workspace-result";
+  const stale = (c: Chat) => "cloudRecap" in c || c.acpTranscript?.some(legacy);
+  if (!branch.chats.some(stale)) return branch;
   return {
     ...branch,
-    chats: branch.chats.map((c) =>
-      c.acpTranscript ? { ...c, acpTranscript: c.acpTranscript.filter((i) => !legacy(i)) } : c,
-    ),
+    chats: branch.chats.map((c) => {
+      const { cloudRecap: _recap, ...rest } = c as Chat & { cloudRecap?: string };
+      return rest.acpTranscript ? { ...rest, acpTranscript: rest.acpTranscript.filter((i) => !legacy(i)) } : rest;
+    }),
   };
 }
 
@@ -552,6 +566,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   hydrated: false,
   chatStatus: {},
   chatActivity: {},
+  vmCreating: {},
+  vmMirror: {},
   branchModalRepoId: null,
   rightSidebarOpen: false,
   rightTab: "changes",
@@ -560,12 +576,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   bottomTab: "shell",
   machineTerminals: [],
   shellStatus: {},
-  pendingHandoff: {},
   settingsOpen: false,
   telemetryOpen: false,
   memoryOpen: false,
   projectSettingsRepoId: null,
-  cloudWorkspaces: {},
 
   hydrate: (tree) =>
     set({
@@ -801,11 +815,28 @@ export const useAppStore = create<AppState>((set, get) => ({
       }),
     })),
 
-  setChatCloudRecap: (repoId, branchId, chatId, recap) =>
+  setBranchVm: (repoId, branchId, vm, error) =>
     set((s) => ({
-      repos: updateChat(s.repos, repoId, branchId, chatId, ({ cloudRecap: _old, ...c }) =>
-        recap ? { ...c, cloudRecap: recap } : c,
-      ),
+      repos: updateBranch(s.repos, repoId, branchId, ({ vm: _vm, vmError: _err, ...b }) => ({
+        ...b,
+        ...(vm ? { vm } : {}),
+        ...(error ? { vmError: error } : {}),
+      })),
+    })),
+
+  // Seq only moves forward within one ph-agentd process; a new epoch (serve
+  // restarted on the VM) starts the count over.
+  setChatAgentSeq: (repoId, branchId, chatId, seq, epoch) =>
+    set((s) => ({
+      repos: updateChat(s.repos, repoId, branchId, chatId, (c) => {
+        if (epoch !== undefined && c.agentEpoch !== epoch) return { ...c, agentSeq: seq, agentEpoch: epoch };
+        return (c.agentSeq ?? 0) >= seq ? c : { ...c, agentSeq: seq };
+      }),
+    })),
+
+  setBranchMergeSha: (repoId, branchId, sha) =>
+    set((s) => ({
+      repos: updateBranch(s.repos, repoId, branchId, ({ mergeSha: _old, ...b }) => (sha ? { ...b, mergeSha: sha } : b)),
     })),
 
   setChatAgentSession: (repoId, branchId, chatId, sessionId) =>
@@ -841,6 +872,15 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setChatStatus: (chatId, status) =>
     set((s) => ({ chatStatus: { ...s.chatStatus, [chatId]: status } })),
+
+  setVmCreating: (branchId, creating) =>
+    set((s) => {
+      const { [branchId]: _was, ...rest } = s.vmCreating;
+      return { vmCreating: creating ? { ...rest, [branchId]: true } : rest };
+    }),
+
+  setVmMirror: (branchId, error) =>
+    set((s) => ({ vmMirror: { ...s.vmMirror, [branchId]: { at: Date.now(), ...(error ? { error } : {}) } } })),
 
   setChatActivity: (chatId, activity) =>
     set((s) => ({
@@ -921,7 +961,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({ settings: { ...s.settings, rightSidebarWidth: Math.round(width) } })),
   openRightTab: (tab) => set({ rightSidebarOpen: true, rightTab: tab }),
 
-  openChatPicker: () => set({ chatPickerOpen: true }),
+  // A cloud branch has exactly one chat: it owns the branch's VM.
+  openChatPicker: () =>
+    set((s) => {
+      const branch = s.repos
+        .find((r) => r.id === s.selection.repoId)
+        ?.branches.find((b) => b.id === s.selection.branchId);
+      return branch?.location === "cloud" ? {} : { chatPickerOpen: true };
+    }),
   closeChatPicker: () => set({ chatPickerOpen: false }),
 
   toggleBottomPanel: () => set((s) => ({ bottomPanelOpen: !s.bottomPanelOpen })),
@@ -947,27 +994,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   setShellStatus: (branchId, status) =>
     set((s) => ({ shellStatus: { ...s.shellStatus, [branchId]: status } })),
 
-  setPendingHandoff: (branchId, timerId) =>
-    set((s) => ({ pendingHandoff: { ...s.pendingHandoff, [branchId]: timerId } })),
-  clearPendingHandoff: (branchId) =>
-    set((s) => {
-      if (!(branchId in s.pendingHandoff)) return s;
-      const next = { ...s.pendingHandoff };
-      delete next[branchId];
-      return { pendingHandoff: next };
-    }),
-
-  setCloudWorkspaces: (items) =>
-    set({ cloudWorkspaces: Object.fromEntries(items.map((w) => [w.id, w])) }),
-  setCloudWorkspace: (workspace) =>
-    set((s) => ({ cloudWorkspaces: { ...s.cloudWorkspaces, [workspace.id]: workspace } })),
-  removeCloudWorkspace: (id) =>
-    set((s) => {
-      if (!(id in s.cloudWorkspaces)) return s;
-      const next = { ...s.cloudWorkspaces };
-      delete next[id];
-      return { cloudWorkspaces: next };
-    }),
   setMemorySettings: (memory) => set((s) => ({ settings: { ...s.settings, memory } })),
 }));
 

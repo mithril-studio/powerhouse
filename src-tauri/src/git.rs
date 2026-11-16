@@ -100,7 +100,7 @@ fn repo_name_from_url(url: &str) -> Option<String> {
 /// keys, so they're excluded.
 fn is_github_https(url: &str) -> bool {
     let u = url.trim();
-    (u.starts_with("https://github.com/") || u.starts_with("https://www.github.com/"))
+    u.starts_with("https://github.com/") || u.starts_with("https://www.github.com/")
 }
 
 /// The staging trunk. When a project has `origin/test`, that branch is what
@@ -510,7 +510,7 @@ pub fn git_create_worktree(
         }
     };
     let _ = git(&repo, &["config", &format!("branch.{branch}.{WORKTREE_MARK}"), "true"]);
-    crate::handoff::ensure_powerhouse_dir(Path::new(&created));
+    ensure_powerhouse_dir(Path::new(&created));
     Ok(created)
 }
 
@@ -1085,7 +1085,7 @@ fn ensure_task_worktree(
     } else {
         git(repo, &["worktree", "add", "-b", branch, &target, base])?;
     }
-    crate::handoff::ensure_powerhouse_dir(&path);
+    ensure_powerhouse_dir(&path);
     Ok(target)
 }
 
@@ -1174,4 +1174,33 @@ pub fn git_task_facts(worktree_path: String, base: String) -> Result<TaskFacts, 
         dirty,
         changed_files: diff.lines().count(),
     })
+}
+
+/// Creates `<worktree>/.powerhouse/` and repo-wide-excludes it (so handoff docs
+/// never show up in `git status`). Shared with worktree creation.
+pub(crate) fn ensure_powerhouse_dir(worktree: &Path) {
+    let _ = std::fs::create_dir_all(worktree.join(".powerhouse"));
+
+    let common = match git(worktree, &["rev-parse", "--git-common-dir"]) {
+        Ok(c) if !c.is_empty() => c,
+        _ => return,
+    };
+    let mut common_path = PathBuf::from(&common);
+    if common_path.is_relative() {
+        common_path = worktree.join(common_path);
+    }
+    let exclude = common_path.join("info").join("exclude");
+    if let Some(parent) = exclude.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let existing = std::fs::read_to_string(&exclude).unwrap_or_default();
+    if existing.lines().any(|l| l.trim() == ".powerhouse/") {
+        return;
+    }
+    let mut next = existing;
+    if !next.is_empty() && !next.ends_with('\n') {
+        next.push('\n');
+    }
+    next.push_str(".powerhouse/\n");
+    let _ = std::fs::write(&exclude, next);
 }

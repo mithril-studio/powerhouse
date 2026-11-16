@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cloneGithubProject, quickStartProject } from "../lib/actions";
 import { githubListRepos, type GithubRepoSummary } from "../lib/ipc";
+import { Dialog, Kbd } from "./ui/dialog";
 
 export type AddProjectMode = "github" | "quickstart";
 
@@ -91,32 +92,27 @@ export function AddProjectModal({ mode, onClose }: { mode: AddProjectMode; onClo
   };
 
   return (
-    <div
-      className="fixed inset-0 z-[60] flex items-start justify-center bg-black/40 pt-[12vh]"
-      onClick={onClose}
-    >
-      <div
-        className="w-[30rem] max-w-[90vw] rounded-lg border border-border bg-background p-4 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h2 className="text-sm font-semibold text-foreground">{copy.title}</h2>
-        <label className="mt-3 block text-xs font-medium text-muted-foreground">{copy.label}</label>
-        <input
+    <Dialog title={copy.title} onClose={onClose} busy={busy} width="30rem">
+      <div className="ph-dialog-body">
+        <label className="ph-field">
+          {copy.label}
+          <input
             ref={inputRef}
             value={value}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") void submit();
-              if (e.key === "Escape") onClose();
             }}
             placeholder={copy.placeholder}
             disabled={busy}
-            className="mt-1 w-full rounded-md border border-border bg-input px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-accent-brand disabled:opacity-50"
+            spellCheck={false}
+            className="ph-input font-mono"
           />
+        </label>
         {/* In-flow (not a floating dropdown) so it never covers the buttons.
             Click selects; double-click clones straight away. */}
         {mode === "github" && !reposError && (
-          <ul className="mt-2 max-h-64 overflow-y-auto rounded-md border border-border py-1">
+          <ul className="mt-2 max-h-64 overflow-y-auto rounded-md border border-border p-1">
             {repos === null ? (
               <li className="px-2.5 py-1.5 text-xs text-muted-foreground">Loading repositories…</li>
             ) : suggestions.length === 0 ? (
@@ -131,12 +127,12 @@ export function AddProjectModal({ mode, onClose }: { mode: AddProjectMode; onClo
                       disabled={busy}
                       onClick={() => setValue(r.full_name)}
                       onDoubleClick={() => void runClone(r.clone_url)}
-                      className={`flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm text-foreground hover:bg-muted disabled:opacity-50 ${selected ? "bg-muted" : ""}`}
+                      className={`flex h-8 w-full items-center gap-2 rounded-[6px] px-2.5 text-left font-mono text-xs text-foreground hover:bg-accent disabled:opacity-50 ${selected ? "bg-accent" : ""}`}
                     >
                       <span className="truncate">{r.full_name}</span>
                       {r.private && (
-                        <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground/70">
-                          private
+                        <span className="ml-auto shrink-0 font-sans text-[11px] text-muted-foreground">
+                          Private
                         </span>
                       )}
                     </button>
@@ -146,29 +142,25 @@ export function AddProjectModal({ mode, onClose }: { mode: AddProjectMode; onClo
             )}
           </ul>
         )}
-        <p className="mt-1 text-[11px] text-muted-foreground">
+        <p className="ph-dialog-note">
           {mode === "github" && reposError ? reposError : copy.hint}
         </p>
-        {error && <p className="mt-2 whitespace-pre-wrap break-words text-xs text-destructive">{error}</p>}
-        <div className="mt-4 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={busy}
-            className="rounded-md px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={() => void submit()}
-            disabled={busy || !value.trim()}
-            className="rounded-md bg-foreground px-3 py-1.5 text-xs font-medium text-background hover:bg-foreground/90 disabled:opacity-50"
-          >
-            {busy ? (mode === "github" ? "Cloning…" : "Creating…") : copy.cta}
-          </button>
-        </div>
+        {error && <p className="ph-dialog-error">{error}</p>}
       </div>
-    </div>
+      <footer className="ph-dialog-foot">
+        <button type="button" onClick={onClose} disabled={busy} className="ph-btn ph-btn-ghost">
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={() => void submit()}
+          disabled={busy || !value.trim()}
+          className="ph-btn ph-btn-primary"
+        >
+          {busy ? (mode === "github" ? "Cloning…" : "Creating…") : copy.cta}
+          {!busy && <Kbd>↵</Kbd>}
+        </button>
+      </footer>
+    </Dialog>
   );
 }

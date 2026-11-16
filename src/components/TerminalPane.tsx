@@ -17,7 +17,6 @@ import {
   replayTranscript,
   spawnTerminal,
 } from "../lib/terminalRegistry";
-import { handoffWatchStart } from "../lib/ipc";
 
 interface Props {
   repoId: string;
@@ -78,8 +77,6 @@ export function TerminalPane({ repoId, branch, chat, active }: Props) {
 
       disposeTerminal(chat.id); // drop the replay view / any dead instance
       setChatStatus(chat.id, "running");
-      // Idempotent on the backend; every running chat keeps the branch watched.
-      void handoffWatchStart(branch.id, branch.worktreePath).catch(() => {});
       void spawnTerminal({
         chatId: chat.id,
         cwd: branch.worktreePath,

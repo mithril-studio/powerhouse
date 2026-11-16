@@ -1,6 +1,5 @@
 import { useAppStore, type Branch, type Repo } from "../store/appStore";
 import { deleteBranch, enqueueBranch } from "../lib/actions";
-import { isCloudBusy, workspaceForBranch } from "../lib/cloud";
 import { rollupActivity } from "../lib/chatActivity";
 import { ActivityDot } from "./ActivityDot";
 
@@ -12,8 +11,8 @@ interface Props {
 export function BranchItem({ repo, branch }: Props) {
   const select = useAppStore((s) => s.select);
   const setActiveChat = useAppStore((s) => s.setActiveChat);
-  // ☁ while the branch has a cloud workspace (a VM); pulses while it works.
-  const cloud = useAppStore((s) => workspaceForBranch(s.cloudWorkspaces, branch.id));
+  // ☁ on cloud branches; pulses while the VM is being created.
+  const vmCreating = useAppStore((s) => Boolean(s.vmCreating[branch.id]));
   const selected = useAppStore(
     (s) =>
       s.workspaceView === "home" &&
@@ -64,10 +63,20 @@ export function BranchItem({ repo, branch }: Props) {
         />
       )}
       <span className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{branch.name}</span>
-      {cloud && (
+      {branch.location === "cloud" && (
         <span
-          title={`In the cloud on ${cloud.vmName}: ${cloud.stage ?? cloud.status}`}
-          className={`shrink-0 text-[10px] text-accent-brand ${isCloudBusy(cloud) ? "animate-pulse" : ""}`}
+          title={
+            vmCreating
+              ? "Creating this branch's VM…"
+              : branch.vm
+                ? `Runs on ${branch.vm}`
+                : branch.merged
+                  ? "Merged; its VM was deleted"
+                : branch.vmError
+                  ? `No VM: ${branch.vmError}`
+                  : "No VM yet"
+          }
+          className={`shrink-0 text-[10px] ${branch.vmError ? "text-destructive" : "text-accent-brand"} ${vmCreating ? "animate-pulse" : ""}`}
         >
           ☁
         </span>

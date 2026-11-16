@@ -33,10 +33,18 @@ export interface AcpCallbacks {
   onAvailableCommandsChange?: (commands: AvailableCommand[]) => void;
   onSessionReplayChange?: (replaying: boolean) => void;
   onBusyChange?: (busy: boolean) => void;
-  /** The connection was handed over (the chat went to the cloud). */
-  onDetached?: () => void;
+  /** Cloud chats: each update's `_meta["ph/seq"]` and `["ph/epoch"]` from ph-agentd. */
+  onSeq?: (seq: number, epoch?: string) => void;
+  /** Cloud chats: ph-agentd's `_ph/turn` — the state of a turn this
+   *  connection did not send (it was sent before a reconnect). */
+  onRemoteTurn?: (turn: RemoteTurn) => void;
   onStderr?: (chunk: string) => void;
   onExit: (code: number | null) => void;
+}
+
+export interface RemoteTurn {
+  running: boolean;
+  stopReason?: string | null;
 }
 
 interface Entry {
@@ -46,7 +54,7 @@ interface Entry {
   unlisten: UnlistenFn[];
   closeInput: () => void;
   busy: boolean;
-  /** Latest config options, for callers outside the chat (cloud send). */
+  /** Latest config options, for callers outside the chat. */
   configOptions: SessionConfigOption[];
 }
 
@@ -68,7 +76,10 @@ export async function disposeAcp(chatId: string): Promise<void> {
 
 export async function startAcp(opts: {
   chatId: string;
+  /** Local directory the spawned process runs in. */
   cwd: string;
+  /** The agent's working directory, when not `cwd` (a cloud chat's VM path). */
+  sessionCwd?: string;
   command: string;
   /** Extra environment for the agent process. */
   env?: Record<string, string>;
@@ -82,7 +93,8 @@ export async function startAcp(opts: {
   replay?: boolean;
   callbacks: AcpCallbacks;
 }): Promise<AcpStartResult> {
-  const { chatId, cwd, command, env, resumeSessionId, replay, callbacks } = opts;
+  const { chatId, command, env, resumeSessionId, replay, callbacks } = opts;
+  const cwd = opts.sessionCwd ?? opts.cwd;
   const mcpServers = opts.mcpServers ?? [];
   const meta = opts.meta ? { _meta: opts.meta } : {};
   await disposeAcp(chatId);
@@ -125,6 +137,9 @@ export async function startAcp(opts: {
       callbacks.onPermission(params),
     )
     .onNotification(methods.client.session.update, ({ params }) => {
+      const seq = params._meta?.["ph/seq"];
+      const epoch = params._meta?.["ph/epoch"];
+      if (typeof seq === "number") callbacks.onSeq?.(seq, typeof epoch === "string" ? epoch : undefined);
       callbacks.onUpdate(params.update);
       if (params.update.sessionUpdate === "current_mode_update") {
         callbacks.onModeChange?.(params.update.currentModeId);
@@ -137,6 +152,17 @@ export async function startAcp(opts: {
         callbacks.onAvailableCommandsChange?.(params.update.availableCommands);
       }
     });
+  app.onNotification(
+    "_ph/turn",
+    (raw) => raw as RemoteTurn,
+    ({ params }) => {
+      // The prompt's own response went to a dropped connection; this is the
+      // only signal of its state, so it drives the busy guard too.
+      entry.busy = params.running;
+      callbacks.onBusyChange?.(params.running);
+      callbacks.onRemoteTurn?.(params);
+    },
+  );
   const connection = app.connect(ndJsonStream(output, input));
   const entry: Entry = {
     connection,
@@ -149,7 +175,7 @@ export async function startAcp(opts: {
   registry.set(chatId, entry);
 
   try {
-    await acpSpawn(chatId, cwd, command, env);
+    await acpSpawn(chatId, opts.cwd, command, env);
     const initialized = await connection.agent.request(methods.agent.initialize, {
       protocolVersion: PROTOCOL_VERSION,
       clientCapabilities: { session: { configOptions: { boolean: {} } } },
@@ -287,33 +313,4 @@ export async function setAcpConfigOption(
   )) as SetSessionConfigOptionResponse;
   entry.configOptions = response.configOptions;
   return response.configOptions;
-}
-
-/** The chat's current model choice as the agent reports it, if connected. */
-export function acpModel(chatId: string): string | null {
-  const option = registry
-    .get(chatId)
-    ?.configOptions.find((o) => o.category === "model");
-  return typeof option?.currentValue === "string" ? option.currentValue : null;
-}
-
-/**
- * Hand the chat's session over (to the cloud): stop any turn in flight, wait
- * for it to settle so the transcript on disk is complete, then close the
- * agent. The chat learns about it through `onDetached`.
- */
-export async function detachAcp(chatId: string, timeoutMs = 20_000): Promise<void> {
-  const entry = registry.get(chatId);
-  if (!entry) return;
-  if (entry.busy && entry.sessionId) {
-    await entry.connection.agent
-      .notify("session/cancel", { sessionId: entry.sessionId })
-      .catch(() => {});
-    const deadline = Date.now() + timeoutMs;
-    while (entry.busy && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-  }
-  entry.callbacks.onDetached?.();
-  await disposeAcp(chatId);
 }

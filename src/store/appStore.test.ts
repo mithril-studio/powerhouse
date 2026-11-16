@@ -131,7 +131,7 @@ const LEGACY_TREE = {
 };
 
 beforeEach(() => {
-  useAppStore.setState({ cloudWorkspaces: {}, hydrated: false });
+  useAppStore.setState({ hydrated: false });
 });
 
 describe("hydrate with a pre-cloud powerhouse.json", () => {
@@ -144,17 +144,20 @@ describe("hydrate with a pre-cloud powerhouse.json", () => {
     expect(s.selection).toEqual({ repoId: "repo-1", branchId: "b1" });
     // Local queue rule still applies to local queue entries only.
     expect(s.queues["repo-1"].map((e) => e.state)).toEqual(["interrupted", "merged"]);
-    expect(s.cloudWorkspaces).toEqual({});
   });
 
-  it("drops the old cloud run cards from saved chats", () => {
+  it("drops the old cloud result cards and recaps from saved chats", () => {
     const tree = structuredClone(LEGACY_TREE) as never as { repos: { branches: { chats: { acpTranscript?: unknown[] }[] }[] }[] };
     tree.repos[0].branches[0].chats[0].acpTranscript = [
       { id: "m", type: "message", role: "user", text: "hi" },
       { id: "cloud-result-r1", type: "cloud-result", runId: "r1", late: false },
+      { id: "cloud-result-w1-1", type: "cloud-workspace-result", workspaceId: "w1", turn: 1 },
     ];
+    (tree.repos[0].branches[0].chats[0] as Record<string, unknown>).cloudRecap = "Cloud turn 1: fixed X";
     useAppStore.getState().hydrate(tree as never);
-    expect(useAppStore.getState().repos[0].branches[0].chats[0].acpTranscript?.map((i) => i.id)).toEqual(["m"]);
+    const chat = useAppStore.getState().repos[0].branches[0].chats[0];
+    expect(chat.acpTranscript?.map((i) => i.id)).toEqual(["m"]);
+    expect("cloudRecap" in chat).toBe(false);
   });
 
   it("drops the old cloud run settings", () => {
@@ -162,17 +165,6 @@ describe("hydrate with a pre-cloud powerhouse.json", () => {
     tree.settings.cloud = { baseSnapshot: "my-base", deadlineMinutes: 10 };
     useAppStore.getState().hydrate(tree as never);
     expect("cloud" in useAppStore.getState().settings).toBe(false);
-  });
-});
-
-describe("cloud workspace mirror", () => {
-  it("is runtime state that hydration leaves alone", () => {
-    const w = { id: "w1", chatId: "c1", status: "running" } as never;
-    useAppStore.getState().setCloudWorkspace(w);
-    useAppStore.getState().hydrate(structuredClone(LEGACY_TREE) as never);
-    expect(useAppStore.getState().cloudWorkspaces["w1"]).toBe(w);
-    useAppStore.getState().removeCloudWorkspace("w1");
-    expect(useAppStore.getState().cloudWorkspaces).toEqual({});
   });
 });
 
@@ -338,7 +330,6 @@ describe("chat updates", () => {
   it("changes the addressed chat while preserving other chats, branches and repos", () => {
     const before = useAppStore.getState().repos;
     const s = useAppStore.getState();
-    s.setChatCloudRecap("repo-1", "b1", "c1", "Cloud turn 1: fixed X");
     s.setChatAgentSession("repo-1", "b1", "c1", "local-session");
     s.setChatTransport("repo-1", "b1", "c1", "pty");
     s.updateChatAcpTranscript("repo-1", "b1", "c1", (items) =>
@@ -351,11 +342,9 @@ describe("chat updates", () => {
     const after = useAppStore.getState().repos;
     const chat = after[0].branches[0].chats[0];
     expect(chat).toMatchObject({
-      id: "c1", title: "Chat 1", cloudRecap: "Cloud turn 1: fixed X",
+      id: "c1", title: "Chat 1",
       agentSessionId: "local-session", transport: "pty",
     });
-    s.setChatCloudRecap("repo-1", "b1", "c1", null);
-    expect("cloudRecap" in useAppStore.getState().repos[0].branches[0].chats[0]).toBe(false);
     expect(chat.acpTranscript).toHaveLength(2);
     expect(after[0].branches[0].chats[1]).toBe(before[0].branches[0].chats[1]);
     expect(after[0].branches[1]).toBe(before[0].branches[1]);

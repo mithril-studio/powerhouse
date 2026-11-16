@@ -285,22 +285,21 @@ export function MemoryPage({ embedded = false }: { embedded?: boolean } = {}) {
       {!embedded && <div data-tauri-drag-region className="h-11 shrink-0 px-3" />}
 
       {/* Embedded in Settings: a fixed-height block so the note list and reader scroll inside it. */}
-      <div className={embedded ? "mt-6 h-[min(40rem,70vh)]" : "flex-1 overflow-hidden"}>
+      <div className={embedded ? "h-[min(40rem,70vh)] border-t border-border pt-6" : "flex-1 overflow-hidden"}>
         <div className={embedded ? "flex h-full flex-col" : "mx-auto flex h-full w-full max-w-5xl flex-col px-8 pb-8 pt-2"}>
           <div className={embedded ? "mb-4 flex items-center justify-between" : "ph-page-header mx-0 mb-6 pt-0"}>
-            {embedded ? <h2 className="ph-section-label">Notes</h2> : <h1 className="ph-page-title">Memory</h1>}
-            <span className={`text-[11px] ${healthy ? "text-muted-foreground" : "text-destructive"}`}>
+            {embedded ? <h2 className="text-[13px] font-semibold text-foreground">Notes</h2> : <h1 className="ph-page-title">Memory</h1>}
+            <span className={`inline-flex items-center gap-1.5 text-xs ${healthy ? "text-muted-foreground" : "text-destructive"}`}>
               <span
-                className={`mr-1.5 inline-block size-1.5 rounded-full align-middle ${
-                  healthy ? "bg-success" : status === "checking" ? "bg-muted-foreground" : "bg-destructive"
-                }`}
+                className={`ph-dot bg-current ${healthy ? "tone-running" : status === "checking" ? "animate-pulse" : ""}`}
+                aria-hidden
               />
               {statusLabel[status]}
             </span>
           </div>
 
-          <div className="mb-3 flex items-center justify-between gap-4 border-b border-border">
-            <div className="flex gap-4">
+          <div className="mb-3 flex h-10 items-stretch justify-between gap-4 border-b border-border">
+            <div className="flex gap-3">
               {projects.map((p) => (
                 <button
                   key={p}
@@ -310,17 +309,14 @@ export function MemoryPage({ embedded = false }: { embedded?: boolean } = {}) {
                     setSelected(null);
                     setConfirmDelete(false);
                   }}
-                  className={`-mb-px border-b pb-1.5 text-[11px] font-semibold uppercase tracking-wider ${
-                    project === p
-                      ? "border-accent-brand text-foreground"
-                      : "border-transparent text-muted-foreground hover:text-foreground"
-                  }`}
+                  data-active={project === p}
+                  className="ph-tab px-1 text-[13px]"
                 >
                   {p}
                 </button>
               ))}
             </div>
-            <div className="mb-1 flex items-center gap-2">
+            <div className="flex items-center gap-2">
               {project !== GLOBAL_PROJECT &&
                 (confirmDelete ? (
                   <span className="flex items-center gap-1">
@@ -329,7 +325,7 @@ export function MemoryPage({ embedded = false }: { embedded?: boolean } = {}) {
                       disabled={deleting}
                       onClick={() => void deleteProject()}
                       title={`Remove ${project} from memory. Note files stay on disk.`}
-                      className="rounded-md bg-destructive/10 px-2 py-0.5 text-[11px] font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50"
+                      className="ph-btn ph-btn-danger h-7 px-2.5 text-xs"
                     >
                       {deleting ? "Deleting…" : `Delete ${project}`}
                     </button>
@@ -337,7 +333,7 @@ export function MemoryPage({ embedded = false }: { embedded?: boolean } = {}) {
                       type="button"
                       disabled={deleting}
                       onClick={() => setConfirmDelete(false)}
-                      className="rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-50"
+                      className="ph-btn ph-btn-ghost h-7 px-2.5 text-xs"
                     >
                       Cancel
                     </button>
@@ -347,12 +343,12 @@ export function MemoryPage({ embedded = false }: { embedded?: boolean } = {}) {
                     type="button"
                     onClick={() => setConfirmDelete(true)}
                     title={`Delete project ${project}`}
-                    className="rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:border-destructive hover:text-destructive"
+                    className="ph-btn ph-btn-ghost h-7 px-2.5 text-xs hover:!text-destructive"
                   >
                     Delete project
                   </button>
                 ))}
-              <div className="flex items-center gap-1 rounded-lg bg-muted p-0.5">
+              <div role="group" aria-label="View" className="ph-segmented h-8">
               {(["inbox", "browse"] as const).map((v) => (
                 <button
                   key={v}
@@ -361,9 +357,8 @@ export function MemoryPage({ embedded = false }: { embedded?: boolean } = {}) {
                     setView(v);
                     setSelected(null);
                   }}
-                  className={`rounded-md px-2 py-0.5 text-[11px] font-medium capitalize ${
-                    view === v ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
-                  }`}
+                  aria-pressed={view === v}
+                  className="capitalize"
                 >
                   {v}
                   {v === "inbox" && inbox.length > 0 ? ` (${inbox.length})` : ""}
@@ -378,17 +373,17 @@ export function MemoryPage({ embedded = false }: { embedded?: boolean } = {}) {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder={`Search ${project}… (empty = recent)`}
-              className="mb-3 h-8 w-full rounded-lg border border-input bg-background px-2.5 text-xs outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+              className="ph-input mb-3 h-8"
             />
           )}
 
-          {notice && <p className="mb-2 text-[11px] text-muted-foreground">{notice}</p>}
-          {error && <p className="mb-2 text-[11px] text-destructive">{error}</p>}
+          {notice && <p className="ph-hint mb-2">{notice}</p>}
+          {error && <p className="ph-error mb-2">{error}</p>}
 
           <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,22rem)_1fr] gap-4">
-            <ul className="min-h-0 overflow-y-auto rounded-xl border border-border">
+            <ul className="ph-list min-h-0 overflow-y-auto">
               {list.length === 0 && !loading && (
-                <li className="px-3 py-4 text-[11px] text-muted-foreground">
+                <li className="ph-hint px-3 py-4">
                   {view === "inbox"
                     ? `Inbox empty — nothing waiting for approval in ${project}.`
                     : query
@@ -399,15 +394,15 @@ export function MemoryPage({ embedded = false }: { embedded?: boolean } = {}) {
               {list.map((n) => (
                 <li
                   key={`${n.project}:${n.permalink}`}
-                  className={`border-b border-border ${selected?.permalink === n.permalink ? "bg-muted" : ""}`}
+                  className={selected?.permalink === n.permalink ? "bg-accent" : undefined}
                 >
                   <button
                     type="button"
                     onClick={() => setSelected(n)}
-                    className="flex w-full flex-col gap-0.5 px-3 py-2 text-left hover:bg-muted"
+                    className="flex w-full flex-col gap-0.5 px-3 py-2 text-left hover:bg-accent"
                   >
-                    <span className="text-xs text-foreground">{n.title}</span>
-                    <span className="text-[10px] text-muted-foreground">
+                    <span className="text-[13px] text-foreground">{n.title}</span>
+                    <span className="text-xs text-muted-foreground">
                       {n.type || "note"}
                       {n.updatedAt ? ` · ${n.updatedAt.slice(0, 10)}` : ""}
                     </span>
@@ -418,7 +413,7 @@ export function MemoryPage({ embedded = false }: { embedded?: boolean } = {}) {
                         type="button"
                         disabled={acting}
                         onClick={() => void approve(n)}
-                        className="rounded-md bg-success/15 px-2 py-0.5 text-[10px] font-medium text-success hover:bg-success/25 disabled:opacity-50"
+                        className="ph-btn h-6 px-2 text-xs"
                       >
                         Approve
                       </button>
@@ -426,7 +421,7 @@ export function MemoryPage({ embedded = false }: { embedded?: boolean } = {}) {
                         type="button"
                         disabled={acting}
                         onClick={() => void discard(n)}
-                        className="rounded-md bg-destructive/10 px-2 py-0.5 text-[10px] font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50"
+                        className="ph-btn ph-btn-ghost h-6 px-2 text-xs hover:!text-destructive"
                       >
                         Discard
                       </button>
@@ -435,7 +430,7 @@ export function MemoryPage({ embedded = false }: { embedded?: boolean } = {}) {
                 </li>
               ))}
             </ul>
-            <div className="min-h-0 overflow-y-auto rounded-xl border border-border bg-card p-4">
+            <div className="ph-list min-h-0 overflow-y-auto p-4">
               {selected ? (
                 <>
                   <div className="mb-1 flex items-start justify-between gap-2">
@@ -446,7 +441,7 @@ export function MemoryPage({ embedded = false }: { embedded?: boolean } = {}) {
                           <button
                             type="button"
                             onClick={() => setDraft(body)}
-                            className="rounded-md border border-border px-2 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+                            className="ph-btn h-6 px-2 text-xs"
                           >
                             Edit
                           </button>
@@ -456,14 +451,14 @@ export function MemoryPage({ embedded = false }: { embedded?: boolean } = {}) {
                               type="button"
                               disabled={acting}
                               onClick={() => void saveDraft()}
-                              className="rounded-md border border-border px-2 py-0.5 text-[10px] text-foreground hover:bg-muted disabled:opacity-50"
+                              className="ph-btn ph-btn-primary h-6 px-2 text-xs"
                             >
                               Save
                             </button>
                             <button
                               type="button"
                               onClick={() => setDraft(null)}
-                              className="rounded-md border border-border px-2 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+                              className="ph-btn h-6 px-2 text-xs"
                             >
                               Cancel
                             </button>
@@ -472,19 +467,19 @@ export function MemoryPage({ embedded = false }: { embedded?: boolean } = {}) {
                       </div>
                     )}
                   </div>
-                  <p className="mb-3 text-[10px] text-muted-foreground">{selected.permalink}</p>
+                  <p className="mb-3 font-mono text-xs text-muted-foreground">{selected.permalink}</p>
                   {draft == null ? (
-                    <pre className="whitespace-pre-wrap font-sans text-xs leading-5 text-foreground">{body}</pre>
+                    <pre className="select-text whitespace-pre-wrap font-sans text-[13px] leading-6 text-foreground">{body}</pre>
                   ) : (
                     <textarea
                       value={draft}
                       onChange={(e) => setDraft(e.target.value)}
-                      className="min-h-64 w-full resize-y rounded-lg border border-input bg-background p-2 font-mono text-xs leading-5 outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                      className="ph-input h-auto min-h-64 resize-y p-2.5 font-mono text-xs leading-5"
                     />
                   )}
                 </>
               ) : (
-                <p className="text-[11px] text-muted-foreground">
+                <p className="ph-hint">
                   {view === "inbox"
                     ? "Select a pending note to review. Approve moves it into memory; discard drops it. Corrections are approved automatically."
                     : "Select a note. Notes are Markdown files under ~/.powerhouse/memory; edit them there, the index follows."}

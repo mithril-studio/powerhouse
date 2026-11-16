@@ -49,7 +49,6 @@ export const NOTE_TYPES = [
   "decision",
   "pointer",
 ] as const;
-export type NoteType = (typeof NOTE_TYPES)[number];
 
 export const MAX_BRIEF_NOTES = 12;
 export const MAX_SNIPPET_LINES = 4;

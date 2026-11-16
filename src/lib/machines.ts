@@ -1,4 +1,4 @@
-// The Machines tab: typed IPC for `src-tauri/src/cloud/machines.rs` and the
+// Settings → Cloud → Machines: typed IPC for `src-tauri/src/cloud/machines.rs` and the
 // small rules the pane renders by. Shells are `boxd connect` in a bottom-panel
 // terminal; boxd brings its own SSH, so nothing here touches keys.
 import { invoke } from "@tauri-apps/api/core";
@@ -13,8 +13,6 @@ export interface MachineRow {
 }
 
 export const machinesList = () => invoke<MachineRow[]>("machines_list");
-export const machineSuggestName = (branch: string) => invoke<string>("machine_suggest_name", { branch });
-export const machineCreate = (name: string) => invoke<MachineRow>("machine_create", { name });
 export const machineStart = (vm: string) => invoke<void>("machine_start", { vm });
 export const machineStop = (vm: string) => invoke<void>("machine_stop", { vm });
 export const machineRemove = (vm: string, confirm: string) => invoke<void>("machine_remove", { vm, confirm });

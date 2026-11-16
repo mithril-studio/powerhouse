@@ -1,31 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
-import { appendCloudResult, appendUserMessage, applyAcpUpdate, latestUsage, type AcpTranscriptItem } from "./acpTranscript";
-
-describe("appendCloudResult", () => {
-  it("appends a turn's card once", () => {
-    const card = {
-      id: "cloud-result-w1-1",
-      type: "cloud-workspace-result" as const,
-      workspaceId: "w1",
-      vmName: "ph-x",
-      branch: "x",
-      turn: 1,
-      ok: true,
-      status: "done",
-      summary: "Fixed it",
-      pushedCommit: "abc",
-      unpushedCommits: 0,
-      dirtyFiles: 0,
-      local: "Pulled 1 commit(s) into your worktree.",
-      costUsd: null,
-    };
-    const once = appendCloudResult([], card);
-    expect(once).toEqual([card]);
-    expect(appendCloudResult(once, card)).toBe(once);
-    expect(appendCloudResult(once, { ...card, id: "cloud-result-w1-2", turn: 2 })).toHaveLength(2);
-  });
-});
+import { appendUserMessage, applyAcpUpdate, latestUsage, type AcpTranscriptItem } from "./acpTranscript";
 
 describe("applyAcpUpdate", () => {
   it("combines streamed assistant chunks into one message", () => {

@@ -7,6 +7,7 @@ import {
   useAppStore,
 } from "../store/appStore";
 import { connectCommand } from "../lib/machines";
+import { vmShellCommand } from "../lib/vmChats";
 import {
   disposeTerminal,
   fitTerminal,
@@ -114,7 +115,9 @@ export function BottomPanel() {
   // Native CLI for the selected branch's active chat, launched in its worktree.
   const activeChat = branch?.chats.find((c) => c.id === branch.activeChatId);
   const agentProfile = activeChat && resolveAgent(settings, activeChat.agentId);
-  const handoff = agentProfile ? resolveHandoff(agentProfile) : "unsupported";
+  // A cloud branch's agent runs on its VM; a local CLI would edit a stale mirror.
+  const handoff =
+    agentProfile && branch?.location !== "cloud" ? resolveHandoff(agentProfile) : "unsupported";
   const agentCmd = handoff !== "unsupported" ? agentProfile?.command : undefined;
 
   return (
@@ -165,6 +168,7 @@ export function BottomPanel() {
             statusKey={`shell:${b.id}`}
             cwd={b.worktreePath}
             active={open && tab === "shell" && b.id === branch?.id}
+            agentCmd={b.vm ? vmShellCommand(b.vm) : undefined}
           />
         ))}
         {branches.map((b) => (
@@ -195,7 +199,9 @@ export function BottomPanel() {
           <div className="absolute inset-0 flex items-center justify-center bg-background">
             <p className="text-xs text-muted-foreground">
               {activeChat
-                ? `${agentProfile?.name ?? "This agent"} does not offer a native CLI.`
+                ? branch?.location === "cloud"
+                  ? "This branch's agent runs on its VM; use the chat, or the Shell tab for a shell there."
+                  : `${agentProfile?.name ?? "This agent"} does not offer a native CLI.`
                 : "Open a chat to launch its agent CLI."}
             </p>
           </div>

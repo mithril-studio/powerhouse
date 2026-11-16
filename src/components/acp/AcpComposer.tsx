@@ -1,5 +1,8 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { dataUrl, formatBytes, type Attachment } from "../../lib/attachments";
+import type { ApplyOp, Selector, Unsupported } from "../../lib/agentControls";
+import { ArrowUpIcon, ChevronDownIcon, CloseIcon, ImageIcon, PlusIcon, StopIcon } from "../ui/icons";
+import { ComposerPicker } from "./ComposerPicker";
 
 interface Props {
   active: boolean;
@@ -10,7 +13,10 @@ interface Props {
   onSubmit: (prompt: string) => void;
   onOpenCommands: () => void;
   onCancel?: () => void;
-  thinkingLevel?: string;
+  /** Model and reasoning pickers; omitted or unsupported when the agent doesn't advertise them. */
+  models?: Selector | Unsupported;
+  reasoning?: Selector | Unsupported;
+  onApply?: (op: ApplyOp) => void;
   /** Images queued for the next prompt (empty when the agent lacks support). */
   attachments: Attachment[];
   supportsImages: boolean;
@@ -20,6 +26,10 @@ interface Props {
   onRemoveAttachment: (id: string) => void;
 }
 
+/**
+ * T3-style composer: the message on top, one toolbar underneath — attach on
+ * the left; model, reasoning and Send/Stop on the right.
+ */
 export function AcpComposer({
   active,
   busy,
@@ -29,7 +39,9 @@ export function AcpComposer({
   onSubmit,
   onOpenCommands,
   onCancel,
-  thinkingLevel,
+  models,
+  reasoning,
+  onApply = () => {},
   attachments,
   supportsImages,
   dragging,
@@ -43,7 +55,7 @@ export function AcpComposer({
     if (active) inputRef.current?.focus();
   }, [active]);
 
-  // Grow with the draft; CSS max-height caps it at 7 lines, then it scrolls.
+  // Grow with the draft; CSS max-height caps it, then it scrolls.
   useLayoutEffect(() => {
     const input = inputRef.current;
     if (!input || !active) return;
@@ -52,10 +64,11 @@ export function AcpComposer({
   }, [draft, active]);
 
   const canSubmit = !busy && (draft.trim().length > 0 || attachments.length > 0);
+  const commands = { label: "All agent commands", hint: "/", onSelect: onOpenCommands };
 
   return (
     <form
-      className="chat-composer shrink-0 px-6 py-3"
+      className="chat-composer shrink-0 px-6 pt-1"
       onSubmit={(event) => {
         event.preventDefault();
         if (!canSubmit) return;
@@ -63,110 +76,129 @@ export function AcpComposer({
       }}
     >
       <div
-        data-thinking={thinkingLevel}
         data-busy={busy}
         data-dragging={dragging}
-        className="chat-column composer-surface flex flex-col gap-2 data-[dragging=true]:border-accent-brand"
+        className="chat-column composer-surface"
       >
-        <div className="flex items-start gap-2">
-          <textarea
-            ref={inputRef}
-            value={draft}
-            rows={3}
-            aria-label="Message agent"
-            placeholder={
-              busy
-                ? "Draft a follow-up while the agent works…"
-                : dragging
-                  ? "Drop images to attach"
-                  : "Ask a question or describe a task…"
-            }
-            onChange={(event) => onDraftChange(event.target.value)}
-            onPaste={(event) => {
-              const { clipboardData } = event;
-              const files = Array.from(clipboardData.files);
-              if (files.length === 0) {
-                for (const item of Array.from(clipboardData.items)) {
-                  const file = item.kind === "file" ? item.getAsFile() : null;
-                  if (file) files.push(file);
-                }
-              }
-              if (files.length === 0) return;
-              event.preventDefault();
-              onPasteFiles(files);
-            }}
-            onKeyDown={(event) => {
-              if (event.nativeEvent.isComposing) return;
-              if (event.key === "/" && !busy && draft.length === 0) {
-                event.preventDefault();
-                onOpenCommands();
-              } else if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                event.currentTarget.form?.requestSubmit();
-              }
-            }}
-            className="max-h-60 min-h-20 flex-1 overflow-y-auto resize-none bg-transparent text-sm leading-6 outline-none placeholder:text-muted-foreground"
-          />
-          {supportsImages && (
-            <button
-              type="button"
-              onClick={onPickFiles}
-              disabled={busy}
-              title="Attach images (or paste / drop them)"
-              aria-label="Attach images"
-              className="pi-btn h-7 w-7 shrink-0 text-sm"
-            >
-              +
-            </button>
-          )}
-        </div>
         {attachments.length > 0 && (
-          <ul className="flex flex-wrap gap-2 pl-4" aria-label="Attached images">
+          <ul className="composer-attachments" aria-label="Attached images">
             {attachments.map((attachment) => {
               const src = dataUrl(attachment);
               return (
-                <li
-                  key={attachment.id}
-                  className="flex items-center gap-2 border border-border bg-background px-1.5 py-1 text-[11px] text-muted-foreground"
-                >
+                <li key={attachment.id} className="composer-attachment">
                   {src ? (
-                    <img
-                      src={src}
-                      alt={attachment.name}
-                      className="h-8 w-8 border border-border object-cover"
-                    />
+                    <img src={src} alt={attachment.name} />
                   ) : (
-                    <span className="flex h-8 w-8 items-center justify-center border border-border">
-                      ▣
+                    <span className="composer-attachment-placeholder">
+                      <ImageIcon className="size-4" />
                     </span>
                   )}
-                  <span className="max-w-40 truncate text-foreground/90">{attachment.name}</span>
+                  <span className="max-w-40 truncate text-foreground">{attachment.name}</span>
                   <span>{formatBytes(attachment.bytes)}</span>
                   <button
                     type="button"
                     onClick={() => onRemoveAttachment(attachment.id)}
                     aria-label={`Remove ${attachment.name}`}
-                    className="pi-btn h-5 w-5 text-xs"
+                    className="ph-icon-btn size-5"
                   >
-                    ×
+                    <CloseIcon className="size-3" />
                   </button>
                 </li>
               );
             })}
           </ul>
         )}
-        <div className="mt-2 flex items-center gap-3">
-          <button type="button" onClick={onOpenCommands} disabled={busy} aria-label="Agent commands" className="composer-agent">
-            {agentName} {thinkingLevel && <span className="text-muted-foreground">· {thinkingLevel}</span>} <span aria-hidden>⌄</span>
+        <textarea
+          ref={inputRef}
+          value={draft}
+          rows={2}
+          aria-label="Message agent"
+          placeholder={
+            busy
+              ? "Draft a follow-up while the agent works…"
+              : dragging
+                ? "Drop images to attach"
+                : "Ask anything, or type / for commands"
+          }
+          onChange={(event) => onDraftChange(event.target.value)}
+          onPaste={(event) => {
+            const { clipboardData } = event;
+            const files = Array.from(clipboardData.files);
+            if (files.length === 0) {
+              for (const item of Array.from(clipboardData.items)) {
+                const file = item.kind === "file" ? item.getAsFile() : null;
+                if (file) files.push(file);
+              }
+            }
+            if (files.length === 0) return;
+            event.preventDefault();
+            onPasteFiles(files);
+          }}
+          onKeyDown={(event) => {
+            if (event.nativeEvent.isComposing) return;
+            if (event.key === "/" && !busy && draft.length === 0) {
+              event.preventDefault();
+              onOpenCommands();
+            } else if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              event.currentTarget.form?.requestSubmit();
+            }
+          }}
+          className="composer-input"
+        />
+        <div className="composer-toolbar">
+          <button
+            type="button"
+            onClick={onPickFiles}
+            disabled={busy || !supportsImages}
+            title={supportsImages ? "Attach images (or paste / drop them)" : `${agentName} doesn't accept images`}
+            aria-label="Attach images"
+            className="composer-icon-btn"
+          >
+            <PlusIcon />
           </button>
           <span className="flex-1" />
+          {models?.supported ? (
+            <ComposerPicker
+              selector={models}
+              disabled={busy}
+              title={`${agentName} model`}
+              onApply={onApply}
+              footer={commands}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={onOpenCommands}
+              disabled={busy}
+              aria-label="Agent commands"
+              title="Agent commands (/)"
+              className="composer-picker"
+            >
+              <span className="truncate">{agentName}</span>
+              <ChevronDownIcon className="size-3.5 opacity-60" />
+            </button>
+          )}
+          {reasoning?.supported && (
+            <>
+              <span className="composer-divider" aria-hidden />
+              <ComposerPicker selector={reasoning} disabled={busy} onApply={onApply} />
+            </>
+          )}
           {/* Distinct keys keep Stop from becoming submit during its click. */}
-          {busy ? (onCancel && <button key="stop" type="button" onClick={onCancel} className="pi-btn h-8 px-3" aria-label="Stop agent">■ Stop</button>) : (
-            <button key="send" type="submit" disabled={!canSubmit} className="pi-btn pi-btn-primary h-8 px-3" aria-label="Send message">Send ↑</button>
+          {busy ? (
+            onCancel && (
+              <button key="stop" type="button" onClick={onCancel} className="composer-send" aria-label="Stop agent" title="Stop agent (Esc)">
+                <StopIcon />
+              </button>
+            )
+          ) : (
+            <button key="send" type="submit" disabled={!canSubmit} className="composer-send composer-send-primary" aria-label="Send message" title="Send (Enter)">
+              <ArrowUpIcon />
+            </button>
           )}
         </div>
       </div>
-      <p className="chat-column mt-2 text-xs text-muted-foreground">{busy ? "Draft your next message while the agent works" : "Enter to send · Shift+Enter for a new line · / for commands"}</p>
     </form>
   );
 }

@@ -88,6 +88,36 @@ pub trait Boxd: Send + Sync {
     fn machine_remove(&self, vm: &str) -> TResult<()>;
     fn cp_to(&self, local: &Path, vm: &str, remote_path: &str) -> TResult<()>;
     fn exec(&self, vm: &str, argv: &[String], timeout: Duration) -> TResult<ExecOutput>;
+
+    /// `boxd machine new` with options: from a snapshot, a vCPU count, an
+    /// auto-suspend timeout. `name` must be Powerhouse-owned.
+    fn machine_new_with(&self, name: &str, opts: &NewOpts) -> TResult<MachineInfo> {
+        if *opts == NewOpts::default() {
+            return self.machine_new(name);
+        }
+        Err(TransportError::Other("machine_new_with is not supported here".into()))
+    }
+    /// Copies `remote_path` on the VM to `local` on this Mac.
+    fn cp_from(&self, _vm: &str, _remote_path: &str, _local: &Path) -> TResult<()> {
+        Err(TransportError::Other("cp_from is not supported here".into()))
+    }
+    /// Saves a running machine's memory and disk as snapshot `name` (owned).
+    fn snapshot_save(&self, _vm: &str, _name: &str) -> TResult<()> {
+        Err(TransportError::Other("snapshot_save is not supported here".into()))
+    }
+    /// Deletes snapshot `name` (owned).
+    fn snapshot_remove(&self, _name: &str) -> TResult<()> {
+        Err(TransportError::Other("snapshot_remove is not supported here".into()))
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NewOpts {
+    pub from_snapshot: Option<String>,
+    /// 1, 2 or 4. Ignored by boxd for snapshot restores (they keep their size).
+    pub vcpu: Option<u8>,
+    /// Idle-network seconds before boxd suspends the machine; 0 disables.
+    pub auto_suspend_secs: Option<u32>,
 }
 
 pub struct BoxdCli {
@@ -273,6 +303,46 @@ impl Boxd for BoxdCli {
         let (_, stderr, code) = self.run(&["machine", "cp", &local_s, &dest, "--json"], Duration::from_secs(300))?;
         if code != 0 {
             return Err(TransportError::Other(format!("cp failed: {}", stderr.trim())));
+        }
+        Ok(())
+    }
+
+    fn machine_new_with(&self, name: &str, opts: &NewOpts) -> TResult<MachineInfo> {
+        ensure_owned(name)?;
+        let mut args: Vec<String> = vec!["machine".into(), "new".into(), name.into(), "--json".into()];
+        if let Some(snap) = &opts.from_snapshot {
+            args.extend(["--from-snapshot".into(), snap.clone()]);
+        } else if let Some(vcpu) = opts.vcpu {
+            args.extend(["--vcpu".into(), vcpu.to_string()]);
+        }
+        if let Some(secs) = opts.auto_suspend_secs {
+            args.extend(["--auto-suspend-timeout".into(), secs.to_string()]);
+        }
+        let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+        let v = self.json(&argv, Duration::from_secs(300))?;
+        Self::machine_from_create(v, name)
+    }
+
+    fn cp_from(&self, vm: &str, remote_path: &str, local: &Path) -> TResult<()> {
+        let src = format!("{vm}:{remote_path}");
+        let dest = local.to_string_lossy().to_string();
+        let (_, stderr, code) = self.run(&["machine", "cp", &src, &dest, "--json"], Duration::from_secs(300))?;
+        if code != 0 {
+            return Err(TransportError::Other(format!("cp from {vm} failed: {}", stderr.trim())));
+        }
+        Ok(())
+    }
+
+    fn snapshot_save(&self, vm: &str, name: &str) -> TResult<()> {
+        ensure_owned(name)?;
+        self.json(&["snapshots", "save", vm, name, "--json"], Duration::from_secs(600)).map(|_| ())
+    }
+
+    fn snapshot_remove(&self, name: &str) -> TResult<()> {
+        ensure_owned(name)?;
+        let (_, stderr, code) = self.run(&["snapshots", "remove", name, "--confirm"], Duration::from_secs(180))?;
+        if code != 0 {
+            return Err(TransportError::Other(format!("snapshot remove failed: {}", stderr.trim())));
         }
         Ok(())
     }

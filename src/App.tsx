@@ -1,4 +1,6 @@
 import { TaskBoardPage } from "./features/tasks/TaskBoardPage";
+import { VmProvisioningPanel } from "./components/VmProvisioningPanel";
+import { isCloudBranch } from "./lib/vmChats";
 import { useEffect } from "react";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -7,9 +9,7 @@ import { selectedBranch, selectedRepo, useAppStore } from "./store/appStore";
 import { hydrateFromDisk, startPersistence } from "./store/persist";
 import { startQueueSync } from "./lib/queueSync";
 import { acpKillAll, githubAccount, ptyKillAll } from "./lib/ipc";
-import { initHandoff } from "./lib/handoff";
 import { startDockBadge } from "./lib/attention";
-import { startCloudSync } from "./lib/cloud";
 import { startArchivedBranchSweep } from "./lib/actions";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { Sidebar } from "./components/Sidebar";
@@ -92,10 +92,7 @@ export default function App() {
       startQueueSync();
       startDockBadge();
       startArchivedBranchSweep();
-      void initHandoff();
       void reconcileGithub();
-      // Cloud turns run on their VMs; this streams them into their chats.
-      void startCloudSync();
       void checkForUpdates();
     })();
   }, []);
@@ -134,7 +131,10 @@ export default function App() {
               path={branch.activeFile}
             />
           )}
-          {hydrated && (!branch || (branch.chats.length === 0 && !branch.activeFile)) && (
+          {hydrated && repo && branch && isCloudBranch(branch) && branch.chats.length === 0 && !branch.activeFile && (
+            <VmProvisioningPanel repo={repo} branch={branch} />
+          )}
+          {hydrated && (!branch || (branch.chats.length === 0 && !branch.activeFile && !isCloudBranch(branch))) && (
             <div className="absolute inset-0 flex items-center justify-center">
               <p className="text-muted-foreground">
                 {repos.length === 0

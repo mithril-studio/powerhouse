@@ -6,8 +6,8 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 import type { MachineRow } from "../lib/machines";
 import { MachineItem } from "./MachinesPane";
 
-const render = (m: MachineRow) =>
-  renderToStaticMarkup(<MachineItem machine={m} current={false} busy={undefined} run={() => {}} />);
+const render = (m: MachineRow, usedBy?: string) =>
+  renderToStaticMarkup(<MachineItem machine={m} usedBy={usedBy} busy={undefined} run={() => {}} />);
 
 it("offers Delete only on Powerhouse-owned machines", () => {
   const owned = render({ name: "ph-a", status: "running", url: null, size: "2x8G", owned: true });
@@ -24,3 +24,9 @@ it("offers Start for a hibernated machine", () => {
   expect(html).not.toContain(">Stop<");
 });
 
+
+it("leaves a chat VM's delete to its branch", () => {
+  const html = render({ name: "ph-c-powerhouse-nova", status: "running", url: null, size: null, owned: true }, "powerhouse / nova");
+  expect(html).not.toContain("Delete");
+  expect(html).toContain("chat VM for powerhouse / nova");
+});

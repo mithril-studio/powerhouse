@@ -5,6 +5,7 @@ import { gitTargetCommits, type TargetCommits } from "../lib/ipc";
 import { landedHeading, landedStatus, PRODUCTION_BRANCH } from "../lib/landed";
 import { fmtWhen } from "../lib/telemetryFormat";
 import { QueueCard } from "./QueueCard";
+import { CloseIcon, RefreshIcon } from "./ui/icons";
 
 const LANDED_REFRESH_MS = 60_000;
 
@@ -39,29 +40,23 @@ function LandedCommits({ repo }: { repo: Repo }) {
   const now = Date.now();
   return (
     <section aria-label={landedHeading(repo.defaultBranch, data?.base ?? null)} className="mb-5">
-      <div className="mb-1 flex items-center gap-2">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          {landedHeading(repo.defaultBranch, data?.base ?? null)}
-        </span>
-        <span className="h-px flex-1 bg-border" />
-        {data && (
-          <span className="text-[11px] text-muted-foreground">
-            {landedStatus(data.commits.length, data.fetched)}
-          </span>
-        )}
+      <div className="ph-panel-head px-1.5 pr-0">
+        <span className="ph-section-label">{landedHeading(repo.defaultBranch, data?.base ?? null)}</span>
+        {data && <span className="ph-panel-meta">{landedStatus(data.commits.length, data.fetched)}</span>}
         <button
+          type="button"
           onClick={() => void refresh()}
           disabled={loading}
           title="Refresh"
           aria-label="Refresh commits"
-          className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-input hover:text-foreground disabled:opacity-40"
+          className="ph-icon-btn"
         >
-          ↻
+          <RefreshIcon className="size-3.5" />
         </button>
       </div>
-      {error && <p className="py-2 text-xs text-destructive">{error}</p>}
+      {error && <p className="select-text px-1.5 py-2 font-mono text-xs text-destructive">{error}</p>}
       {!error && data && data.commits.length === 0 && (
-        <p className="py-2 text-xs text-muted-foreground">
+        <p className="px-1.5 py-2 text-xs text-muted-foreground">
           Nothing on {repo.defaultBranch} beyond {data.base ?? "its tip"}.
         </p>
       )}
@@ -71,15 +66,12 @@ function LandedCommits({ repo }: { repo: Repo }) {
             <li
               key={c.sha}
               title={`${c.sha}\n${c.author}`}
-              className="flex h-7 items-center gap-2 rounded-md px-1.5 hover:bg-muted/40"
+              className="ph-row text-foreground"
             >
-              <span
-                className={`size-1.5 shrink-0 rounded-full ${c.merge ? "bg-muted-foreground/40" : "bg-success"}`}
-                aria-hidden
-              />
-              <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{c.short}</span>
+              <span className={`ph-dot bg-current ${c.merge ? "text-muted-foreground/40" : "tone-running"}`} aria-hidden />
+              <span className="shrink-0 font-mono text-xs text-muted-foreground">{c.short}</span>
               <span className="min-w-0 flex-1 truncate text-xs">{c.subject}</span>
-              <span className="shrink-0 text-[11px] text-muted-foreground">
+              <span className="shrink-0 text-xs text-muted-foreground">
                 {c.author.split(" ")[0]} · {fmtWhen(c.time * 1000, now)}
               </span>
             </li>
@@ -100,29 +92,26 @@ const isCompact = (e: QueueEntry) =>
 
 function HistoryRow({ repoId, entry }: { repoId: string; entry: QueueEntry }) {
   return (
-    <div className="group flex h-7 items-center gap-2 rounded-md px-1.5 hover:bg-muted/40">
+    <div className="group ph-row text-foreground">
       <span
-        className={`size-1.5 shrink-0 rounded-full ${
-          entry.state === "merged" ? "bg-success" : "bg-muted-foreground/40"
-        }`}
+        className={`ph-dot bg-current ${entry.state === "merged" ? "tone-running" : "text-muted-foreground/40"}`}
         aria-hidden
       />
       <span className="min-w-0 flex-1 truncate font-mono text-xs">{entry.branch}</span>
       {entry.merge_commit && (
-        <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+        <span className="shrink-0 font-mono text-xs text-muted-foreground">
           {entry.merge_commit.slice(0, 7)}
         </span>
       )}
-      <span className="shrink-0 text-[11px] text-muted-foreground">
-        {entry.state === "canceled" ? "canceled" : ""}
-      </span>
+      {entry.state === "canceled" && <span className="shrink-0 text-xs text-muted-foreground">Canceled</span>}
       <button
+        type="button"
         onClick={() => void dismissEntry(repoId, entry.id)}
         title="Dismiss"
         aria-label={`Dismiss ${entry.branch}`}
-        className="hidden size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-input hover:text-foreground group-hover:flex"
+        className="ph-icon-btn size-5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
       >
-        ×
+        <CloseIcon className="size-3" />
       </button>
     </div>
   );
@@ -146,21 +135,22 @@ export function QueuePane({ repo, branch }: { repo: Repo; branch?: Branch | null
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="p-3">
-        <div className="mb-4 flex items-center gap-2">
-          <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{repo.name}</span>
+      <div className="px-1.5 py-2">
+        <div className="mb-2 flex items-center justify-end gap-1.5 px-1.5 pt-1">
           <button
+            type="button"
             onClick={() => openProjectSettings(repo.id)}
-            className="h-7 shrink-0 rounded-lg px-2.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="ph-btn ph-btn-ghost h-7 shrink-0 px-2.5 text-xs"
           >
             Edit workflow
           </button>
           {branch && (
             <button
+              type="button"
               onClick={() => void enqueueBranch(repo.id, branch.id)}
               disabled={branchLive}
-              title={branchLive ? "Already in the queue" : `Enqueue ${branch.name}`}
-              className="pi-btn pi-btn-primary h-7 shrink-0 px-3 text-xs font-medium focus-visible:ring-3 focus-visible:ring-ring/50"
+              title={branchLive ? "Already in the queue" : `Merge ${branch.name} into ${repo.defaultBranch}`}
+              className="ph-btn ph-btn-primary h-7 shrink-0 px-3 text-xs"
             >
               {branchLive ? "Queued" : "Merge"}
             </button>
@@ -181,7 +171,7 @@ export function QueuePane({ repo, branch }: { repo: Repo; branch?: Branch | null
         )}
 
         {active.length === 0 && history.length === 0 && (
-          <p className="py-8 text-center text-sm text-muted-foreground">
+          <p className="px-1.5 py-6 text-xs leading-relaxed text-muted-foreground">
             Nothing queued. Merge lands the selected branch on{" "}
             <span className="font-mono">{repo.defaultBranch}</span>
             {repo.workflow.length > 0 ? " after the workflow steps pass." : "."}
@@ -190,11 +180,8 @@ export function QueuePane({ repo, branch }: { repo: Repo; branch?: Branch | null
 
         {history.length > 0 && (
           <>
-            <div className="mb-2 mt-6 flex items-center gap-2">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                History
-              </span>
-              <span className="h-px flex-1 bg-border" />
+            <div className="ph-panel-head mt-4 px-1.5">
+              <span className="ph-section-label">History</span>
             </div>
             <div className="space-y-1">
               {history.map((entry) =>

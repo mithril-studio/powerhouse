@@ -60,3 +60,28 @@ export const GearIcon = (p: IconProps) => (
     <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
   </Icon>
 );
+export const ArrowUpIcon = (p: IconProps) => (
+  <Icon {...p}><path d="M12 19V5M6 11l6-6 6 6" /></Icon>
+);
+export const ArrowDownIcon = (p: IconProps) => (
+  <Icon {...p}><path d="M12 5v14M6 13l6 6 6-6" /></Icon>
+);
+/** Filled square: the Stop control. */
+export const StopIcon = (p: IconProps) => (
+  <Icon {...p}><rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor" stroke="none" /></Icon>
+);
+export const CheckIcon = (p: IconProps) => (
+  <Icon {...p}><path d="m5 12.5 4.5 4.5L19 7.5" /></Icon>
+);
+export const ImageIcon = (p: IconProps) => (
+  <Icon {...p}><rect x="3.5" y="4.5" width="17" height="15" rx="2" /><circle cx="9" cy="10" r="1.5" /><path d="m20.5 16-4.5-4.5L7 19.5" /></Icon>
+);
+export const FolderIcon = (p: IconProps) => (
+  <Icon {...p}><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-10Z" /></Icon>
+);
+export const BranchIcon = (p: IconProps) => (
+  <Icon {...p}><circle cx="6.5" cy="5.5" r="2" /><circle cx="6.5" cy="18.5" r="2" /><circle cx="17.5" cy="7.5" r="2" /><path d="M6.5 7.5v9M17.5 9.5c0 4-5 3.5-9.6 7.6" /></Icon>
+);
+export const CloudIcon = (p: IconProps) => (
+  <Icon {...p}><path d="M7 18.5h10a4 4 0 0 0 .6-7.95A5.5 5.5 0 0 0 7 9.6 4.5 4.5 0 0 0 7 18.5Z" /></Icon>
+);

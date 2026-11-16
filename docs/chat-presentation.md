@@ -6,7 +6,7 @@ lists, tables, fenced code and copy buttons. Send and Stop are visible; users ca
 draft while an agent works. Drafts are still runtime-only.
 
 This integrates onto the current `test` implementation, preserving image uploads,
-cloud workspaces, context usage, activity indicators, grouped tools and file tabs.
+cloud chats, context usage, activity indicators, grouped tools and file tabs.
 It extends the existing AcpMarkdown and attachment cache rather than adding a
 second transcript format or persisting image bytes in the desktop JSON store.
 

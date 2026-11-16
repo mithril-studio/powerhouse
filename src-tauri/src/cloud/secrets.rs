@@ -63,20 +63,6 @@ pub fn is_project_env_slot(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Configured names without a stored value. An invalid name is an error.
-pub fn missing_project_env(store: &dyn SecretStore, repo_id: &str, names: &[String]) -> Result<Vec<String>, String> {
-    let mut missing = vec![];
-    for name in names {
-        if !is_env_var_name(name) {
-            return Err(format!("`{name}` is not a valid environment variable name"));
-        }
-        if store.get(&project_env_slot(repo_id, name))?.filter(|v| !v.trim().is_empty()).is_none() {
-            missing.push(name.clone());
-        }
-    }
-    Ok(missing)
-}
-
 /// Resolve a repo's configured env names to `(name, value)` pairs. Every
 /// configured name must have a stored value: a silent skip would send a run
 /// out with a half-configured environment.
@@ -170,11 +156,6 @@ pub fn status_for(store: &dyn SecretStore, remote_url: Option<&str>) -> Result<S
     Ok(SecretStatus { claude, github, github_slot })
 }
 
-/// The GitHub token stored for a remote, most specific Keychain slot first.
-pub fn github_token_for(store: &dyn SecretStore, remote_url: &str) -> Option<String> {
-    resolve_github(store, remote_url).ok().flatten().map(|(_, v)| v)
-}
-
 fn resolve_github(store: &dyn SecretStore, remote_url: &str) -> Result<Option<(String, String)>, String> {
     for name in github_token_candidates(remote_url) {
         if let Some(v) = store.get(&name)?.filter(|v| !v.trim().is_empty()) {
@@ -184,15 +165,14 @@ fn resolve_github(store: &dyn SecretStore, remote_url: &str) -> Result<Option<(S
     Ok(None)
 }
 
-/// The variables a workspace VM gets: the Claude token, a GitHub token for the
-/// remote (a Keychain slot, else `fallback_github`, Powerhouse's GitHub
-/// connection), and the repo's project env vars. Both tokens are required: an
+/// The variables a VM gets: the Claude token, a GitHub token for the remote
+/// (a Keychain slot from Settings → Cloud; never the GitHub sign-in), and the
+/// repo's project env vars. Both tokens are required: an
 /// agent that cannot authenticate or push would only fail later, in the VM.
 pub fn workspace_env(
     store: &dyn SecretStore,
     remote_url: &str,
     project_env: &[(String, String)],
-    fallback_github: Option<String>,
 ) -> Result<Vec<(String, String)>, String> {
     let claude = store
         .get(CLAUDE_OAUTH)?
@@ -200,9 +180,11 @@ pub fn workspace_env(
         .ok_or("no Claude token is stored. Run `claude setup-token` and paste the token under Settings → Cloud.")?;
     let github = match resolve_github(store, remote_url)? {
         Some((_, v)) => v,
-        None => fallback_github.filter(|t| !t.trim().is_empty()).ok_or(
-            "no GitHub token for this remote. Connect GitHub or add a token under Settings → Cloud.",
-        )?,
+        // Never the GitHub sign-in: a cloud agent runs unattended, so it only
+        // gets a token the user scoped for it (fine-grained, chosen repos).
+        None => return Err(
+            "No GitHub token for cloud VMs. Add a fine-grained token, limited to the repos Powerhouse may push to, under Settings → Cloud.".into(),
+        ),
     };
     let mut vars = vec![
         ("CLAUDE_CODE_OAUTH_TOKEN".to_string(), claude.trim().to_string()),
@@ -358,17 +340,20 @@ mod tests {
     }
 
     #[test]
-    fn workspace_env_needs_both_tokens_and_prefers_the_keychain_slot() {
+    fn workspace_env_needs_both_tokens_from_the_keychain_and_prefers_the_scoped_slot() {
         let m = MemoryStore::default();
         let remote = "https://github.com/mithril-studio/powerhouse.git";
-        assert!(workspace_env(&m, remote, &[], Some("oauth".into())).unwrap_err().contains("Claude"));
+        assert!(workspace_env(&m, remote, &[]).unwrap_err().contains("Claude"));
         m.set(CLAUDE_OAUTH, "claude-tok").unwrap();
-        assert!(workspace_env(&m, remote, &[], None).unwrap_err().contains("GitHub"));
-        let vars = workspace_env(&m, remote, &[("FOO".into(), "bar".into())], Some("oauth".into())).unwrap();
-        assert_eq!(vars[1], ("GH_TOKEN".into(), "oauth".into()));
+        // No Settings → Cloud token: refused, whatever the GitHub sign-in holds.
+        let err = workspace_env(&m, remote, &[]).unwrap_err();
+        assert!(err.contains("fine-grained") && err.contains("Settings → Cloud"), "{err}");
+        m.set("github_token", "wide").unwrap();
+        let vars = workspace_env(&m, remote, &[("FOO".into(), "bar".into())]).unwrap();
+        assert_eq!(vars[1], ("GH_TOKEN".into(), "wide".into()));
         assert_eq!(vars[2], ("FOO".into(), "bar".into()));
         m.set("github_token:mithril-studio", "scoped").unwrap();
-        assert_eq!(workspace_env(&m, remote, &[], Some("oauth".into())).unwrap()[1].1, "scoped");
+        assert_eq!(workspace_env(&m, remote, &[]).unwrap()[1].1, "scoped");
     }
 
     #[test]

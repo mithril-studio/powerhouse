@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
+import { Dialog, Kbd } from "../../components/ui/dialog";
+import { ChevronDownIcon } from "../../components/ui/icons";
 import { useAppStore, resolveChatTransport } from "../../store/appStore";
 import { createTask } from "./taskStore";
 import { startTask } from "./taskActions";
@@ -17,40 +19,6 @@ export function TaskComposer({
   onError: (message: string) => void;
 }) {
   const { repos, settings } = useAppStore();
-  const dialogRef = useRef<HTMLElement>(null);
-  useEffect(() => {
-    const before = document.activeElement as HTMLElement | null;
-    const trap = (event: KeyboardEvent) => {
-      if (event.key !== "Tab") return;
-      const elements = Array.from(
-        dialogRef.current?.querySelectorAll<HTMLElement>(
-          "button:not(:disabled), input, textarea, select:not(:disabled)",
-        ) ?? [],
-      );
-      const first = elements[0],
-        last = elements[elements.length - 1];
-      if (
-        event.shiftKey &&
-        (document.activeElement === first ||
-          !dialogRef.current?.contains(document.activeElement))
-      ) {
-        event.preventDefault();
-        last?.focus();
-      } else if (
-        !event.shiftKey &&
-        (document.activeElement === last ||
-          !dialogRef.current?.contains(document.activeElement))
-      ) {
-        event.preventDefault();
-        first?.focus();
-      }
-    };
-    document.addEventListener("keydown", trap, true);
-    return () => {
-      document.removeEventListener("keydown", trap, true);
-      if (before?.isConnected) before.focus();
-    };
-  }, []);
   const [project, setProject] = useState(repoId || repos[0]?.id || "");
   const [title, setTitle] = useState(seed?.title ?? "");
   const [description, setDescription] = useState(seed?.description ?? "");
@@ -95,133 +63,98 @@ export function TaskComposer({
       setPending(false);
     }
   }
+  const canSave = !pending && !!project && !!(title.trim() || description.trim());
+  const canStart = canSave && !!agentId;
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6"
+    <Dialog
+      title="New task"
+      onClose={onClose}
+      busy={pending}
+      width="36rem"
       onKeyDown={(e) => {
-        if (e.key === "Escape" && !pending) {
-          e.stopPropagation();
-          onClose();
-        }
         if (e.metaKey && e.key === "Enter") {
           e.preventDefault();
           void submit(e.shiftKey ? "open" : "background");
         }
       }}
     >
-      <section
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="task-composer-title"
-        className="w-full max-w-xl rounded-xl border border-border bg-card p-5 shadow-xl"
-      >
-        <div className="mb-4 flex items-center justify-between">
-          <h2 id="task-composer-title" className="font-semibold">
-            New task
-          </h2>
-          <button
-            className="pi-btn"
-            onClick={onClose}
-            disabled={pending}
-            aria-label="Close task composer"
-          >
-            ×
-          </button>
+      <div className="ph-dialog-body pt-3">
+        <input
+          autoFocus
+          aria-label="Title (optional)"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="Task title (optional)"
+          className="ph-compose-title"
+        />
+        <textarea
+          aria-label="What do you want to do?"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          rows={5}
+          placeholder="What do you want to do? Describe the outcome and what good looks like…"
+          className="ph-compose-body"
+        />
+        <div className="ph-pills">
+          <label className="ph-pill">
+            Project
+            <select
+              value={project}
+              onChange={(e) => setProject(e.target.value)}
+              disabled={!!seed?.source}
+            >
+              {repos.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name}
+                </option>
+              ))}
+            </select>
+            <ChevronDownIcon className="size-3" />
+          </label>
+          <label className="ph-pill">
+            Agent
+            <select value={agentId} onChange={(e) => setAgentId(e.target.value)}>
+              {agents.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+            <ChevronDownIcon className="size-3" />
+          </label>
+          <span className="ph-pill ph-pill-static">Local workspace</span>
         </div>
-        <label className="task-label">
-          Project
-          <select
-            value={project}
-            onChange={(e) => setProject(e.target.value)}
-            disabled={!!seed?.source}
-            className="task-input"
-          >
-            {repos.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="task-label">
-          Title <span className="text-muted-foreground">optional</span>
-          <input
-            autoFocus
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="A short name for this work"
-            className="task-input"
-          />
-        </label>
-        <label className="task-label">
-          What do you want to do?
-          <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            rows={6}
-            placeholder="Describe the outcome and what good looks like…"
-            className="task-input resize-y"
-          />
-        </label>
-        <label className="task-label">
-          Agent
-          <select
-            value={agentId}
-            onChange={(e) => setAgentId(e.target.value)}
-            className="task-input"
-          >
-            {agents.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <p className="my-3 text-xs text-muted-foreground">
-          Local workspace · ⌘Enter starts in background · ⇧⌘Enter opens the task
-        </p>
         {error && (
-          <p role="alert" className="my-2 text-sm text-destructive">
+          <p role="alert" className="ph-dialog-error">
             {error}
           </p>
         )}
-        <div className="flex flex-wrap justify-end gap-2">
-          <button
-            className="pi-btn"
-            disabled={
-              pending || !(title.trim() || description.trim()) || !project
-            }
-            onClick={() => void submit("save")}
-          >
-            Save to backlog
-          </button>
-          <button
-            className="pi-btn"
-            disabled={
-              pending ||
-              !(title.trim() || description.trim()) ||
-              !agentId ||
-              !project
-            }
-            onClick={() => void submit("open")}
-          >
-            Start and open
-          </button>
-          <button
-            className="pi-btn pi-btn-primary"
-            disabled={
-              pending ||
-              !(title.trim() || description.trim()) ||
-              !agentId ||
-              !project
-            }
-            onClick={() => void submit("background")}
-          >
-            Start in background
-          </button>
-        </div>
-      </section>
-    </div>
+      </div>
+      <footer className="ph-dialog-foot">
+        <button
+          className="ph-btn ph-btn-ghost -ml-3 mr-auto"
+          disabled={!canSave}
+          onClick={() => void submit("save")}
+        >
+          Save to backlog
+        </button>
+        <button
+          className="ph-btn"
+          disabled={!canStart}
+          onClick={() => void submit("open")}
+          title="Start the agent and open the task (⇧⌘↵)"
+        >
+          Start and open <Kbd>⇧⌘↵</Kbd>
+        </button>
+        <button
+          className="ph-btn ph-btn-primary"
+          disabled={!canStart}
+          onClick={() => void submit("background")}
+          title="Start the agent in the background (⌘↵)"
+        >
+          Start <Kbd>⌘↵</Kbd>
+        </button>
+      </footer>
+    </Dialog>
   );
 }
