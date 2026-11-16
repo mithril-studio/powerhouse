@@ -70,7 +70,7 @@ export function Sidebar() {
     return () => window.removeEventListener("keydown", onKey);
   }, [menuOpen]);
 
-  // Board, Mission Control and Workflows switch the main view; Telemetry and
+  // Board and Mission Control switch the main view; Telemetry and
   // Memory each toggle their own overlay. A project or branch opens its workspace.
   const view = (label: NavItem) => (label === "Mission Control" ? "mission" : "board");
   const navAction = (label: NavItem) => setWorkspaceView(view(label));

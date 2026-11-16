@@ -135,10 +135,6 @@
   padding: 0.75rem 1rem;
   margin-bottom: 0.5rem;
 }
-.chat-tool { font-size: 13px; line-height: 1.5; }
-.chat-tool summary:hover { background: color-mix(in srgb, var(--muted) 50%, transparent); }
-.chat-tool details[open] > summary .tool-chevron { transform: rotate(90deg); }
-.chat-tool pre, .chat-tool code { user-select: text; }
 .chat-markdown { overflow-wrap: anywhere; }
 .chat-markdown > :first-child { margin-top: 0; }
 .chat-markdown > :last-child { margin-bottom: 0; }
@@ -310,8 +306,6 @@
 /* Task forms (composer + inspector) */
 .task-input { width: 100%; border: 1px solid var(--input); border-radius: var(--radius); background: var(--background); color: var(--foreground); padding: 8px 10px; font-size: 13px; user-select: text; }
 .task-input:focus { outline: 2px solid var(--ring); outline-offset: 1px; }
-.task-label { display: block; margin-top: 12px; font-size: 12px; }
-.task-label .task-input { margin-top: 6px; }
 
 @layer components {
 /* ── Dialogs (one shell for every modal) ────────────────────────────────── */

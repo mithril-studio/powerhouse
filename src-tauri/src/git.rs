@@ -100,7 +100,7 @@ fn repo_name_from_url(url: &str) -> Option<String> {
 /// keys, so they're excluded.
 fn is_github_https(url: &str) -> bool {
     let u = url.trim();
-    (u.starts_with("https://github.com/") || u.starts_with("https://www.github.com/"))
+    u.starts_with("https://github.com/") || u.starts_with("https://www.github.com/")
 }
 
 /// The staging trunk. When a project has `origin/test`, that branch is what

@@ -121,9 +121,6 @@ export async function startSession(id: string, resume: boolean): Promise<void> {
   await settled;
 }
 
-export async function sendSessionPrompt(id: string, text: string) {
-  await (await handleFor(id)).submit(text);
-}
 export function cancelSession(id: string) {
   handles.get(id)?.cancel();
 }
