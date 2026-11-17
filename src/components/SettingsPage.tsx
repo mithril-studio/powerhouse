@@ -1,24 +1,15 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { MachinesPane } from "./MachinesPane";
 import { PageHeader, Segmented } from "./ui/page";
-import { TelemetryPage } from "./telemetry/TelemetryPage";
-import { MemoryPage } from "./memory/MemoryPage";
 import { getVersion } from "@tauri-apps/api/app";
 import { homeDir } from "@tauri-apps/api/path";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
-  memorySettingsOf,
   useAppStore,
   type AgentProfile,
   type Theme,
 } from "../store/appStore";
 import { cloudSecretStatus, cloudSetSecret, runInShell, type SecretStatus } from "../lib/cloud";
-import {
-  DEFAULT_MEMORY_SETTINGS,
-  memoryServerEnsure,
-  type MemorySettings,
-  type MemoryServerStatus,
-} from "../lib/memory";
 import {
   disposeTerminal,
   fitTerminal,
@@ -321,101 +312,6 @@ function AgentSection({ agent }: { agent: AgentProfile }) {
   );
 }
 
-/** Memory → the switch and the Basic Memory server every session shares. */
-function MemorySection() {
-  const settings = useAppStore((s) => s.settings);
-  const setMemorySettings = useAppStore((s) => s.setMemorySettings);
-  const memory = memorySettingsOf(settings);
-  const [status, setStatus] = useState<MemoryServerStatus | "checking" | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const patch = (p: Partial<MemorySettings>) => setMemorySettings({ ...memory, ...p });
-
-  const check = () => {
-    setStatus("checking");
-    setError(null);
-    memoryServerEnsure(memory)
-      .then(setStatus)
-      .catch((e) => {
-        setStatus("failed");
-        setError(String(e));
-      });
-  };
-
-  const statusText: Record<MemoryServerStatus | "checking", string> = {
-    checking: "Checking…",
-    external: "Connected",
-    supervised: "Local server running, started by Powerhouse",
-    unreachable: "Unreachable",
-    failed: "Local server failed to start",
-  };
-  const healthy = status === "external" || status === "supervised";
-
-  return (
-    <>
-      <Section title="Shared memory">
-        <label className="ph-toggle">
-          <input
-            type="checkbox"
-            className="ph-switch"
-            checked={memory.enabled}
-            onChange={(e) => patch({ enabled: e.target.checked })}
-          />
-          <span>
-            Give every agent session the shared memory
-            <span>
-              Claude Code and Pi get the same Basic Memory server as an MCP tool, plus a brief of relevant notes on
-              the first prompt. Their own memories are switched off so there is exactly one.
-            </span>
-          </span>
-        </label>
-      </Section>
-      <Section title="Server">
-        <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,14rem)] gap-3">
-          <label className="ph-field">
-            MCP endpoint
-            <input
-              value={memory.url}
-              onChange={(e) => patch({ url: e.target.value })}
-              spellCheck={false}
-              placeholder={DEFAULT_MEMORY_SETTINGS.url}
-              className="ph-input h-8 font-mono"
-            />
-          </label>
-          <label className="ph-field mt-0">
-            Bearer token (remote host)
-            <input
-              type="password"
-              value={memory.token}
-              onChange={(e) => patch({ token: e.target.value })}
-              className="ph-input h-8"
-            />
-          </label>
-        </div>
-        <div className="flex items-center gap-3">
-          <button type="button" onClick={check} disabled={status === "checking"} className="ph-btn">
-            Check connection
-          </button>
-          {status && (
-            <span className={`inline-flex items-center gap-1.5 text-xs ${healthy || status === "checking" ? "text-muted-foreground" : "text-destructive"}`}>
-              <span
-                className={`ph-dot bg-current ${healthy ? "tone-running" : status === "checking" ? "animate-pulse" : ""}`}
-                aria-hidden
-              />
-              {statusText[status]}
-            </span>
-          )}
-        </div>
-        {error && <p className="ph-error">{error}</p>}
-        <p className="ph-hint">
-          Powerhouse starts a loopback endpoint itself (needs <code>basic-memory</code> on your PATH:{" "}
-          <code>uv tool install basic-memory</code>). Point it at the memory VM to share one memory across machines.
-          Notes live in <code>~/.powerhouse/memory</code>.
-        </p>
-      </Section>
-    </>
-  );
-}
-
 /** Credentials for cloud chats. Everything else is inherited from the chat
  * (agent, model) and the repo (env vars). */
 function CloudSection() {
@@ -553,7 +449,7 @@ function AgentsTab() {
   );
 }
 
-const TABS = ["Main", "Agents", "Memory", "Cloud", "Telemetry"] as const;
+const TABS = ["Main", "Agents", "Cloud"] as const;
 type Tab = (typeof TABS)[number];
 
 export function SettingsPage() {
@@ -582,7 +478,7 @@ export function SettingsPage() {
       <div data-tauri-drag-region className="h-11 shrink-0 px-3" />
 
       <div className="flex-1 overflow-y-auto">
-        <div className={`mx-auto w-full px-8 pb-16 pt-2 ${tab === "Telemetry" || tab === "Memory" ? "max-w-6xl" : "max-w-4xl"}`}>
+        <div className="mx-auto w-full max-w-4xl px-8 pb-16 pt-2">
           <PageHeader title="Settings" className="mx-0 pt-0">
             <Segmented
               label="Settings section"
@@ -599,9 +495,7 @@ export function SettingsPage() {
             </>
           ) : tab === "Agents" ? (
             <AgentsTab />
-          ) : tab === "Memory" ? (
-            <MemorySection />
-          ) : tab === "Cloud" ? (
+          ) : (
             <>
               <CloudSection />
               <Section
@@ -611,10 +505,7 @@ export function SettingsPage() {
                 <MachinesPane />
               </Section>
             </>
-          ) : (
-            <TelemetryPage embedded />
           )}
-          {tab === "Memory" && <MemoryPage embedded />}
         </div>
       </div>
     </div>
