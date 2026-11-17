@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appendSystemMessage } from "../lib/acpTranscript";
 import {
   agentModelEnv,
+  memorySettingsOf,
   migrateSettings,
   resolveChatTransport,
   useAppStore,
@@ -392,5 +393,13 @@ describe("machine terminals", () => {
     // left at "running" would make the next Connect show an empty tab.
     expect(s().shellStatus["vm:ph-a"]).toBeUndefined();
     expect(s().shellStatus["shell:b1"]).toBe("running");
+  });
+});
+
+describe("shared memory", () => {
+  it("stays off even when saved settings turned it on", () => {
+    const settings = { memory: { enabled: true, url: "http://memory.example/mcp", token: "t" } } as unknown as Settings;
+    expect(memorySettingsOf(settings)).toMatchObject({ enabled: false, url: "http://memory.example/mcp" });
+    expect(memorySettingsOf({} as Settings).enabled).toBe(false);
   });
 });

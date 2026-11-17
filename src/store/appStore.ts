@@ -997,9 +997,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   setMemorySettings: (memory) => set((s) => ({ settings: { ...s.settings, memory } })),
 }));
 
+/** Shared memory is switched off: its settings page is gone, so nothing could
+ *  turn it back off. Every memory path (server, MCP tool, brief, checkpoint)
+ *  reads `enabled` from here; drop the override to bring it back. */
 export const memorySettingsOf = (s: Settings): MemorySettings => ({
   ...DEFAULT_MEMORY_SETTINGS,
   ...(s.memory ?? {}),
+  enabled: false,
 });
 
 export const selectedRepo = (s: AppState) =>

@@ -26,7 +26,6 @@ vi.mock("./components/ProjectSettingsPage", () => ({ ProjectSettingsPage: () => 
 vi.mock("./components/RightSidebar", () => ({ RightSidebar: () => <div>Project inspector</div> }));
 vi.mock("./components/NewChatPicker", () => ({ NewChatPicker: () => null }));
 vi.mock("./components/SettingsPage", () => ({ SettingsPage: () => null }));
-vi.mock("./components/telemetry/TelemetryPage", () => ({ TelemetryPage: () => null }));
 
 beforeEach(() => {
   useAppStore.getState().hydrate(null);
